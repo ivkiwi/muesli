@@ -80,7 +80,7 @@ struct BackendOptionTests {
 
     @Test("onboarding model choices exclude experimental models")
     func onboardingModelsExcludeExperimentalOptions() {
-        #expect(BackendOption.onboarding == [.parakeetMultilingual, .whisperTinyEnglish, .whisperSmall])
+        #expect(BackendOption.onboarding == [.parakeetMultilingual, .whisperTinyEnglish, .whisperSmall, .cohereTranscribe])
         for option in BackendOption.experimental {
             #expect(!BackendOption.onboarding.contains(option))
         }
