@@ -6,6 +6,7 @@ import os
 @MainActor
 final class MeetingMonitor {
     private static let logger = Logger(subsystem: "com.muesli.native", category: "MeetingDetection")
+    private static let evaluationInterval: UInt64 = 3_000_000_000
 
     var calendarEventProvider: (() -> CalendarEventContext?)?
     var detectionEnabledProvider: (() -> Bool)?
@@ -17,8 +18,7 @@ final class MeetingMonitor {
     var onPromptCandidateChanged: ((MeetingCandidate?) -> Void)?
 
     private let resolver = MeetingCandidateResolver()
-    private let browserCollector = BrowserMeetingActivityCollector()
-    private let audioProcessCollector = AudioProcessAttributionCollector()
+    private let signalCollector = MeetingSignalCollector()
     private let cameraMonitor = CameraActivityMonitor()
     private let sensorAttributionMonitor = ControlCenterSensorAttributionMonitor()
     private let promptState = MeetingPromptStateMachine()
@@ -26,7 +26,9 @@ final class MeetingMonitor {
     private var micListenerDeviceID: AudioDeviceID = 0
     private var micListenerBlock: AudioObjectPropertyListenerBlock?
     private var deviceChangeListenerBlock: AudioObjectPropertyListenerBlock?
-    private var evaluationTimer: Timer?
+    private var periodicEvaluationTask: Task<Void, Never>?
+    private var evaluationTask: Task<Void, Never>?
+    private var pendingEvaluation = false
     private var workspaceObserver: NSObjectProtocol?
     private var globalSuppressUntil: Date?
     private var lastLoggedCandidateID: String?
@@ -38,17 +40,17 @@ final class MeetingMonitor {
         installWorkspaceActivationObserver()
 
         cameraMonitor.onCameraStateChanged = { [weak self] _ in
-            self?.evaluateNow()
+            self?.scheduleEvaluation()
         }
         cameraMonitor.start()
 
         sensorAttributionMonitor.onAttributionsChanged = { [weak self] in
-            DispatchQueue.main.async { self?.evaluateNow() }
+            DispatchQueue.main.async { self?.scheduleEvaluation() }
         }
         sensorAttributionMonitor.start()
 
-        installEvaluationTimer()
-        evaluateNow()
+        installPeriodicEvaluationLoop()
+        scheduleEvaluation()
     }
 
     func stop() {
@@ -57,12 +59,15 @@ final class MeetingMonitor {
         removeWorkspaceActivationObserver()
         cameraMonitor.stop()
         sensorAttributionMonitor.stop()
-        evaluationTimer?.invalidate()
-        evaluationTimer = nil
+        periodicEvaluationTask?.cancel()
+        periodicEvaluationTask = nil
+        evaluationTask?.cancel()
+        evaluationTask = nil
+        pendingEvaluation = false
     }
 
     func refreshState() {
-        evaluateNow()
+        scheduleEvaluation()
     }
 
     func suppress(for duration: TimeInterval = 120) {
@@ -110,26 +115,53 @@ final class MeetingMonitor {
         onPromptCandidateChanged?(nil)
     }
 
-    private func evaluateNow() {
+    private func scheduleEvaluation() {
+        guard detectionEnabledProvider?() ?? true else {
+            dismissVisiblePromptForSuppression()
+            return
+        }
+
+        if evaluationTask != nil {
+            pendingEvaluation = true
+            return
+        }
+
+        evaluationTask = Task { [weak self] in
+            await self?.runScheduledEvaluations()
+        }
+    }
+
+    private func runScheduledEvaluations() async {
+        repeat {
+            pendingEvaluation = false
+            await evaluateNow()
+        } while pendingEvaluation && !Task.isCancelled
+        evaluationTask = nil
+    }
+
+    private func evaluateNow() async {
         let now = Date()
         let visibility = promptVisibilityProvider?() ?? MeetingPromptVisibility(isVisible: false, currentPromptID: nil, shownAt: nil)
         cameraMonitor.refresh()
         let sensorAttributions = sensorAttributionMonitor.snapshot(now: now)
+        let collectedSignals = await signalCollector.collect(micDeviceID: micListenerDeviceID)
+        guard !Task.isCancelled else { return }
         let audioInputProcesses = mergedAudioInputProcesses(
-            audioProcessCollector.activeInputProcesses(),
-            sensorAttributions: sensorAttributions
+            collectedSignals.audioInputProcesses,
+            sensorAttributions: sensorAttributions,
+            runningProcessIDsByBundleID: collectedSignals.runningProcessIDsByBundleID
         )
-        let micActive = isMicActive() || !audioInputProcesses.isEmpty || !sensorAttributions.micBundleIDs.isEmpty
+        let micActive = collectedSignals.micActive || !audioInputProcesses.isEmpty || !sensorAttributions.micBundleIDs.isEmpty
         let cameraActive = cameraMonitor.isCameraActive || !sensorAttributions.cameraBundleIDs.isEmpty
 
         let snapshot = MeetingSignalSnapshot(
             micActive: micActive,
             cameraActive: cameraActive,
             calendarEvent: calendarEventProvider?(),
-            runningApps: currentRunningApps(),
-            browserMeetings: browserCollector.collect(),
+            runningApps: collectedSignals.runningApps,
+            browserMeetings: collectedSignals.browserMeetings,
             audioInputProcesses: audioInputProcesses,
-            foregroundBundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+            foregroundBundleID: collectedSignals.foregroundBundleID,
             now: now
         )
 
@@ -203,15 +235,14 @@ final class MeetingMonitor {
         }
     }
 
-    private func installEvaluationTimer() {
-        evaluationTimer?.invalidate()
-        let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.evaluateNow()
+    private func installPeriodicEvaluationLoop() {
+        periodicEvaluationTask?.cancel()
+        periodicEvaluationTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: Self.evaluationInterval)
+                self?.scheduleEvaluation()
             }
         }
-        evaluationTimer = timer
-        RunLoop.main.add(timer, forMode: .common)
     }
 
     private func installWorkspaceActivationObserver() {
@@ -221,7 +252,7 @@ final class MeetingMonitor {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.evaluateNow()
+                self?.scheduleEvaluation()
             }
         }
     }
@@ -232,16 +263,10 @@ final class MeetingMonitor {
         self.workspaceObserver = nil
     }
 
-    private func currentRunningApps() -> [RunningAppInfo] {
-        NSWorkspace.shared.runningApplications.compactMap { app in
-            guard let bundleID = app.bundleIdentifier else { return nil }
-            return RunningAppInfo(bundleID: bundleID, isActive: app.isActive)
-        }
-    }
-
     private func mergedAudioInputProcesses(
         _ coreAudioProcesses: [AudioProcessActivity],
-        sensorAttributions: SensorAttributionSnapshot
+        sensorAttributions: SensorAttributionSnapshot,
+        runningProcessIDsByBundleID: [String: pid_t]
     ) -> [AudioProcessActivity] {
         var processes = coreAudioProcesses
         let existingBundleIDs = Set(coreAudioProcesses.map(\.bundleID))
@@ -256,7 +281,7 @@ final class MeetingMonitor {
             }
 
             processes.append(AudioProcessActivity(
-                pid: NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == bundleID }?.processIdentifier ?? 0,
+                pid: runningProcessIDsByBundleID[bundleID] ?? 0,
                 bundleID: bundleID,
                 appName: appName,
                 isRunningInput: true,
@@ -288,7 +313,7 @@ final class MeetingMonitor {
         micListenerDeviceID = deviceID
 
         let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            DispatchQueue.main.async { self?.evaluateNow() }
+            DispatchQueue.main.async { self?.scheduleEvaluation() }
         }
         micListenerBlock = block
 
@@ -317,7 +342,7 @@ final class MeetingMonitor {
             DispatchQueue.main.async {
                 self?.removeMicListener()
                 self?.installMicListener()
-                self?.evaluateNow()
+                self?.scheduleEvaluation()
             }
         }
         deviceChangeListenerBlock = block
@@ -351,8 +376,63 @@ final class MeetingMonitor {
         deviceChangeListenerBlock = nil
     }
 
-    private func isMicActive() -> Bool {
-        guard micListenerDeviceID != 0 else { return false }
+    private func log(_ message: String) {
+        Self.logger.notice("\(message, privacy: .public)")
+        fputs("[meeting-monitor] \(message)\n", stderr)
+    }
+}
+
+private struct MeetingCollectedSignals {
+    let micActive: Bool
+    let runningApps: [RunningAppInfo]
+    let browserMeetings: [BrowserMeetingContext]
+    let audioInputProcesses: [AudioProcessActivity]
+    let foregroundBundleID: String?
+    let runningProcessIDsByBundleID: [String: pid_t]
+}
+
+private actor MeetingSignalCollector {
+    private let browserCollector = BrowserMeetingActivityCollector()
+    private let audioProcessCollector = AudioProcessAttributionCollector()
+
+    func collect(micDeviceID: AudioDeviceID) async -> MeetingCollectedSignals {
+        let runningAppSnapshots = currentRunningApps()
+        let browserMeetings = await browserCollector.collect(runningApps: runningAppSnapshots)
+
+        return MeetingCollectedSignals(
+            micActive: isMicActive(deviceID: micDeviceID),
+            runningApps: runningAppSnapshots.map {
+                RunningAppInfo(bundleID: $0.bundleID, isActive: $0.isActive)
+            },
+            browserMeetings: browserMeetings,
+            audioInputProcesses: audioProcessCollector.activeInputProcesses(),
+            foregroundBundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+            runningProcessIDsByBundleID: runningProcessIDsByBundleID(from: runningAppSnapshots)
+        )
+    }
+
+    private func currentRunningApps() -> [RunningAppSnapshot] {
+        NSWorkspace.shared.runningApplications.compactMap { app in
+            guard let bundleID = app.bundleIdentifier else { return nil }
+            return RunningAppSnapshot(
+                bundleID: bundleID,
+                appName: app.localizedName ?? MeetingCandidateResolver.browserApps[bundleID] ?? bundleID,
+                processIdentifier: app.processIdentifier,
+                isActive: app.isActive
+            )
+        }
+    }
+
+    private func runningProcessIDsByBundleID(from apps: [RunningAppSnapshot]) -> [String: pid_t] {
+        var processIDs: [String: pid_t] = [:]
+        for app in apps where processIDs[app.bundleID] == nil {
+            processIDs[app.bundleID] = app.processIdentifier
+        }
+        return processIDs
+    }
+
+    private func isMicActive(deviceID: AudioDeviceID) -> Bool {
+        guard deviceID != 0 else { return false }
 
         var isRunning: UInt32 = 0
         var runningAddress = AudioObjectPropertyAddress(
@@ -363,7 +443,7 @@ final class MeetingMonitor {
         var size = UInt32(MemoryLayout<UInt32>.size)
 
         guard AudioObjectGetPropertyData(
-            micListenerDeviceID,
+            deviceID,
             &runningAddress,
             0,
             nil,
@@ -372,10 +452,5 @@ final class MeetingMonitor {
         ) == noErr else { return false }
 
         return isRunning != 0
-    }
-
-    private func log(_ message: String) {
-        Self.logger.notice("\(message, privacy: .public)")
-        fputs("[meeting-monitor] \(message)\n", stderr)
     }
 }

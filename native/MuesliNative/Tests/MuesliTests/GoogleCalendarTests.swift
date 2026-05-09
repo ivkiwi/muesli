@@ -225,6 +225,45 @@ struct GoogleCalendarTests {
         #expect(merged[1].title == "Late")
     }
 
+    // MARK: - Cached meeting detection event selection
+
+    @Test("cached meeting detection ignores recently ended events")
+    func cachedDetectionIgnoresRecentlyEndedEvents() {
+        let now = date("2026-04-10T10:08:00Z")
+        let events = [
+            UnifiedCalendarEvent(id: "ended", title: "Already done", startDate: date("2026-04-10T09:50:00Z"), endDate: date("2026-04-10T10:00:00Z"), isAllDay: false, source: .eventKit),
+        ]
+
+        let selected = selectCurrentOrNearbyCachedCalendarEvent(from: events, now: now)
+        #expect(selected == nil)
+    }
+
+    @Test("cached meeting detection prefers active over upcoming events")
+    func cachedDetectionPrefersActiveEvent() {
+        let now = date("2026-04-10T10:02:00Z")
+        let events = [
+            UnifiedCalendarEvent(id: "upcoming", title: "Next call", startDate: date("2026-04-10T10:04:00Z"), endDate: date("2026-04-10T10:30:00Z"), isAllDay: false, source: .googleCalendar),
+            UnifiedCalendarEvent(id: "active", title: "Current call", startDate: date("2026-04-10T09:55:00Z"), endDate: date("2026-04-10T10:20:00Z"), isAllDay: false, source: .eventKit),
+        ]
+
+        let selected = selectCurrentOrNearbyCachedCalendarEvent(from: events, now: now)
+        #expect(selected?.id == "active")
+        #expect(selected?.title == "Current call")
+    }
+
+    @Test("cached meeting detection can select imminent future events")
+    func cachedDetectionSelectsImminentFutureEvent() {
+        let now = date("2026-04-10T10:00:00Z")
+        let events = [
+            UnifiedCalendarEvent(id: "later", title: "Later call", startDate: date("2026-04-10T10:20:00Z"), endDate: date("2026-04-10T11:00:00Z"), isAllDay: false, source: .eventKit),
+            UnifiedCalendarEvent(id: "soon", title: "Soon call", startDate: date("2026-04-10T10:03:00Z"), endDate: date("2026-04-10T10:30:00Z"), isAllDay: false, source: .googleCalendar),
+        ]
+
+        let selected = selectCurrentOrNearbyCachedCalendarEvent(from: events, now: now)
+        #expect(selected?.id == "soon")
+        #expect(selected?.title == "Soon call")
+    }
+
     // MARK: - Helpers
 
     private func date(_ iso: String) -> Date {

@@ -2,40 +2,43 @@ import AppKit
 import ApplicationServices
 import Foundation
 
-@MainActor
+struct RunningAppSnapshot: Sendable {
+    let bundleID: String
+    let appName: String
+    let processIdentifier: pid_t
+    let isActive: Bool
+}
+
 final class BrowserMeetingActivityCollector {
     private let browserBundleIDs = Set(MeetingCandidateResolver.browserApps.keys)
     private let cachedMeetingTTL: TimeInterval = 8
     private var cachedMeetings: [String: CachedBrowserMeeting] = [:]
 
-    func collect() -> [BrowserMeetingContext] {
+    func collect(runningApps: [RunningAppSnapshot]) async -> [BrowserMeetingContext] {
         let now = Date()
-        let browserApps = NSWorkspace.shared.runningApplications.filter { app in
-            guard let bundleID = app.bundleIdentifier else { return false }
-            return browserBundleIDs.contains(bundleID)
-        }
-        let runningBrowserIDs = Set(browserApps.compactMap(\.bundleIdentifier))
+        let browserApps = runningApps.filter { browserBundleIDs.contains($0.bundleID) }
+        let runningBrowserIDs = Set(browserApps.map(\.bundleID))
 
-        let liveMeetings: [BrowserMeetingContext] = browserApps.compactMap { app in
-            guard let bundleID = app.bundleIdentifier else { return nil }
-            guard let normalized = normalizedFocusedURL(for: app) else {
+        var liveMeetings: [BrowserMeetingContext] = []
+        for app in browserApps {
+            guard let normalized = await normalizedFocusedURL(for: app) else {
                 if app.isActive {
-                    cachedMeetings.removeValue(forKey: bundleID)
+                    cachedMeetings.removeValue(forKey: app.bundleID)
                 }
-                return nil
+                continue
             }
 
             let context = BrowserMeetingContext(
-                bundleID: bundleID,
-                appName: app.localizedName ?? MeetingCandidateResolver.browserApps[bundleID] ?? bundleID,
+                bundleID: app.bundleID,
+                appName: app.appName,
                 pid: app.processIdentifier,
                 url: normalized.url,
                 normalizedID: normalized.id,
                 platform: normalized.platform,
                 isFocused: app.isActive
             )
-            cachedMeetings[bundleID] = CachedBrowserMeeting(context: context, observedAt: now)
-            return context
+            cachedMeetings[app.bundleID] = CachedBrowserMeeting(context: context, observedAt: now)
+            liveMeetings.append(context)
         }
 
         let liveBundleIDs = Set(liveMeetings.map(\.bundleID))
@@ -60,7 +63,7 @@ final class BrowserMeetingActivityCollector {
         return liveMeetings + cachedOnlyMeetings
     }
 
-    private func normalizedFocusedURL(for app: NSRunningApplication) -> NormalizedMeetingURL? {
+    private func normalizedFocusedURL(for app: RunningAppSnapshot) async -> NormalizedMeetingURL? {
         if let normalized = normalizedAXDocumentURL(for: app) {
             return normalized
         }
@@ -68,14 +71,13 @@ final class BrowserMeetingActivityCollector {
         // Query the browser's active tab even after another app/overlay becomes
         // frontmost. Strict URL normalization plus resolver media checks keep
         // background meeting tabs from prompting by themselves.
-        guard let bundleID = app.bundleIdentifier,
-              let url = activeBrowserURLViaAppleScript(bundleID: bundleID) else {
+        guard let url = await activeBrowserURLViaAppleScript(bundleID: app.bundleID) else {
             return nil
         }
         return MeetingURLNormalizer.normalize(url)
     }
 
-    private func normalizedAXDocumentURL(for app: NSRunningApplication) -> NormalizedMeetingURL? {
+    private func normalizedAXDocumentURL(for app: RunningAppSnapshot) -> NormalizedMeetingURL? {
         let axApp = AXUIElementCreateApplication(app.processIdentifier)
         var windowRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &windowRef) == .success,
@@ -94,6 +96,7 @@ final class BrowserMeetingActivityCollector {
         return MeetingURLNormalizer.normalize(rawURL)
     }
 
+    @MainActor
     private func activeBrowserURLViaAppleScript(bundleID: String) -> String? {
         let source: String
         switch bundleID {

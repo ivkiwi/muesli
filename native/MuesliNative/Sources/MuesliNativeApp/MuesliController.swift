@@ -296,7 +296,7 @@ final class MuesliController: NSObject {
         refreshUI()
 
         meetingMonitor.calendarEventProvider = { [weak self] in
-            self?.calendarMonitor.currentOrNearbyEvent()
+            self?.currentOrNearbyCachedCalendarEvent()
         }
         meetingMonitor.detectionEnabledProvider = { [weak self] in
             self?.config.showMeetingDetectionNotification ?? false
@@ -935,6 +935,10 @@ final class MuesliController: NSObject {
             await self.refreshUpcomingCalendarEvents()
             self.checkUpcomingCalendarNotifications()
         }
+    }
+
+    private func currentOrNearbyCachedCalendarEvent() -> CalendarEventContext? {
+        selectCurrentOrNearbyCachedCalendarEvent(from: appState.upcomingCalendarEvents)
     }
 
     private func startMeetingFeatureMonitors(includeMaraudersMap: Bool) {
@@ -3999,4 +4003,23 @@ final class MuesliController: NSObject {
             return dict
         }
     }
+}
+
+func selectCurrentOrNearbyCachedCalendarEvent(
+    from events: [UnifiedCalendarEvent],
+    now: Date = Date()
+) -> CalendarEventContext? {
+    let searchEnd = now.addingTimeInterval(5 * 60)
+    let candidates = events
+        .filter { event in
+            !event.isAllDay && event.endDate > now && event.startDate < searchEnd
+        }
+        .sorted { $0.startDate < $1.startDate }
+
+    if let active = candidates.first(where: { $0.startDate <= now && $0.endDate > now }) {
+        return CalendarEventContext(id: active.id, title: active.title)
+    }
+
+    return candidates.first(where: { $0.startDate > now })
+        .map { CalendarEventContext(id: $0.id, title: $0.title) }
 }
