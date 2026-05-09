@@ -8,7 +8,7 @@ struct LaunchAtLoginManagerTests {
     func startupReconciliationReflectsActualEnabledStatus() {
         var config = AppConfig()
         config.launchAtLogin = false
-        let manager = FakeLaunchAtLoginManager(isEnabled: true)
+        let manager = FakeLaunchAtLoginManager(registrationState: .enabled)
         let coordinator = LaunchAtLoginCoordinator(manager: manager)
 
         let result = coordinator.reconcileOnStartup(config: config)
@@ -22,7 +22,7 @@ struct LaunchAtLoginManagerTests {
     func startupReconciliationAppliesLegacySavedEnabledSetting() {
         var config = AppConfig()
         config.launchAtLogin = true
-        let manager = FakeLaunchAtLoginManager(isEnabled: false)
+        let manager = FakeLaunchAtLoginManager(registrationState: .disabled)
         let coordinator = LaunchAtLoginCoordinator(manager: manager)
 
         let result = coordinator.reconcileOnStartup(config: config)
@@ -36,7 +36,7 @@ struct LaunchAtLoginManagerTests {
     func settingLaunchAtLoginUsesBackendStatus() {
         var config = AppConfig()
         config.launchAtLogin = false
-        let manager = FakeLaunchAtLoginManager(isEnabled: false)
+        let manager = FakeLaunchAtLoginManager(registrationState: .disabled)
         let coordinator = LaunchAtLoginCoordinator(manager: manager)
 
         let result = coordinator.setEnabled(true, config: config)
@@ -50,7 +50,7 @@ struct LaunchAtLoginManagerTests {
     func failedBackendUpdateRollsBackConfig() {
         var config = AppConfig()
         config.launchAtLogin = true
-        let manager = FakeLaunchAtLoginManager(isEnabled: false)
+        let manager = FakeLaunchAtLoginManager(registrationState: .disabled)
         manager.errorToThrow = TestLaunchAtLoginError.denied
         let coordinator = LaunchAtLoginCoordinator(manager: manager)
 
@@ -60,6 +60,47 @@ struct LaunchAtLoginManagerTests {
         #expect(result.config.launchAtLogin == false)
         #expect(manager.requests == [true])
     }
+
+    @Test("requires approval stays requested instead of reverting to off")
+    func requiresApprovalStaysRequested() {
+        var config = AppConfig()
+        config.launchAtLogin = false
+        let manager = FakeLaunchAtLoginManager(registrationState: .disabled)
+        manager.stateAfterSuccessfulSet = .requiresApproval
+        let coordinator = LaunchAtLoginCoordinator(manager: manager)
+
+        let result = coordinator.setEnabled(true, config: config)
+
+        #expect(result.error == nil)
+        #expect(result.registrationState == .requiresApproval)
+        #expect(result.config.launchAtLogin)
+        #expect(manager.requests == [true])
+    }
+
+    @Test("startup reconciliation reflects pending approval as requested")
+    func startupReconciliationReflectsPendingApprovalAsRequested() {
+        var config = AppConfig()
+        config.launchAtLogin = false
+        let manager = FakeLaunchAtLoginManager(registrationState: .requiresApproval)
+        let coordinator = LaunchAtLoginCoordinator(manager: manager)
+
+        let result = coordinator.reconcileOnStartup(config: config)
+
+        #expect(result.error == nil)
+        #expect(result.registrationState == .requiresApproval)
+        #expect(result.config.launchAtLogin)
+        #expect(manager.requests.isEmpty)
+    }
+
+    @Test("opening login item settings delegates to backend")
+    func openLoginItemSettingsDelegatesToBackend() {
+        let manager = FakeLaunchAtLoginManager(registrationState: .requiresApproval)
+        let coordinator = LaunchAtLoginCoordinator(manager: manager)
+
+        coordinator.openSystemSettingsLoginItems()
+
+        #expect(manager.openedSettings)
+    }
 }
 
 private enum TestLaunchAtLoginError: Error {
@@ -67,12 +108,14 @@ private enum TestLaunchAtLoginError: Error {
 }
 
 private final class FakeLaunchAtLoginManager: LaunchAtLoginManaging {
-    var isEnabled: Bool
+    var registrationState: LaunchAtLoginRegistrationState
     var requests: [Bool] = []
     var errorToThrow: Error?
+    var openedSettings = false
+    var stateAfterSuccessfulSet: LaunchAtLoginRegistrationState?
 
-    init(isEnabled: Bool) {
-        self.isEnabled = isEnabled
+    init(registrationState: LaunchAtLoginRegistrationState) {
+        self.registrationState = registrationState
     }
 
     func setEnabled(_ enabled: Bool) throws {
@@ -80,6 +123,10 @@ private final class FakeLaunchAtLoginManager: LaunchAtLoginManaging {
         if let errorToThrow {
             throw errorToThrow
         }
-        isEnabled = enabled
+        registrationState = stateAfterSuccessfulSet ?? (enabled ? .enabled : .disabled)
+    }
+
+    func openSystemSettingsLoginItems() {
+        openedSettings = true
     }
 }

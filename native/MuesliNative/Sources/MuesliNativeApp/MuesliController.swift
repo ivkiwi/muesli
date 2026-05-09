@@ -623,7 +623,15 @@ final class MuesliController: NSObject {
         if let error = result.error {
             fputs("[launch-at-login] failed to set enabled=\(enabled): \(error)\n", stderr)
         }
+        appState.launchAtLoginRegistrationState = result.registrationState
         updateConfig { $0.launchAtLogin = result.config.launchAtLogin }
+        if enabled, result.registrationState == .requiresApproval {
+            launchAtLoginCoordinator.openSystemSettingsLoginItems()
+        }
+    }
+
+    func openLaunchAtLoginSettings() {
+        launchAtLoginCoordinator.openSystemSettingsLoginItems()
     }
 
     private func syncLaunchAtLoginConfigWithSystem() {
@@ -631,10 +639,10 @@ final class MuesliController: NSObject {
         if let error = result.error {
             fputs("[launch-at-login] failed to apply saved launch-at-login setting: \(error)\n", stderr)
         }
+        appState.launchAtLoginRegistrationState = result.registrationState
         let reconciled = result.config
         guard reconciled.launchAtLogin != config.launchAtLogin else { return }
-        config = reconciled
-        configStore.save(config)
+        updateConfig { $0.launchAtLogin = reconciled.launchAtLogin }
     }
 
     func selectBackend(_ option: BackendOption) {
