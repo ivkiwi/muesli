@@ -92,6 +92,36 @@ struct LaunchAtLoginManagerTests {
         #expect(manager.requests.isEmpty)
     }
 
+    @Test("status refresh re-queries approval without re-registering")
+    func statusRefreshRequeriesApprovalWithoutReregistering() {
+        var config = AppConfig()
+        config.launchAtLogin = true
+        let manager = FakeLaunchAtLoginManager(registrationState: .enabled)
+        let coordinator = LaunchAtLoginCoordinator(manager: manager)
+
+        let result = coordinator.refreshStatus(config: config)
+
+        #expect(result.error == nil)
+        #expect(result.registrationState == .enabled)
+        #expect(result.config.launchAtLogin)
+        #expect(manager.requests.isEmpty)
+    }
+
+    @Test("status refresh reflects external disable")
+    func statusRefreshReflectsExternalDisable() {
+        var config = AppConfig()
+        config.launchAtLogin = true
+        let manager = FakeLaunchAtLoginManager(registrationState: .disabled)
+        let coordinator = LaunchAtLoginCoordinator(manager: manager)
+
+        let result = coordinator.refreshStatus(config: config)
+
+        #expect(result.error == nil)
+        #expect(result.registrationState == .disabled)
+        #expect(result.config.launchAtLogin == false)
+        #expect(manager.requests.isEmpty)
+    }
+
     @Test("opening login item settings delegates to backend")
     func openLoginItemSettingsDelegatesToBackend() {
         let manager = FakeLaunchAtLoginManager(registrationState: .requiresApproval)

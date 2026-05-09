@@ -36,6 +36,10 @@ struct LaunchAtLoginCoordinator {
             return setEnabled(true, config: config)
         }
 
+        return refreshStatus(config: config)
+    }
+
+    func refreshStatus(config: AppConfig) -> LaunchAtLoginUpdateResult {
         var updated = config
         let state = manager.registrationState
         updated.launchAtLogin = state.isRequested

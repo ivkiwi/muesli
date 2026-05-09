@@ -1232,6 +1232,7 @@ struct SettingsView: View {
         accessibilityGranted = AXIsProcessTrusted()
         inputMonitoringGranted = CGPreflightListenEventAccess()
         screenRecordingGranted = CGPreflightScreenCaptureAccess()
+        controller.refreshLaunchAtLoginState()
         if screenRecordingGranted && pendingScreenContextEnable {
             clearPendingScreenContextEnable()
             controller.updateConfig { $0.enableScreenContext = true }

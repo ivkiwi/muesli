@@ -634,6 +634,14 @@ final class MuesliController: NSObject {
         launchAtLoginCoordinator.openSystemSettingsLoginItems()
     }
 
+    func refreshLaunchAtLoginState() {
+        let result = launchAtLoginCoordinator.refreshStatus(config: config)
+        appState.launchAtLoginRegistrationState = result.registrationState
+        let refreshed = result.config
+        guard refreshed.launchAtLogin != config.launchAtLogin else { return }
+        updateConfig { $0.launchAtLogin = refreshed.launchAtLogin }
+    }
+
     private func syncLaunchAtLoginConfigWithSystem() {
         let result = launchAtLoginCoordinator.reconcileOnStartup(config: config)
         if let error = result.error {
