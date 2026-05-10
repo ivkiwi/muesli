@@ -3,6 +3,7 @@ import AudioToolbox
 import CoreAudio
 import Foundation
 import MuesliCore
+import os
 
 /// Protocol for system audio capture backends (ScreenCaptureKit vs CoreAudio tap).
 protocol SystemAudioCapturing: AnyObject {
@@ -25,10 +26,16 @@ protocol SystemAudioCapturing: AnyObject {
 final class CoreAudioSystemRecorder: SystemAudioCapturing {
     var onPCMSamples: (([Int16]) -> Void)?
 
+    private struct RecordingState {
+        var isRecording = false
+        var isPaused = false
+    }
+
     private var tapID: AudioObjectID = kAudioObjectUnknown
     private var aggregateDeviceID: AudioDeviceID = kAudioObjectUnknown
     private var audioUnit: AudioUnit?
     private let processingQueue = DispatchQueue(label: "com.muesli.system-audio-tap")
+    private let recordingStateLock = OSAllocatedUnfairLock(initialState: RecordingState())
     private var defaultOutputDeviceListenerBlock: AudioObjectPropertyListenerBlock?
     private var renderBuffer: UnsafeMutableRawPointer?
     private var renderBufferCapacity = 0
@@ -36,8 +43,14 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing {
     private var outputFile: FileHandle?
     private var outputURL: URL?
     private var totalBytesWritten = 0
-    private(set) var isRecording = false
-    private(set) var isPaused = false
+    private(set) var isRecording: Bool {
+        get { recordingStateLock.withLock { $0.isRecording } }
+        set { recordingStateLock.withLock { $0.isRecording = newValue } }
+    }
+    private(set) var isPaused: Bool {
+        get { recordingStateLock.withLock { $0.isPaused } }
+        set { recordingStateLock.withLock { $0.isPaused = newValue } }
+    }
 
     private static let targetSampleRate: Double = 16_000
     private static let maxRenderFrames: UInt32 = 4096
@@ -620,6 +633,7 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing {
         } catch {
             isRecording = false
             isPaused = false
+            onPCMSamples = nil
             fputs("[system-audio] failed to restart after default output device change: \(error)\n", stderr)
         }
     }
