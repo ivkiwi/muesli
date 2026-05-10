@@ -189,6 +189,7 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing {
         name: String
     ) -> CATapDescription {
         let excludeList = excludingProcessID.map { [$0] } ?? []
+        // Default output devices expose the render stream we need at index 0 on supported macOS hardware.
         let tapDesc = CATapDescription(excludingProcesses: excludeList, deviceUID: deviceUID, stream: 0)
         tapDesc.name = name
         return tapDesc
@@ -441,8 +442,8 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing {
     }
 
     private static func deviceUID(for deviceID: AudioDeviceID) -> String? {
-        var uid: CFString = "" as CFString
-        var size = UInt32(MemoryLayout<CFString>.size)
+        var uid: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyDeviceUID,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -450,10 +451,10 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing {
         )
         guard AudioObjectGetPropertyData(
             deviceID, &address, 0, nil, &size, &uid
-        ) == noErr else {
+        ) == noErr, let uid else {
             return nil
         }
-        return uid as String
+        return uid.takeRetainedValue() as String
     }
 
     /// Look up our process's AudioObjectID from the HAL process object list.
@@ -558,8 +559,8 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing {
         ) == noErr else { return }
 
         for deviceID in devices {
-            var name: CFString = "" as CFString
-            var nameSize = UInt32(MemoryLayout<CFString>.size)
+            var name: Unmanaged<CFString>?
+            var nameSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
             var nameAddr = AudioObjectPropertyAddress(
                 mSelector: kAudioObjectPropertyName,
                 mScope: kAudioObjectPropertyScopeGlobal,
@@ -567,9 +568,9 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing {
             )
             guard AudioObjectGetPropertyData(
                 deviceID, &nameAddr, 0, nil, &nameSize, &name
-            ) == noErr else { continue }
+            ) == noErr, let name else { continue }
 
-            if (name as String) == "Muesli System Audio" {
+            if (name.takeRetainedValue() as String) == "Muesli System Audio" {
                 fputs("[system-audio] cleaning up stale aggregate device \(deviceID)\n", stderr)
                 AudioHardwareDestroyAggregateDevice(deviceID)
             }
