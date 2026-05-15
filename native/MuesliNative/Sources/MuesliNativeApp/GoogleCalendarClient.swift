@@ -69,6 +69,10 @@ final class GoogleCalendarClient {
     /// Cached events keyed by calendar ID, then by event ID. A 410 (sync token
     /// expired) for one calendar invalidates only that calendar's cache.
     private var cachedEventsByCalendar: [String: [String: UnifiedCalendarEvent]] = [:]
+    /// The event window used for the current sync tokens. Google incremental
+    /// sync does not include a new time range, so changing the selected window
+    /// requires a full re-fetch.
+    private var cachedEventWindowDayCount: Int?
     /// Last fetched calendar list. Refreshed each time `fetchUpcomingEvents` runs
     /// so calendars added in the Google web UI get picked up automatically.
     private var cachedCalendarList: [GoogleCalendarSummary] = []
@@ -81,8 +85,11 @@ final class GoogleCalendarClient {
         daysAhead: Int = UpcomingMeetingsWindow.defaultDayCount,
         disabledCalendarIDs: Set<String> = []
     ) async throws -> [UnifiedCalendarEvent] {
+        let resolvedDayCount = UpcomingMeetingsWindow.resolve(dayCount: daysAhead).dayCount
+        resetEventSyncIfNeededForWindow(daysAhead: resolvedDayCount)
+
         let now = Date()
-        guard let future = UpcomingMeetingsWindow.endDate(from: now, dayCount: daysAhead) else { return [] }
+        guard let future = UpcomingMeetingsWindow.endDate(from: now, dayCount: resolvedDayCount) else { return [] }
 
         // Refresh the calendar list. If this fails, fall back to whatever we
         // last saw — better to return something than nothing.
@@ -114,7 +121,7 @@ final class GoogleCalendarClient {
 
         for calendar in enabled {
             do {
-                try await fetchEvents(forCalendarID: calendar.id, daysAhead: daysAhead)
+                try await fetchEvents(forCalendarID: calendar.id, daysAhead: resolvedDayCount)
             } catch let authError as GoogleCalendarAuthError {
                 throw authError
             } catch {
@@ -301,7 +308,18 @@ final class GoogleCalendarClient {
     func resetSync() {
         syncTokens.removeAll()
         cachedEventsByCalendar.removeAll()
+        cachedEventWindowDayCount = nil
         cachedCalendarList.removeAll()
+    }
+
+    @discardableResult
+    func resetEventSyncIfNeededForWindow(daysAhead: Int) -> Bool {
+        let resolvedDayCount = UpcomingMeetingsWindow.resolve(dayCount: daysAhead).dayCount
+        guard cachedEventWindowDayCount != resolvedDayCount else { return false }
+        syncTokens.removeAll()
+        cachedEventsByCalendar.removeAll()
+        cachedEventWindowDayCount = resolvedDayCount
+        return true
     }
 
     private static let isoFormatter: ISO8601DateFormatter = {

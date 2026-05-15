@@ -311,6 +311,18 @@ struct GoogleCalendarTests {
         #expect(event?.calendarID == "team@dockstreet.com")
     }
 
+    @Test("event sync cache resets when upcoming window changes")
+    func eventSyncCacheResetsWhenWindowChanges() {
+        let client = GoogleCalendarClient()
+
+        #expect(client.resetEventSyncIfNeededForWindow(daysAhead: 1))
+        #expect(!client.resetEventSyncIfNeededForWindow(daysAhead: 1))
+        #expect(client.resetEventSyncIfNeededForWindow(daysAhead: 3))
+
+        client.resetSync()
+        #expect(client.resetEventSyncIfNeededForWindow(daysAhead: 3))
+    }
+
     // MARK: - Helpers
 
     private func date(_ iso: String) -> Date {
