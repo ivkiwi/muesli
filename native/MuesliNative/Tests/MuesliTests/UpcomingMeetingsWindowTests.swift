@@ -49,6 +49,28 @@ struct UpcomingMeetingsWindowTests {
         #expect(config.upcomingMeetingsDayCount == UpcomingMeetingsWindow.defaultDayCount)
     }
 
+    @Test("hidden events outside narrowed windows are preserved")
+    func hiddenEventsOutsideNarrowedWindowsArePreserved() {
+        let staleIDs = UpcomingMeetingsWindow.staleHiddenEventIDs(
+            hiddenIDs: ["today", "tomorrow"],
+            visibleEventIDs: ["today"],
+            dayCount: UpcomingMeetingsWindow.today.dayCount
+        )
+
+        #expect(staleIDs.isEmpty)
+    }
+
+    @Test("hidden events missing from the widest window are stale")
+    func hiddenEventsMissingFromWidestWindowAreStale() {
+        let staleIDs = UpcomingMeetingsWindow.staleHiddenEventIDs(
+            hiddenIDs: ["today", "deleted"],
+            visibleEventIDs: ["today"],
+            dayCount: UpcomingMeetingsWindow.defaultDayCount
+        )
+
+        #expect(staleIDs == ["deleted"])
+    }
+
     private var calendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!

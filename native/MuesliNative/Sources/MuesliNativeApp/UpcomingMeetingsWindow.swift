@@ -7,6 +7,10 @@ enum UpcomingMeetingsWindow: Int, CaseIterable, Identifiable {
 
     static let defaultDayCount = UpcomingMeetingsWindow.threeDays.rawValue
 
+    static var maxDayCount: Int {
+        allCases.map(\.dayCount).max() ?? defaultDayCount
+    }
+
     var id: Int { rawValue }
     var dayCount: Int { rawValue }
 
@@ -36,5 +40,18 @@ enum UpcomingMeetingsWindow: Int, CaseIterable, Identifiable {
         let window = resolve(dayCount: dayCount)
         let startOfToday = calendar.startOfDay(for: now)
         return calendar.date(byAdding: .day, value: window.dayCount, to: startOfToday)
+    }
+
+    static func staleHiddenEventIDs(
+        hiddenIDs: Set<String>,
+        visibleEventIDs: Set<String>,
+        dayCount: Int
+    ) -> Set<String> {
+        let resolvedDayCount = resolve(dayCount: dayCount).dayCount
+        guard resolvedDayCount >= maxDayCount else {
+            return []
+        }
+
+        return hiddenIDs.subtracting(visibleEventIDs)
     }
 }
