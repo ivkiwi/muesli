@@ -342,6 +342,14 @@ final class FloatingIndicatorController: NSObject {
                     options: .repeating, animated: true
                 )
             }
+        case .preparing:
+            if #available(macOS 15, *) {
+                micIconView?.addSymbolEffect(
+                    .pulse,
+                    options: .repeating,
+                    animated: true
+                )
+            }
         default:
             break
         }

@@ -214,6 +214,7 @@ final class MuesliController: NSObject {
     private var dictationLatencyTraceID: UUID?
     private var dictationLatencyTraceStartedAt: Date?
     private var dictationAudioRouteStabilizingUntil: Date?
+    private var dictationAwaitingFirstAudioSessionID: UUID?
     private var currentDictationOutputMode: DictationOutputMode = .paste
     private var computerUseCommandStartedAt: Date?
     private var computerUseCommandTask: Task<Void, Never>?
@@ -284,7 +285,7 @@ final class MuesliController: NSObject {
         super.init()
         recorder.onFirstCapturedAudioBuffer = { [weak self] capturedAt in
             Task { @MainActor [weak self] in
-                self?.markDictationLatency("first_audio_buffer", at: capturedAt)
+                self?.handleFirstDictationAudioBuffer(capturedAt: capturedAt)
             }
         }
         dictationAudioRoutingController.onPreferredInputDeviceChanged = { [weak self] preferredInputDeviceID in
@@ -4343,6 +4344,7 @@ final class MuesliController: NSObject {
         restoreDictationAudioDucking()
         restoreDictationInputOverride()
         resetDictationInputRoute()
+        dictationAwaitingFirstAudioSessionID = nil
         setState(.idle)
         meetingMonitor.resumeAfterCooldown()
         meetingMonitor.refreshState()
@@ -4384,6 +4386,7 @@ final class MuesliController: NSObject {
             restoreDictationInputOverride()
             resetDictationInputRoute()
             resetDictationOutputMode()
+            dictationAwaitingFirstAudioSessionID = nil
             dictationStartedAt = nil
             setState(.idle)
             meetingMonitor.resumeAfterCooldown()
@@ -4395,8 +4398,23 @@ final class MuesliController: NSObject {
 
         guard dictationAudioSessionTracker.isCurrent(sessionID) else { return }
         markDictationLatency("start_success")
+        if !isDictationTestMode {
+            indicator.powerProvider = { [weak self] in
+                self?.recorder.currentPower() ?? -160
+            }
+        }
+    }
+
+    private func handleFirstDictationAudioBuffer(capturedAt: Date) {
+        markDictationLatency("first_audio_buffer", at: capturedAt)
+        guard let sessionID = dictationAudioSessionTracker.current(),
+              dictationAwaitingFirstAudioSessionID == sessionID else {
+            return
+        }
+
+        dictationAwaitingFirstAudioSessionID = nil
         if dictationStartedAt == nil {
-            dictationStartedAt = Date()
+            dictationStartedAt = capturedAt
         }
         capturedDictationContext = nil
         if !isDictationTestMode {
@@ -4409,6 +4427,7 @@ final class MuesliController: NSObject {
         } else {
             setState(.recording)
         }
+        markDictationLatency("ui_recording")
         if isDictationTestMode {
             dictationTestRecordingStarted?()
         }
@@ -4471,15 +4490,15 @@ final class MuesliController: NSObject {
             return
         }
         beginDictationOutput()
-        dictationStartedAt = Date()
+        dictationStartedAt = nil
+        dictationAwaitingFirstAudioSessionID = sessionID
         capturedDictationContext = nil
         if !isDictationTestMode {
             indicator.powerProvider = { [weak self] in
                 self?.recorder.currentPower() ?? -160
             }
         }
-        setState(.recording)
-        markDictationLatency("ui_recording")
+        setState(.preparing)
         ensureDictationAudioDucked()
         startDictationRecorderAsync(sessionID: sessionID)
     }
@@ -4535,6 +4554,7 @@ final class MuesliController: NSObject {
         restoreDictationInputOverride()
         resetDictationInputRoute()
         capturedDictationContext = nil
+        dictationAwaitingFirstAudioSessionID = nil
         dictationStartedAt = nil
         setState(.idle)
         meetingMonitor.resumeAfterCooldown()
@@ -4553,14 +4573,13 @@ final class MuesliController: NSObject {
         let preferredInputDeviceID = cachedPreferredDictationInputDeviceID()
         beginDictationAudioDucking()
         beginDictationOutput(mode: outputMode)
-        dictationStartedAt = Date()
+        dictationStartedAt = nil
         if !isDictationTestMode {
             indicator.powerProvider = { [weak self] in
                 self?.recorder.currentPower() ?? -160
             }
         }
-        indicator.setToggleDictation(true, config: config)
-        markDictationLatency("ui_recording")
+        setState(.preparing)
 
         // Nemotron streaming: live text at cursor in handsfree mode too
         if selectedBackend.backend == "nemotron" {
@@ -4578,6 +4597,7 @@ final class MuesliController: NSObject {
         }
 
         let sessionID = dictationAudioSessionTracker.begin()
+        dictationAwaitingFirstAudioSessionID = sessionID
         prepareDictationRecorderAsync(
             sessionID: sessionID,
             preferredInputDeviceID: preferredInputDeviceID
@@ -4593,7 +4613,7 @@ final class MuesliController: NSObject {
     }
 
     func toggleVoiceNoteRecording() {
-        if dictationStartedAt != nil {
+        if dictationStartedAt != nil || dictationAudioSessionTracker.current() != nil || isNemotronStreaming {
             handleToggleStop()
         } else if dictationState == .idle {
             handleToggleStart(outputMode: .voiceNote)
@@ -4621,6 +4641,7 @@ final class MuesliController: NSObject {
             resetDictationInputRoute()
             _streamingDictationController = nil
             previousStreamText = ""
+            dictationAwaitingFirstAudioSessionID = nil
 
             let duration = max(Date().timeIntervalSince(startedAt), 0)
             let cleaned = FillerWordFilter.apply(finalText)
@@ -4653,12 +4674,14 @@ final class MuesliController: NSObject {
             restoreDictationInputOverride()
             resetDictationInputRoute()
             resetDictationOutputMode()
+            dictationAwaitingFirstAudioSessionID = nil
             setState(.idle)
             meetingMonitor.resumeAfterCooldown()
             finishDictationLatencyTrace("stop_without_session")
             syncDictationRecorderWarmup(reason: "stop-without-session")
             return
         }
+        dictationAwaitingFirstAudioSessionID = nil
         restoreDictationAudioDucking()
         stopDictationRecorderAsync(sessionID: sessionID, startedAt: startedAt)
     }
