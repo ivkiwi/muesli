@@ -101,7 +101,7 @@ final class DictationAudioRouteController: DictationAudioRouting {
         var builtInInputDeviceID: AudioObjectID?
     }
 
-    private let inspector: CoreAudioDeviceInspector
+    private let inspector: CoreAudioDeviceInspecting
     private let queue: DispatchQueue
     private let queueKey = DispatchSpecificKey<Void>()
     private let lock = NSLock()
@@ -110,8 +110,9 @@ final class DictationAudioRouteController: DictationAudioRouting {
     var onPreferredInputDeviceChanged: ((AudioObjectID?) -> Void)?
 
     init(
-        inspector: CoreAudioDeviceInspector = CoreAudioDeviceInspector(),
-        queue: DispatchQueue = DispatchQueue(label: "com.muesli.dictation-audio-route")
+        inspector: CoreAudioDeviceInspecting = CoreAudioDeviceInspector(),
+        queue: DispatchQueue = DispatchQueue(label: "com.muesli.dictation-audio-route"),
+        observesDefaultOutputChanges: Bool = true
     ) {
         self.inspector = inspector
         self.queue = queue
@@ -122,7 +123,9 @@ final class DictationAudioRouteController: DictationAudioRouting {
             } ?? .unknown,
             builtInInputDeviceID: inspector.builtInInputDeviceID()
         )
-        installDefaultOutputListener()
+        if observesDefaultOutputChanges {
+            installDefaultOutputListener()
+        }
         refreshRouteCache()
     }
 
@@ -209,12 +212,7 @@ final class DictationAudioRouteController: DictationAudioRouting {
     }
 
     private static func preferredInputDeviceID(for snapshot: RouteSnapshot) -> AudioObjectID? {
-        switch snapshot.outputRouteKind {
-        case .headphoneLike:
-            return snapshot.builtInInputDeviceID
-        case .speakerLike, .unknown:
-            return nil
-        }
+        snapshot.builtInInputDeviceID
     }
 
     private func makeRouteSnapshot() -> RouteSnapshot {
@@ -254,7 +252,17 @@ final class DictationAudioRouteController: DictationAudioRouting {
     }
 }
 
-final class CoreAudioDeviceInspector {
+protocol CoreAudioDeviceInspecting {
+    func defaultOutputDeviceID() -> AudioObjectID?
+    func defaultInputDeviceID() -> AudioObjectID?
+    func setDefaultInputDeviceID(_ deviceID: AudioObjectID) -> Bool
+    func isDeviceAvailable(_ deviceID: AudioObjectID) -> Bool
+    func nominalSampleRate(for deviceID: AudioObjectID) -> Double?
+    func outputRouteKind(for deviceID: AudioObjectID) -> AudioOutputRouteKind
+    func builtInInputDeviceID() -> AudioObjectID?
+}
+
+final class CoreAudioDeviceInspector: CoreAudioDeviceInspecting {
     func defaultOutputDeviceID() -> AudioObjectID? {
         defaultDeviceID(selector: kAudioHardwarePropertyDefaultOutputDevice)
     }

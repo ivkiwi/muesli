@@ -73,6 +73,13 @@ final class MicrophoneRecorder: @unchecked Sendable {
             fputs("[mic-recorder] activation deferred while capture is active\n", stderr)
             return
         }
+        if engine.isRunning, preparedInputDeviceID != preferredInputDeviceID {
+            fputs(
+                "[mic-recorder] rebuilding warm engine for preferredInput=\(preferredInputDeviceID.map(String.init) ?? "default")\n",
+                stderr
+            )
+            stopWarmGraphLocked()
+        }
         try ensurePreparedGraphLocked(preferredInputDeviceID: preferredInputDeviceID)
         guard !engine.isRunning else { return }
         lock.withLock { state in
