@@ -25,6 +25,7 @@ enum DictationAudioSessionEvent {
     case speechDetected(UUID, capturedAt: Date)
     case noAudioTimeout(UUID, at: Date)
     case stopped(UUID?, wavURL: URL?)
+    case audioRestored(UUID?)
     case cancelled(UUID?, reason: String)
     case failed(UUID?, error: Error)
     case latency(String, Date)
@@ -211,8 +212,8 @@ final class DictationAudioSessionManager: @unchecked Sendable {
         queue.async { [self] in
             let sessionID = self.stateStorage.sessionID
             guard sessionID != nil else {
-                self.restoreSessionAudioState()
                 self.emit(.stopped(nil, wavURL: nil))
+                self.restoreSessionAudioState(completion: nil)
                 return
             }
             self.emitLatency("stop")
@@ -220,8 +221,10 @@ final class DictationAudioSessionManager: @unchecked Sendable {
             self.recorder.preferredInputDeviceID = nil
             self.stateStorage = .idle
             self.clearSessionHint(sessionID)
-            self.restoreSessionAudioState()
             self.emit(.stopped(sessionID, wavURL: wavURL))
+            self.restoreSessionAudioState {
+                self.emit(.audioRestored(sessionID))
+            }
         }
     }
 
@@ -317,6 +320,7 @@ final class DictationAudioSessionManager: @unchecked Sendable {
             return
         }
         recorder.keepsAudioGraphWarm = true
+        recorder.coolDown()
         do {
             emitLatency("engine_prepare_begin:warmup:\(reason)")
             try recorder.warmUp(preferredInputDeviceID: routeSnapshot.preferredInputDeviceID)
@@ -334,8 +338,8 @@ final class DictationAudioSessionManager: @unchecked Sendable {
         duckingController.beginDictationDucking(enabled: duckingEnabledForSession)
     }
 
-    private func restoreSessionAudioState() {
-        duckingController.restoreDictationDucking()
+    private func restoreSessionAudioState(completion: (() -> Void)? = nil) {
+        duckingController.restoreDictationDucking(completion: completion)
         routingController.refreshRouteAfterDictationSession()
         duckingEnabledForSession = false
     }

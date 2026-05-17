@@ -4,7 +4,13 @@ import Foundation
 protocol AudioDuckingManaging: AnyObject {
     func beginDictationDucking(enabled: Bool)
     func ensureCurrentDefaultDucked()
-    func restoreDictationDucking()
+    func restoreDictationDucking(completion: (() -> Void)?)
+}
+
+extension AudioDuckingManaging {
+    func restoreDictationDucking() {
+        restoreDictationDucking(completion: nil)
+    }
 }
 
 enum AudioOutputActivityStatus: Equatable, CustomStringConvertible {
@@ -65,6 +71,7 @@ final class AudioDuckingController: AudioDuckingManaging {
     private var snapshots: [AudioObjectID: DeviceSnapshot] = [:]
     private var restoreGeneration = 0
     private var isRestorePending = false
+    private var restoreCompletions: [() -> Void] = []
 
     init(
         client: AudioDuckingDeviceClient = CoreAudioDuckingDeviceClient(),
@@ -82,7 +89,7 @@ final class AudioDuckingController: AudioDuckingManaging {
         queue.async { [self] in
             guard enabled else {
                 self.duckingEnabledForSession = false
-                self.restoreLocked()
+                self.restoreLocked(completion: nil)
                 return
             }
             self.cancelPendingRestoreLocked()
@@ -99,9 +106,9 @@ final class AudioDuckingController: AudioDuckingManaging {
         }
     }
 
-    func restoreDictationDucking() {
+    func restoreDictationDucking(completion: (() -> Void)? = nil) {
         queue.async { [self] in
-            restoreLocked()
+            restoreLocked(completion: completion)
         }
     }
 
@@ -153,7 +160,10 @@ final class AudioDuckingController: AudioDuckingManaging {
         }
     }
 
-    private func restoreLocked() {
+    private func restoreLocked(completion: (() -> Void)?) {
+        if let completion {
+            restoreCompletions.append(completion)
+        }
         restoreGeneration += 1
         isRestorePending = true
         scheduleRestoreAfterCodecStabilizationLocked(
@@ -166,6 +176,7 @@ final class AudioDuckingController: AudioDuckingManaging {
         guard isRestorePending else { return }
         restoreGeneration += 1
         isRestorePending = false
+        restoreCompletions.removeAll()
     }
 
     private func scheduleRestoreAfterCodecStabilizationLocked(generation: Int, deadline: Date) {
@@ -185,6 +196,8 @@ final class AudioDuckingController: AudioDuckingManaging {
         snapshots.removeAll()
         duckingEnabledForSession = false
         isRestorePending = false
+        let completions = restoreCompletions
+        restoreCompletions.removeAll()
 
         for snapshot in pendingSnapshots {
             guard client.isDeviceAvailable(snapshot.deviceID) else { continue }
@@ -202,6 +215,7 @@ final class AudioDuckingController: AudioDuckingManaging {
                 _ = client.setVolume(mutation.previousValue, deviceID: snapshot.deviceID, element: mutation.element)
             }
         }
+        completions.forEach { $0() }
     }
 
     private func shouldWaitForCodecStabilizationLocked(until deadline: Date) -> Bool {

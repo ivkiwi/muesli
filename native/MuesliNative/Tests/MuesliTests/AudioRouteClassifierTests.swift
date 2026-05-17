@@ -11,15 +11,16 @@ struct AudioRouteClassifierTests {
                 name: nil,
                 transportType: kAudioDeviceTransportTypeBluetooth,
                 hasOutputStreams: true,
-                hasInputStreams: true
+                hasInputStreams: true,
+                outputDataSourceKinds: [kAudioStreamTerminalTypeHeadphones]
             )
         )
 
         #expect(route == .headphoneLike)
     }
 
-    @Test("Bluetooth headset low-rate input profile is headphone-like")
-    func bluetoothHeadsetLowRateInputProfileIsHeadphoneLike() {
+    @Test("Bluetooth low-rate generic input profile is unknown")
+    func bluetoothLowRateGenericInputProfileIsUnknown() {
         let route = AudioRouteClassifier.outputRouteKind(
             for: AudioOutputDeviceDescription(
                 name: nil,
@@ -30,11 +31,11 @@ struct AudioRouteClassifierTests {
             )
         )
 
-        #expect(route == .headphoneLike)
+        #expect(route == .unknown)
     }
 
-    @Test("generic Bluetooth output defaults to headphone-like")
-    func genericBluetoothOutputDefaultsToHeadphoneLike() {
+    @Test("generic Bluetooth output with input is unknown")
+    func genericBluetoothOutputWithInputIsUnknown() {
         let route = AudioRouteClassifier.outputRouteKind(
             for: AudioOutputDeviceDescription(
                 name: "Wireless Audio",
@@ -44,7 +45,7 @@ struct AudioRouteClassifierTests {
             )
         )
 
-        #expect(route == .headphoneLike)
+        #expect(route == .unknown)
     }
 
     @Test("Bluetooth speaker output is speaker-like when no input stream is exposed")
@@ -61,8 +62,8 @@ struct AudioRouteClassifierTests {
         #expect(route == .speakerLike)
     }
 
-    @Test("Bluetooth high-rate generic route with input is headphone-like")
-    func bluetoothHighRateGenericRouteWithInputIsHeadphoneLike() {
+    @Test("Bluetooth high-rate generic route with input is unknown")
+    func bluetoothHighRateGenericRouteWithInputIsUnknown() {
         let route = AudioRouteClassifier.outputRouteKind(
             for: AudioOutputDeviceDescription(
                 name: "Wireless Output",
@@ -73,17 +74,18 @@ struct AudioRouteClassifierTests {
             )
         )
 
-        #expect(route == .headphoneLike)
+        #expect(route == .unknown)
     }
 
-    @Test("Bluetooth headset route does not depend on brand or product words")
-    func bluetoothHeadsetRouteDoesNotDependOnBrandOrProductWords() {
+    @Test("Bluetooth headset terminal route does not depend on brand or product words")
+    func bluetoothHeadsetTerminalRouteDoesNotDependOnBrandOrProductWords() {
         let route = AudioRouteClassifier.outputRouteKind(
             for: AudioOutputDeviceDescription(
                 name: "Generic Output",
                 transportType: kAudioDeviceTransportTypeBluetooth,
                 hasOutputStreams: true,
-                hasInputStreams: true
+                hasInputStreams: true,
+                outputTerminalTypes: [kAudioStreamTerminalTypeHeadphones]
             )
         )
 

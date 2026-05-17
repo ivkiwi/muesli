@@ -145,6 +145,12 @@ struct DictationAudioSessionManagerTests {
             }
             return false
         })
+        #expect(harness.events.contains { event in
+            if case .audioRestored = event {
+                return true
+            }
+            return false
+        })
     }
 
     @Test("route refresh warms graph without opening mic")
@@ -155,6 +161,7 @@ struct DictationAudioSessionManagerTests {
         harness.wait()
 
         #expect(harness.route.refreshCalls == 1)
+        #expect(harness.recorder.coolDownCalls == 1)
         #expect(harness.recorder.warmUpCalls == 1)
         #expect(harness.recorder.startCalls == 0)
         #expect(harness.recorder.activateCalls == 0)
@@ -306,8 +313,9 @@ private final class FakeDuckingManager: AudioDuckingManaging {
         ensureCalls += 1
     }
 
-    func restoreDictationDucking() {
+    func restoreDictationDucking(completion: (() -> Void)?) {
         restoreCalls += 1
+        completion?()
     }
 }
 
