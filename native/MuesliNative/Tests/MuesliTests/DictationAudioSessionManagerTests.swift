@@ -15,7 +15,8 @@ struct DictationAudioSessionManagerTests {
         #expect(harness.recorder.activateCalls == 1)
         #expect(harness.recorder.prepareCalls == 0)
         #expect(harness.recorder.startCalls == 0)
-        #expect(harness.ducking.beginCalls == [true])
+        #expect(harness.ducking.beginCalls.isEmpty)
+        #expect(harness.media.beginCalls.isEmpty)
     }
 
     @Test("arm does not block caller while route warmup is in flight")
@@ -161,7 +162,7 @@ struct DictationAudioSessionManagerTests {
         #expect(harness.recorder.activateCalls == 2)
         #expect(harness.recorder.lastWarmInputDeviceID == nil)
         #expect(harness.recorder.preferredInputDeviceID == nil)
-        #expect(harness.ducking.beginCalls == [false, true])
+        #expect(harness.ducking.beginCalls == [true])
     }
 
     @Test("hold start uses cached route snapshot from arm path")
@@ -313,11 +314,15 @@ struct DictationAudioSessionManagerTests {
         #expect(harness.events.contains { if case .noAudioTimeout = $0 { return true }; return false })
     }
 
-    @Test("media pause is requested with current route when enabled")
+    @Test("media pause is requested with current route after threshold")
     func mediaPauseRequestedWithCurrentRoute() {
         let harness = Harness(routeKind: .speakerLike)
 
         harness.manager.arm(source: "hotkey", duckingEnabled: false, mediaPauseEnabled: true)
+        harness.wait()
+        #expect(harness.media.beginCalls.isEmpty)
+
+        harness.manager.beginRecording(mode: "hold-start", duckingEnabled: false, mediaPauseEnabled: true)
         harness.wait()
 
         #expect(harness.media.beginCalls == [
@@ -325,18 +330,36 @@ struct DictationAudioSessionManagerTests {
         ])
     }
 
-    @Test("begin recording after arm does not restart audio controls")
-    func beginRecordingAfterArmDoesNotRestartAudioControls() {
+    @Test("begin recording after arm starts audio controls once")
+    func beginRecordingAfterArmStartsAudioControlsOnce() {
         let harness = Harness(routeKind: .speakerLike)
 
         harness.manager.arm(source: "hotkey", duckingEnabled: true, mediaPauseEnabled: true)
         harness.wait()
+        #expect(harness.media.beginCalls.isEmpty)
+        #expect(harness.ducking.beginCalls.isEmpty)
+
         harness.manager.beginRecording(mode: "hold-start", duckingEnabled: true, mediaPauseEnabled: true)
         harness.wait()
 
         #expect(harness.media.beginCalls.count == 1)
         #expect(harness.ducking.beginCalls == [true])
         #expect(harness.ducking.ensureCalls == 1)
+    }
+
+    @Test("short armed tap does not pause or duck audio")
+    func shortArmedTapDoesNotPauseOrDuckAudio() {
+        let harness = Harness(routeKind: .speakerLike)
+
+        harness.manager.arm(source: "hotkey", duckingEnabled: true, mediaPauseEnabled: true)
+        harness.wait()
+        harness.manager.cancel(reason: "short-tap")
+        harness.wait()
+
+        #expect(harness.media.beginCalls.isEmpty)
+        #expect(harness.ducking.beginCalls.isEmpty)
+        #expect(harness.media.restoreCalls == 1)
+        #expect(harness.ducking.restoreCalls == 1)
     }
 
     @Test("stop restores media pause state")

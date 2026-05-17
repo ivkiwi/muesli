@@ -276,7 +276,9 @@ final class MicrophoneRecorder: @unchecked Sendable {
         engine.stop()
         // See stop(): engine.stop() closes the door on new tap callbacks before
         // we wait for callbacks that were already in flight.
-        tapCallbackGroup.wait()
+        if tapCallbackGroup.wait(timeout: .now() + 2.0) == .timedOut {
+            fputs("[audio-recorder] timed out waiting for tap callbacks during cancel\n", stderr)
+        }
         waitForPendingWrites()
         state.fileHandle?.closeFile()
         if let url = state.fileURL {

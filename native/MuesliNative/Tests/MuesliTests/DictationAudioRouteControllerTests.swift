@@ -90,6 +90,28 @@ struct DictationAudioRouteControllerTests {
         #expect(controller.preferredInputDeviceIDForDictation() == nil)
         #expect(controller.cachedPreferredInputDeviceIDForDictation() == nil)
     }
+
+    @Test("default input refresh can notify even when preferred route is unchanged")
+    func defaultInputRefreshCanNotifyEvenWhenPreferredRouteIsUnchanged() {
+        let inspector = FakeCoreAudioDeviceInspector(
+            defaultOutputDeviceID: 10,
+            outputRouteKind: .speakerLike,
+            builtInInputDeviceID: 82
+        )
+        let controller = DictationAudioRouteController(
+            inspector: inspector,
+            queue: DispatchQueue(label: "test.dictation-audio-route.default-input-refresh"),
+            observesDefaultOutputChanges: false
+        )
+        _ = controller.preferredInputDeviceIDForDictation()
+        var preferredInputChanges: [AudioObjectID?] = []
+        controller.onPreferredInputDeviceChanged = { preferredInputChanges.append($0) }
+
+        controller.refreshRouteCache(notifyEvenIfPreferredUnchanged: true)
+        _ = controller.preferredInputDeviceIDForDictation()
+
+        #expect(preferredInputChanges == [nil])
+    }
 }
 
 private final class FakeCoreAudioDeviceInspector: CoreAudioDeviceInspecting {

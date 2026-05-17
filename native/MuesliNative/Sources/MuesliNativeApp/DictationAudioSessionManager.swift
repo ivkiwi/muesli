@@ -143,7 +143,6 @@ final class DictationAudioSessionManager: @unchecked Sendable {
             self.stateStorage = .armed(sessionID)
             self.routeSnapshot = self.makeRouteSnapshot(refreshInput: true)
             self.emitLatency("route_snapshot \(self.routeSnapshot.debugDescription)")
-            self.beginSessionAudioControls(duckingEnabled: duckingEnabled, mediaPauseEnabled: mediaPauseEnabled)
             self.recorder.keepsAudioGraphWarm = true
             do {
                 self.emitLatency("activation_begin:\(source)")
@@ -179,19 +178,14 @@ final class DictationAudioSessionManager: @unchecked Sendable {
             self.emit(.acquiringAudio(sessionID))
             self.emitLatency("threshold_met:\(mode)")
             if case .armed = previousState {
-                let armedRouteSnapshot = self.routeSnapshot
                 // arm() already refreshed the preferred input; keep threshold
                 // transition on the cached hotkey path.
                 self.routeSnapshot = self.makeRouteSnapshot(refreshInput: false)
                 self.emitLatency("route_snapshot_cached:\(mode) \(self.routeSnapshot.debugDescription)")
-                if armedRouteSnapshot.routeKind != self.routeSnapshot.routeKind
-                    || armedRouteSnapshot.preferredInputDeviceID != self.routeSnapshot.preferredInputDeviceID {
-                    self.beginSessionAudioControls(duckingEnabled: duckingEnabled, mediaPauseEnabled: mediaPauseEnabled)
-                }
             } else {
                 self.routeSnapshot = self.makeRouteSnapshot(refreshInput: true)
-                self.beginSessionAudioControls(duckingEnabled: duckingEnabled, mediaPauseEnabled: mediaPauseEnabled)
             }
+            self.beginSessionAudioControls(duckingEnabled: duckingEnabled, mediaPauseEnabled: mediaPauseEnabled)
             self.duckingController.ensureCurrentDefaultDucked()
             self.recorder.preferredInputDeviceID = self.routeSnapshot.preferredInputDeviceID
             self.recorder.keepsAudioGraphWarm = true

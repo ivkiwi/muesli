@@ -183,7 +183,7 @@ final class DictationAudioRouteController: DictationAudioRouting {
         refreshRouteCache(notifyEvenIfPreferredUnchanged: false)
     }
 
-    private func refreshRouteCache(notifyEvenIfPreferredUnchanged: Bool) {
+    func refreshRouteCache(notifyEvenIfPreferredUnchanged: Bool) {
         queue.async { [weak self] in
             guard let self else { return }
             let next = self.makeRouteSnapshot()
@@ -296,7 +296,7 @@ final class DictationAudioRouteController: DictationAudioRouting {
     private func installDefaultInputListener() {
         var address = Self.defaultInputDeviceAddress()
         let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            self?.refreshRouteCache()
+            self?.refreshRouteCache(notifyEvenIfPreferredUnchanged: true)
         }
         let status = AudioObjectAddPropertyListenerBlock(
             AudioObjectID(kAudioObjectSystemObject),
