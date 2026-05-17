@@ -109,14 +109,20 @@ final class StreamingDictationController {
 
     @discardableResult
     func start() -> Bool {
-        guard !isActive else { return true }
         guard stopLock.withLock({ !isStopping }) else { return false }
         let sessionID = UUID()
-        isActive = true
-        activeSessionID = sessionID
+        let didStartSession = bufferLock.withLock { () -> Bool in
+            guard !isActive else { return false }
+            isActive = true
+            activeSessionID = sessionID
+            sampleBuffer.removeAll()
+            return true
+        }
+        guard didStartSession else { return true }
         fullTranscript = ""
-        sampleBuffer.removeAll()
-        chunkQueue.removeAll()
+        queueLock.withLock {
+            chunkQueue.removeAll()
+        }
         stopLock.withLock {
             stopCompletions.removeAll()
         }
@@ -160,9 +166,12 @@ final class StreamingDictationController {
     /// Stop recording and finish queued audio off the caller's thread.
     func stop(completion: @escaping (String) -> Void) {
         let sessionID: UUID
-        if let activeSessionID {
+        let sessionIDs = bufferLock.withLock {
+            (active: activeSessionID, stopping: stoppingSessionID)
+        }
+        if let activeSessionID = sessionIDs.active {
             sessionID = activeSessionID
-        } else if stoppingSessionID != nil {
+        } else if sessionIDs.stopping != nil {
             let didAttachToStop = stopLock.withLock {
                 guard isStopping else { return false }
                 stopCompletions.append(completion)
@@ -183,9 +192,11 @@ final class StreamingDictationController {
             return true
         }
         guard shouldStartStop else { return }
-        isActive = false
-        activeSessionID = nil
-        stoppingSessionID = sessionID
+        bufferLock.withLock {
+            isActive = false
+            activeSessionID = nil
+            stoppingSessionID = sessionID
+        }
 
         let _ = recorder.stop()
 
@@ -237,17 +248,17 @@ final class StreamingDictationController {
     }
 
     private func resetActiveSession(cancelRecorder: Bool) {
-        isActive = false
-        activeSessionID = nil
-        stoppingSessionID = nil
+        bufferLock.withLock {
+            isActive = false
+            activeSessionID = nil
+            stoppingSessionID = nil
+            sampleBuffer.removeAll()
+        }
         streamStateTask?.cancel()
         streamStateTask = nil
         completeStop(with: fullTranscript)
         if cancelRecorder {
             recorder.cancel()
-        }
-        bufferLock.withLock {
-            sampleBuffer.removeAll()
         }
         queueLock.withLock {
             chunkQueue.removeAll()
@@ -274,24 +285,23 @@ final class StreamingDictationController {
 
     /// Called on AVAudioEngine's audio processing thread (4096 samples per call).
     private func handleAudioBuffer(_ samples: [Float]) {
-        guard isActive else { return }
-
-        let newChunks = bufferLock.withLock { () -> [[Float]] in
+        let capture = bufferLock.withLock { () -> (sessionID: UUID?, chunks: [[Float]]) in
+            guard isActive, let sessionID = activeSessionID else { return (nil, []) }
             var chunks: [[Float]] = []
             sampleBuffer.append(contentsOf: samples)
             while sampleBuffer.count >= chunkSamples {
                 chunks.append(Array(sampleBuffer.prefix(chunkSamples)))
                 sampleBuffer.removeFirst(chunkSamples)
             }
-            return chunks
+            return (sessionID, chunks)
         }
 
-        if !newChunks.isEmpty {
+        if !capture.chunks.isEmpty {
             queueLock.withLock {
-                chunkQueue.append(contentsOf: newChunks)
+                chunkQueue.append(contentsOf: capture.chunks)
             }
             // Kick off serial processing if not already running
-            guard let sessionID = activeSessionID else { return }
+            guard let sessionID = capture.sessionID else { return }
             startDrainIfNeeded(sessionID: sessionID)
         }
     }
@@ -339,7 +349,9 @@ final class StreamingDictationController {
     }
 
     private func isCurrentSession(_ sessionID: UUID) -> Bool {
-        activeSessionID == sessionID || stoppingSessionID == sessionID
+        bufferLock.withLock {
+            activeSessionID == sessionID || stoppingSessionID == sessionID
+        }
     }
 
     private func waitForDrain(sessionID: UUID, timeout: TimeInterval) async {
@@ -377,9 +389,13 @@ final class StreamingDictationController {
     }
 
     private func finishStoppedSession(sessionID: UUID) -> String {
-        guard isCurrentSession(sessionID) else { return fullTranscript }
-        activeSessionID = nil
-        stoppingSessionID = nil
+        let didFinishCurrentSession = bufferLock.withLock { () -> Bool in
+            guard activeSessionID == sessionID || stoppingSessionID == sessionID else { return false }
+            activeSessionID = nil
+            stoppingSessionID = nil
+            return true
+        }
+        guard didFinishCurrentSession else { return fullTranscript }
         streamStateTask = nil
         queueLock.withLock {
             chunkQueue.removeAll()
