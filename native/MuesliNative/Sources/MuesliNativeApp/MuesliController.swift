@@ -2704,6 +2704,8 @@ final class MuesliController: NSObject {
             return false
         }
         isStartingMeetingRecording = true
+        // Keep this after backend normalization and live-meeting creation so
+        // a failed meeting start does not silently cancel an active dictation.
         cancelDictationAudioSessionForMeetingRecordingIfNeeded()
         syncDictationRecorderWarmup(reason: "meeting-start")
         meetingStartMeetingID = meetingID
@@ -4576,6 +4578,7 @@ final class MuesliController: NSObject {
             _streamingDictationController = nil
             nemotronStreamingSessionID = nil
             previousStreamText = ""
+            indicator.setToggleDictation(false, config: config)
             dictationAudioSessionManager.endExternalSession(reason: "meeting-active")
         } else {
             dictationAudioSessionManager.cancel(reason: "meeting-active")

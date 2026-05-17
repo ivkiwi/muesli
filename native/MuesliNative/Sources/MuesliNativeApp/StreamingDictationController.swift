@@ -175,7 +175,7 @@ final class StreamingDictationController {
             fputs("[streaming-dictation] mic started\n", stderr)
         } catch {
             fputs("[streaming-dictation] mic start failed: \(error)\n", stderr)
-            resetActiveSession(cancelRecorder: true)
+            resetActiveSession(cancelRecorder: true, sessionID: sessionID)
             return false
         }
 
@@ -295,20 +295,24 @@ final class StreamingDictationController {
 
     private func failActiveSession(sessionID: UUID, error: Error) {
         guard isCurrentSession(sessionID) else { return }
-        resetActiveSession(cancelRecorder: true)
+        resetActiveSession(cancelRecorder: true, sessionID: sessionID)
         onFailure?(error)
     }
 
-    private func resetActiveSession(cancelRecorder: Bool) {
-        bufferLock.withLock {
+    private func resetActiveSession(cancelRecorder: Bool, sessionID expectedSessionID: UUID? = nil) {
+        let completionSessionID = bufferLock.withLock { () -> UUID? in
+            let sessionID = expectedSessionID ?? activeSessionID ?? stoppingSessionID
             isActive = false
             activeSessionID = nil
             stoppingSessionID = nil
             sampleBuffer.removeAll()
+            return sessionID
         }
         streamStateTask?.cancel()
         streamStateTask = nil
-        completeStop(sessionID: nil, with: fullTranscript)
+        if let completionSessionID {
+            completeStop(sessionID: completionSessionID, with: fullTranscript)
+        }
         if cancelRecorder {
             recorder.cancel()
         }
@@ -321,10 +325,10 @@ final class StreamingDictationController {
         streamState = nil
     }
 
-    private func completeStop(sessionID: UUID?, with transcript: String) {
+    private func completeStop(sessionID: UUID, with transcript: String) {
         let completions: [(String) -> Void] = stopLock.withLock {
             guard let state = stopState else { return [] }
-            if let sessionID, state.sessionID != sessionID {
+            if state.sessionID != sessionID {
                 return []
             }
             stopState = nil
