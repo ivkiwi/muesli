@@ -336,6 +336,21 @@ struct DictationAudioSessionManagerTests {
 
         #expect(harness.media.restoreCalls == 1)
     }
+
+    @Test("cancel tears down warm recorder graph")
+    func cancelTearsDownWarmRecorderGraph() {
+        let harness = Harness(routeKind: .speakerLike)
+
+        harness.manager.arm(source: "hotkey", duckingEnabled: false, mediaPauseEnabled: false)
+        harness.wait()
+        #expect(harness.recorder.keepsAudioGraphWarm)
+
+        harness.manager.cancel(reason: "test")
+        harness.wait()
+
+        #expect(harness.recorder.cancelCalls == 1)
+        #expect(!harness.recorder.keepsAudioGraphWarm)
+    }
 }
 
 private final class Harness {

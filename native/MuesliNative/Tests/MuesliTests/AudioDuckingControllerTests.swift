@@ -240,8 +240,8 @@ struct AudioDuckingControllerTests {
         #expect(client.muteValues[.init(1, kAudioObjectPropertyElementMain)] == false)
     }
 
-    @Test("rapid second dictation drops cancelled restore completions")
-    func rapidSecondDictationDropsCancelledRestoreCompletions() {
+    @Test("rapid second dictation completes cancelled restore callbacks")
+    func rapidSecondDictationCompletesCancelledRestoreCallbacks() {
         let client = FakeAudioDuckingDeviceClient()
         client.activityStatus = .active
         client.defaultDeviceID = 1
@@ -268,7 +268,7 @@ struct AudioDuckingControllerTests {
         Thread.sleep(forTimeInterval: 0.07)
         controller.waitForIdle()
 
-        #expect(restoreCompletionCount == 0)
+        #expect(restoreCompletionCount == 1)
         #expect(client.muteValues[.init(1, kAudioObjectPropertyElementMain)] == true)
         #expect(client.muteSetCalls == [
             .init(deviceID: 1, element: kAudioObjectPropertyElementMain, value: true),
@@ -278,7 +278,7 @@ struct AudioDuckingControllerTests {
         Thread.sleep(forTimeInterval: 0.07)
         controller.waitForIdle()
 
-        #expect(restoreCompletionCount == 0)
+        #expect(restoreCompletionCount == 1)
         #expect(client.muteValues[.init(1, kAudioObjectPropertyElementMain)] == false)
         #expect(client.muteSetCalls == [
             .init(deviceID: 1, element: kAudioObjectPropertyElementMain, value: true),
@@ -286,8 +286,8 @@ struct AudioDuckingControllerTests {
         ])
     }
 
-    @Test("disabling ducking during pending restore cancels stale completions")
-    func disablingDuckingDuringPendingRestoreCancelsStaleCompletions() {
+    @Test("disabling ducking during pending restore completes stale callbacks")
+    func disablingDuckingDuringPendingRestoreCompletesStaleCallbacks() {
         let client = FakeAudioDuckingDeviceClient()
         client.activityStatus = .active
         client.defaultDeviceID = 1
@@ -313,7 +313,7 @@ struct AudioDuckingControllerTests {
         Thread.sleep(forTimeInterval: 0.07)
         controller.waitForIdle()
 
-        #expect(restoreCompletionCount == 0)
+        #expect(restoreCompletionCount == 1)
         #expect(client.muteValues[.init(1, kAudioObjectPropertyElementMain)] == false)
         #expect(client.muteSetCalls == [
             .init(deviceID: 1, element: kAudioObjectPropertyElementMain, value: true),

@@ -226,9 +226,6 @@ final class MicrophoneRecorder: @unchecked Sendable {
             fputs("[audio-recorder] timed out waiting for tap callbacks during stop\n", stderr)
         }
         waitForPendingWrites()
-        // Second drain is defensive if future write work ever enqueues another
-        // writerQueue block before the WAV header is finalized.
-        waitForPendingWrites()
         if keepsAudioGraphWarm {
             lock.withLock { $0.latestPowerDB = -160 }
         } else {

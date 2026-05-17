@@ -107,7 +107,7 @@ final class StreamingDictationController {
         transcriber: NemotronStreamingTranscriber,
         preferredInputDeviceID: AudioObjectID? = nil,
         recorder: StreamingDictationRecording = StreamingMicRecorder(),
-        stopStreamStateTimeout: TimeInterval = 2.0
+        stopStreamStateTimeout: TimeInterval = 1.0
     ) {
         self.transcriber = NemotronStreamingTranscriberAdapter(transcriber)
         self.recorder = recorder
@@ -119,7 +119,7 @@ final class StreamingDictationController {
         transcriber: NemotronStreamingTranscribing,
         preferredInputDeviceID: AudioObjectID? = nil,
         recorder: StreamingDictationRecording = StreamingMicRecorder(),
-        stopStreamStateTimeout: TimeInterval = 2.0
+        stopStreamStateTimeout: TimeInterval = 1.0
     ) {
         self.transcriber = transcriber
         self.recorder = recorder

@@ -247,6 +247,7 @@ final class DictationAudioSessionManager: @unchecked Sendable {
     func cancel(reason: String) {
         queue.async { [self] in
             let sessionID = self.stateStorage.sessionID
+            self.recorder.keepsAudioGraphWarm = false
             self.recorder.cancel()
             self.recorder.preferredInputDeviceID = nil
             self.stateStorage = .idle

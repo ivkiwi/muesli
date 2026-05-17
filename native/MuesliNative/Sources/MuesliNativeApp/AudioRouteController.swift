@@ -81,10 +81,10 @@ enum AudioRouteClassifier {
             return .speakerLike
         }
 
-        // Conservative fallback: wired headphones, USB headsets, or DACs that
-        // omit headphone terminal/data-source metadata are treated as speaker-like.
-        // Extend this when we have a reliable public CoreAudio signal for those
-        // devices; do not add product-name matching.
+        if routeKinds.isEmpty, isLikelyPersonalWiredOutput(device) {
+            return .headphoneLike
+        }
+
         return .speakerLike
     }
 
@@ -99,6 +99,18 @@ enum AudioRouteClassifier {
         guard device.transportType == kAudioDeviceTransportTypeBluetooth
             || device.transportType == kAudioDeviceTransportTypeBluetoothLE else { return false }
         return device.outputTerminalTypes.union(device.outputDataSourceKinds).isEmpty
+    }
+
+    private static func isLikelyPersonalWiredOutput(_ device: AudioOutputDeviceDescription) -> Bool {
+        guard let transportType = device.transportType else { return false }
+        switch transportType {
+        case kAudioDeviceTransportTypeBuiltIn,
+             kAudioDeviceTransportTypeUSB,
+             kAudioDeviceTransportTypeThunderbolt:
+            return true
+        default:
+            return false
+        }
     }
 }
 
