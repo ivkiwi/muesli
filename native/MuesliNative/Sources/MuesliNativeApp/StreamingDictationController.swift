@@ -297,6 +297,7 @@ final class StreamingDictationController {
             guard let chunk else { return }
 
             guard var state = streamState else {
+                guard isCurrentSession(sessionID) else { return }
                 queueLock.withLock {
                     chunkQueue.insert(chunk, at: 0)
                 }

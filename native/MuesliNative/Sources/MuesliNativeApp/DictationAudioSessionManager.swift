@@ -56,7 +56,7 @@ final class DictationAudioSessionManager: @unchecked Sendable {
         let debugDescription: String
 
         var shouldDuck: Bool {
-            routeKind == .speakerLike
+            routeKind != .headphoneLike
         }
     }
 

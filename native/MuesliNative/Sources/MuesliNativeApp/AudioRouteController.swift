@@ -195,7 +195,8 @@ final class DictationAudioRouteController: DictationAudioRouting {
     func isDefaultOutputHeadphoneLike() -> Bool {
         // Unknown outputs are treated as non-speaker for lifecycle sounds so we
         // avoid playing cues into headphones during CoreAudio route transitions.
-        // Dictation ducking is also limited to known speaker-like route snapshots.
+        // Dictation ducking is stricter: when enabled, it ducks any route that
+        // is not confirmed headphone-like to avoid speaker bleed.
         lock.withLock { snapshot.outputRouteKind != .speakerLike }
     }
 

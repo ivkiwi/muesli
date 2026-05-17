@@ -67,15 +67,15 @@ struct DictationAudioSessionManagerTests {
         #expect(harness.recorder.preferredInputDeviceID == 82)
     }
 
-    @Test("unknown route skips ducking during output transitions")
-    func unknownRouteSkipsDuckingDuringOutputTransitions() {
+    @Test("unknown route ducks to avoid speaker bleed during output transitions")
+    func unknownRouteDucksDuringOutputTransitions() {
         let harness = Harness(routeKind: .unknown)
 
         harness.manager.arm(source: "hotkey", duckingEnabled: true)
         harness.manager.beginRecording(mode: "prepare", duckingEnabled: true)
         harness.wait()
 
-        #expect(harness.ducking.beginCalls.allSatisfy { $0 == false })
+        #expect(harness.ducking.beginCalls.allSatisfy { $0 == true })
         #expect(harness.ducking.ensureCalls == 1)
         #expect(harness.recorder.startCalls == 1)
     }
