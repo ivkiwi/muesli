@@ -191,7 +191,7 @@ final class DictationAudioSessionManager: @unchecked Sendable {
         queue.async { [self] in
             self.cancelPendingRouteRefreshLocked()
             self.externalSessionActive = true
-            self.routeSnapshot = self.makeRouteSnapshot()
+            self.routeSnapshot = self.makeRouteSnapshot(refreshInput: true)
             self.emitLatency("external_begin:\(source)")
             self.beginDuckingIfNeeded(duckingEnabled: duckingEnabled)
             self.duckingController.ensureCurrentDefaultDucked()

@@ -106,6 +106,18 @@ struct DictationAudioSessionManagerTests {
         #expect(harness.recorder.startCalls == 1)
     }
 
+    @Test("external session refreshes preferred input instead of using stale route cache")
+    func externalSessionRefreshesPreferredInput() {
+        let harness = Harness(routeKind: .headphoneLike, preferredInputDeviceID: 82)
+        harness.route.cachedPreferredInputDeviceID = nil
+
+        harness.manager.beginExternalSession(source: "nemotron-toggle", duckingEnabled: true)
+        harness.wait()
+
+        #expect(harness.route.preferredInputCalls == 1)
+        #expect(harness.ducking.beginCalls == [false])
+    }
+
     @Test("begin recording refreshes route changed after arm")
     func beginRecordingRefreshesRouteChangedAfterArm() {
         let harness = Harness(routeKind: .headphoneLike, preferredInputDeviceID: 82)
