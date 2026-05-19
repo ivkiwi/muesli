@@ -2744,7 +2744,8 @@ final class MuesliController: NSObject {
         cancelDictationAudioSessionForMeetingRecordingIfNeeded()
         syncDictationRecorderWarmup(reason: "meeting-start")
         meetingStartMeetingID = meetingID
-        updateMeetingStartStatus("Preparing meeting transcription...")
+        updateMeetingStartStatus("Meeting transcription will start shortly.")
+        indicator.setState(.preparing, config: config)
         beginMeetingActivity(reason: "Recording and transcribing a meeting")
         meetingMonitor.suppressWhileActive()
         meetingMonitor.refreshState()
@@ -2858,7 +2859,7 @@ final class MuesliController: NSObject {
         endDate: Date?
     ) async throws {
         var shouldRetryAfterPermissionRequest = config.useCoreAudioTap
-        statusBarController?.setStatus("Preparing meeting transcription...")
+        statusBarController?.setStatus("Meeting transcription will start shortly.")
         statusBarController?.refresh()
         try Task.checkCancellation()
         try await transcriptionCoordinator.preloadRequired(
