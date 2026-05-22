@@ -5,8 +5,9 @@ import MuesliCore
 
 enum HotkeyTriggerTiming {
     static let defaultThresholdMilliseconds = 250
+    static let defaultMeetingThresholdMilliseconds = 600
     static let minThresholdMilliseconds = 50
-    static let maxThresholdMilliseconds = 600
+    static let maxThresholdMilliseconds = 2_000
     static let doubleTapTapGuardDelay: TimeInterval = 0.18
 
     static func clampedMilliseconds(_ value: Int) -> Int {
@@ -47,11 +48,14 @@ final class HotkeyMonitor {
     private var prepareWorkItem: DispatchWorkItem?
     private var startWorkItem: DispatchWorkItem?
     private var armCancelWorkItem: DispatchWorkItem?
+    private var combinationWorkItem: DispatchWorkItem?
     private var targetKeyDown = false
     private var otherKeyPressed = false
     private var armed = false
     private var prepared = false
     private var active = false
+    private var combinationKeyDown = false
+    private var combinationTriggered = false
 
     // Double-tap detection
     private var lastTapUpTime: Date?
@@ -76,7 +80,13 @@ final class HotkeyMonitor {
         finishActiveSessionBeforeReconfigure()
         prepareDelay = HotkeyTriggerTiming.prepareDelay(forThresholdMilliseconds: milliseconds)
         startDelay = HotkeyTriggerTiming.startDelay(forThresholdMilliseconds: milliseconds)
-        if isRunning && !targetKeyDown && !armed && !prepared && !active && !toggleActive {
+        if isRunning
+            && !targetKeyDown
+            && !armed
+            && !prepared
+            && !active
+            && !toggleActive
+            && !combinationKeyDown {
             restart()
         }
     }
@@ -91,10 +101,10 @@ final class HotkeyMonitor {
             fputs("[hotkey] requested listen event access: \(requested)\n", stderr)
         }
 
-        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] event in
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged, .keyDown, .keyUp]) { [weak self] event in
             self?.handle(event)
         }
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] event in
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown, .keyUp]) { [weak self] event in
             guard let self else { return event }
             if self.shouldHandleLocalEvent(event) {
                 let consumed = self.handle(event)
@@ -127,6 +137,8 @@ final class HotkeyMonitor {
         prepared = false
         active = false
         toggleActive = false
+        combinationKeyDown = false
+        combinationTriggered = false
     }
 
     func configure(keyCode: UInt16) {
@@ -168,7 +180,14 @@ final class HotkeyMonitor {
     }
 
     private func finishActiveSessionBeforeReconfigure() {
-        guard targetKeyDown || armed || prepared || active || toggleActive || armCancelWorkItem != nil else { return }
+        guard targetKeyDown
+            || armed
+            || prepared
+            || active
+            || toggleActive
+            || armCancelWorkItem != nil
+            || combinationKeyDown
+            || combinationWorkItem != nil else { return }
 
         let wasToggleActive = toggleActive
         let wasActive = active
@@ -180,6 +199,8 @@ final class HotkeyMonitor {
         prepared = false
         active = false
         toggleActive = false
+        combinationKeyDown = false
+        combinationTriggered = false
         lastTapWasShort = false
         lastTapUpTime = nil
         cancelTimers()
@@ -236,20 +257,72 @@ final class HotkeyMonitor {
 
     @discardableResult
     private func handleCombination(_ event: NSEvent) -> Bool {
-        if event.type == .keyDown && event.keyCode == 53 && toggleActive {
-            toggleActive = false
-            fputs("[hotkey] escape → cancel combination toggle\n", stderr)
-            onCancel?()
+        handleCombination(
+            type: event.type,
+            keyCode: event.keyCode,
+            flags: event.modifierFlags,
+            isRepeat: event.isARepeat
+        )
+    }
+
+    @discardableResult
+    private func handleCombination(
+        type: NSEvent.EventType,
+        keyCode: UInt16,
+        flags: NSEvent.ModifierFlags,
+        isRepeat: Bool
+    ) -> Bool {
+        if type == .keyDown && keyCode == 53 {
+            if toggleActive {
+                toggleActive = false
+                fputs("[hotkey] escape → cancel combination toggle\n", stderr)
+                onCancel?()
+                return true
+            }
+            if combinationKeyDown {
+                cancelCombinationPending(notify: true)
+                return true
+            }
+            return false
+        }
+
+        guard let targetMods = combinationModifiers,
+              let targetKey = combinationKeyCode else { return false }
+
+        if type == .flagsChanged, combinationKeyDown,
+           HotkeyConfig.supportedCombinationModifiers(from: flags) != targetMods {
+            cancelCombinationPending(notify: false)
             return true
         }
 
-        guard event.type == .keyDown,
-              !event.isARepeat,
-              let targetMods = combinationModifiers,
-              let targetKey = combinationKeyCode,
-              event.keyCode == targetKey,
-              event.modifierFlags.intersection(.deviceIndependentFlagsMask) == targetMods
+        if type == .keyUp, combinationKeyDown, keyCode == targetKey {
+            cancelCombinationPending(notify: false)
+            return true
+        }
+
+        guard type == .keyDown,
+              !isRepeat,
+              keyCode == targetKey,
+              HotkeyConfig.supportedCombinationModifiers(from: flags) == targetMods
         else { return false }
+
+        combinationKeyDown = true
+        combinationTriggered = false
+        combinationWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.combinationKeyDown, !self.combinationTriggered else { return }
+            self.combinationTriggered = true
+            self.combinationWorkItem = nil
+            self.fireCombinationToggle()
+        }
+        combinationWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + startDelay, execute: item)
+        fputs("[hotkey] combination armed\n", stderr)
+        return true
+    }
+
+    private func fireCombinationToggle() {
+        combinationKeyDown = false
 
         if toggleActive {
             fputs("[hotkey] combination → toggle stop\n", stderr)
@@ -260,7 +333,17 @@ final class HotkeyMonitor {
             toggleActive = true
             onToggleStart?()
         }
-        return true
+    }
+
+    private func cancelCombinationPending(notify: Bool) {
+        let wasPending = combinationKeyDown && !combinationTriggered
+        combinationWorkItem?.cancel()
+        combinationWorkItem = nil
+        combinationKeyDown = false
+        combinationTriggered = false
+        if notify && wasPending {
+            onCancel?()
+        }
     }
 
 
@@ -282,7 +365,7 @@ final class HotkeyMonitor {
 
         // Text editing owns fresh hotkey starts, but an already-armed hotkey
         // session must still receive key-up/Escape cleanup events.
-        if targetKeyDown || armed || prepared || active || toggleActive {
+        if targetKeyDown || armed || prepared || active || toggleActive || combinationKeyDown {
             return true
         }
 
@@ -518,9 +601,11 @@ final class HotkeyMonitor {
         prepareWorkItem?.cancel()
         startWorkItem?.cancel()
         armCancelWorkItem?.cancel()
+        combinationWorkItem?.cancel()
         prepareWorkItem = nil
         startWorkItem = nil
         armCancelWorkItem = nil
+        combinationWorkItem = nil
     }
 
     func setHoldRecordingActiveForTests() {
@@ -534,5 +619,15 @@ final class HotkeyMonitor {
         firstResponder: NSResponder?
     ) -> Bool {
         shouldHandleLocalEvent(type: type, keyCode: keyCode, firstResponder: firstResponder)
+    }
+
+    @discardableResult
+    func handleCombinationForTests(
+        type: NSEvent.EventType,
+        keyCode: UInt16,
+        flags: NSEvent.ModifierFlags,
+        isRepeat: Bool = false
+    ) -> Bool {
+        handleCombination(type: type, keyCode: keyCode, flags: flags, isRepeat: isRepeat)
     }
 }

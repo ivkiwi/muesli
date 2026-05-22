@@ -594,28 +594,34 @@ struct HotkeyConfig: Codable, Equatable {
     }
 
     static func combinationLabel(modifiers: NSEvent.ModifierFlags, keyCode: UInt16) -> String {
+        let modifiers = supportedCombinationModifiers(from: modifiers)
         var parts: [String] = []
+        if modifiers.contains(.command) { parts.append("⌘") }
         if modifiers.contains(.control) { parts.append("⌃") }
         if modifiers.contains(.option) { parts.append("⌥") }
         if modifiers.contains(.shift) { parts.append("⇧") }
-        if modifiers.contains(.command) { parts.append("⌘") }
         parts.append(letterLabel(for: keyCode) ?? "?")
         return parts.joined()
     }
 
     static func combination(modifiers: NSEvent.ModifierFlags, keyCode: UInt16) -> HotkeyConfig {
-        let lbl = combinationLabel(modifiers: modifiers, keyCode: keyCode)
+        let supportedModifiers = supportedCombinationModifiers(from: modifiers)
+        let lbl = combinationLabel(modifiers: supportedModifiers, keyCode: keyCode)
         return HotkeyConfig(
             keyCode: UInt16.max,
             label: lbl,
-            combinationModifiers: UInt(modifiers.rawValue),
+            combinationModifiers: UInt(supportedModifiers.rawValue),
             combinationKeyCode: keyCode
         )
     }
 
+    static func supportedCombinationModifiers(from modifiers: NSEvent.ModifierFlags) -> NSEvent.ModifierFlags {
+        modifiers.intersection([.command, .control, .option, .shift])
+    }
+
     var resolvedCombinationModifiers: NSEvent.ModifierFlags? {
         guard let raw = combinationModifiers else { return nil }
-        return NSEvent.ModifierFlags(rawValue: raw)
+        return Self.supportedCombinationModifiers(from: NSEvent.ModifierFlags(rawValue: raw))
     }
 
     static let `default` = HotkeyConfig()
@@ -693,6 +699,8 @@ struct AppConfig: Codable {
     var darkMode: Bool = true
     var enableDoubleTapDictation: Bool = true
     var hotkeyTriggerThresholdMS: Int = HotkeyTriggerTiming.defaultThresholdMilliseconds
+    var computerUseHotkeyTriggerThresholdMS: Int = HotkeyTriggerTiming.defaultThresholdMilliseconds
+    var meetingRecordingHotkeyTriggerThresholdMS: Int = HotkeyTriggerTiming.defaultMeetingThresholdMilliseconds
     var launchAtLogin: Bool = false
     var openDashboardOnLaunch: Bool = true
     var showFloatingIndicator: Bool = true
@@ -763,6 +771,8 @@ struct AppConfig: Codable {
         case darkMode = "dark_mode"
         case enableDoubleTapDictation = "enable_double_tap_dictation"
         case hotkeyTriggerThresholdMS = "hotkey_trigger_threshold_ms"
+        case computerUseHotkeyTriggerThresholdMS = "computer_use_hotkey_trigger_threshold_ms"
+        case meetingRecordingHotkeyTriggerThresholdMS = "meeting_recording_hotkey_trigger_threshold_ms"
         case launchAtLogin = "launch_at_login"
         case openDashboardOnLaunch = "open_dashboard_on_launch"
         case showFloatingIndicator = "show_floating_indicator"
@@ -845,6 +855,13 @@ struct AppConfig: Codable {
         enableDoubleTapDictation = (try? c.decode(Bool.self, forKey: .enableDoubleTapDictation)) ?? defaults.enableDoubleTapDictation
         hotkeyTriggerThresholdMS = HotkeyTriggerTiming.clampedMilliseconds(
             (try? c.decode(Int.self, forKey: .hotkeyTriggerThresholdMS)) ?? defaults.hotkeyTriggerThresholdMS
+        )
+        computerUseHotkeyTriggerThresholdMS = HotkeyTriggerTiming.clampedMilliseconds(
+            (try? c.decode(Int.self, forKey: .computerUseHotkeyTriggerThresholdMS)) ?? hotkeyTriggerThresholdMS
+        )
+        meetingRecordingHotkeyTriggerThresholdMS = HotkeyTriggerTiming.clampedMilliseconds(
+            (try? c.decode(Int.self, forKey: .meetingRecordingHotkeyTriggerThresholdMS))
+                ?? defaults.meetingRecordingHotkeyTriggerThresholdMS
         )
         launchAtLogin = (try? c.decode(Bool.self, forKey: .launchAtLogin)) ?? defaults.launchAtLogin
         openDashboardOnLaunch = (try? c.decode(Bool.self, forKey: .openDashboardOnLaunch)) ?? defaults.openDashboardOnLaunch

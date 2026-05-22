@@ -65,7 +65,12 @@ struct ShortcutsView: View {
             Divider()
                 .background(MuesliTheme.surfaceBorder)
 
-            changeButton(for: .dictation)
+            shortcutControls(
+                target: .dictation,
+                threshold: appState.config.hotkeyTriggerThresholdMS
+            ) { value in
+                controller.updateConfig { $0.hotkeyTriggerThresholdMS = value }
+            }
 
             if let dictationShortcutMessage {
                 shortcutMessage(dictationShortcutMessage)
@@ -110,11 +115,12 @@ struct ShortcutsView: View {
             Divider()
                 .background(MuesliTheme.surfaceBorder)
 
-            HStack(spacing: MuesliTheme.spacing12) {
-                hotkeyBadge(appState.config.computerUseHotkey)
-                changeButton(for: .computerUse)
-                    .disabled(!appState.config.enableComputerUseHotkey)
-                    .opacity(appState.config.enableComputerUseHotkey ? 1 : 0.55)
+            shortcutControls(
+                target: .computerUse,
+                threshold: appState.config.computerUseHotkeyTriggerThresholdMS,
+                isEnabled: appState.config.enableComputerUseHotkey
+            ) { value in
+                controller.updateConfig { $0.computerUseHotkeyTriggerThresholdMS = value }
             }
 
             if appState.config.enableComputerUseHotkey,
@@ -160,15 +166,19 @@ struct ShortcutsView: View {
             Divider()
                 .background(MuesliTheme.surfaceBorder)
 
-            HStack(spacing: MuesliTheme.spacing12) {
-                hotkeyBadge(appState.config.meetingRecordingHotkey)
-                changeButton(for: .meetingRecording)
-                    .disabled(!appState.config.enableMeetingRecordingHotkey)
-                    .opacity(appState.config.enableMeetingRecordingHotkey ? 1 : 0.55)
+            shortcutControls(
+                target: .meetingRecording,
+                threshold: appState.config.meetingRecordingHotkeyTriggerThresholdMS,
+                isEnabled: appState.config.enableMeetingRecordingHotkey
+            ) { value in
+                controller.updateConfig { $0.meetingRecordingHotkeyTriggerThresholdMS = value }
             }
 
             if let meetingRecordingShortcutMessage {
                 shortcutMessage(meetingRecordingShortcutMessage)
+            } else if appState.config.enableMeetingRecordingHotkey,
+                      let warning = ShortcutHotkeyPolicy.commonGlobalShortcutWarning(for: appState.config.meetingRecordingHotkey) {
+                shortcutMessage(warning)
             }
         }
         .padding(MuesliTheme.spacing16)
@@ -195,6 +205,73 @@ struct ShortcutsView: View {
             .help(hotkey.label)
     }
 
+    private func shortcutControls(
+        target: ShortcutTarget,
+        threshold: Int,
+        isEnabled: Bool = true,
+        onThresholdChange: @escaping (Int) -> Void
+    ) -> some View {
+        HStack(spacing: MuesliTheme.spacing12) {
+            hotkeyBadge(hotkey(for: target))
+            changeButton(for: target)
+                .disabled(!isEnabled)
+                .opacity(isEnabled ? 1 : 0.55)
+            Spacer(minLength: MuesliTheme.spacing16)
+            if isEnabled {
+                thresholdInput(
+                    value: threshold,
+                    onChange: onThresholdChange
+                )
+            }
+        }
+    }
+
+    private func hotkey(for target: ShortcutTarget) -> HotkeyConfig {
+        switch target {
+        case .dictation:
+            return appState.config.dictationHotkey
+        case .computerUse:
+            return appState.config.computerUseHotkey
+        case .meetingRecording:
+            return appState.config.meetingRecordingHotkey
+        }
+    }
+
+    private func thresholdInput(value: Int, onChange: @escaping (Int) -> Void) -> some View {
+        HStack(spacing: MuesliTheme.spacing8) {
+            Text("Hold")
+                .font(MuesliTheme.caption())
+                .foregroundStyle(MuesliTheme.textSecondary)
+
+            TextField(
+                "",
+                value: Binding(
+                    get: { HotkeyTriggerTiming.clampedMilliseconds(value) },
+                    set: { onChange(HotkeyTriggerTiming.clampedMilliseconds($0)) }
+                ),
+                format: .number
+            )
+            .textFieldStyle(.plain)
+            .font(.system(size: 13, weight: .semibold, design: .monospaced))
+            .foregroundStyle(MuesliTheme.textPrimary)
+            .multilineTextAlignment(.trailing)
+            .frame(width: 64)
+            .padding(.horizontal, MuesliTheme.spacing8)
+            .padding(.vertical, MuesliTheme.spacing4)
+            .background(MuesliTheme.surfacePrimary)
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .overlay(
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                    .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+            )
+
+            Text("ms")
+                .font(MuesliTheme.caption())
+                .foregroundStyle(MuesliTheme.textSecondary)
+        }
+        .help("Hold threshold: \(HotkeyTriggerTiming.minThresholdMilliseconds)-\(HotkeyTriggerTiming.maxThresholdMilliseconds) ms")
+    }
+
     private func shortcutMessage(_ message: String) -> some View {
         Text(message)
             .font(MuesliTheme.caption())
@@ -209,7 +286,7 @@ struct ShortcutsView: View {
                 startRecording(target)
             }
         } label: {
-            Text(recordingTarget == target ? "Press a key or modifier..." : "Change Shortcut")
+            Text(recordingTarget == target ? recordingPrompt(for: target) : "Change Shortcut")
                 .font(MuesliTheme.body())
                 .foregroundStyle(recordingTarget == target ? MuesliTheme.accent : MuesliTheme.textPrimary)
         }
@@ -222,6 +299,15 @@ struct ShortcutsView: View {
             RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
                 .strokeBorder(recordingTarget == target ? MuesliTheme.accent.opacity(0.3) : MuesliTheme.surfaceBorder, lineWidth: 1)
         )
+    }
+
+    private func recordingPrompt(for target: ShortcutTarget) -> String {
+        switch target {
+        case .meetingRecording:
+            return "Press a key or modifier..."
+        case .dictation, .computerUse:
+            return "Press a modifier key..."
+        }
     }
 
     private var doubleTapSection: some View {
@@ -274,6 +360,9 @@ struct ShortcutsView: View {
                 && !appState.config.enableComputerUseHotkey
                 && appState.config.meetingRecordingHotkey == .meetingRecordingDefault
                 && !appState.config.enableMeetingRecordingHotkey
+                && appState.config.hotkeyTriggerThresholdMS == HotkeyTriggerTiming.defaultThresholdMilliseconds
+                && appState.config.computerUseHotkeyTriggerThresholdMS == HotkeyTriggerTiming.defaultThresholdMilliseconds
+                && appState.config.meetingRecordingHotkeyTriggerThresholdMS == HotkeyTriggerTiming.defaultMeetingThresholdMilliseconds
         )
     }
 
@@ -288,10 +377,12 @@ struct ShortcutsView: View {
                     stopRecording()
                     return nil
                 }
-                let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                let mods = HotkeyConfig.supportedCombinationModifiers(from: event.modifierFlags)
                 let hasModifiers = mods.contains(.command) || mods.contains(.control)
                     || mods.contains(.option)
-                guard hasModifiers, HotkeyConfig.letterLabel(for: event.keyCode) != nil else {
+                guard target == .meetingRecording,
+                      hasModifiers,
+                      HotkeyConfig.letterLabel(for: event.keyCode) != nil else {
                     return event
                 }
                 pendingModifierKeyCode = nil

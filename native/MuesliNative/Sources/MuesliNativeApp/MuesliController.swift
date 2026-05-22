@@ -366,6 +366,9 @@ final class MuesliController: NSObject {
         computerUseHotkeyMonitor.onToggleStop = { [weak self] in self?.handleComputerUseToggleStop() }
         computerUseHotkeyMonitor.doubleTapEnabled = config.enableDoubleTapDictation
 
+        meetingRecordingHotkeyMonitor.onStart = { [weak self] in
+            DispatchQueue.main.async { self?.toggleMeetingRecording() }
+        }
         meetingRecordingHotkeyMonitor.onToggleStart = { [weak self] in
             DispatchQueue.main.async { self?.toggleMeetingRecording() }
         }
@@ -806,9 +809,15 @@ final class MuesliController: NSObject {
 
     func updateConfig(_ mutate: (inout AppConfig) -> Void) {
         let previousHotkeyTriggerThresholdMS = config.hotkeyTriggerThresholdMS
+        let previousComputerUseHotkeyTriggerThresholdMS = config.computerUseHotkeyTriggerThresholdMS
+        let previousMeetingRecordingHotkeyTriggerThresholdMS = config.meetingRecordingHotkeyTriggerThresholdMS
         mutate(&config)
         config.hotkeyTriggerThresholdMS = HotkeyTriggerTiming.clampedMilliseconds(config.hotkeyTriggerThresholdMS)
+        config.computerUseHotkeyTriggerThresholdMS = HotkeyTriggerTiming.clampedMilliseconds(config.computerUseHotkeyTriggerThresholdMS)
+        config.meetingRecordingHotkeyTriggerThresholdMS = HotkeyTriggerTiming.clampedMilliseconds(config.meetingRecordingHotkeyTriggerThresholdMS)
         let hotkeyTriggerThresholdChanged = config.hotkeyTriggerThresholdMS != previousHotkeyTriggerThresholdMS
+            || config.computerUseHotkeyTriggerThresholdMS != previousComputerUseHotkeyTriggerThresholdMS
+            || config.meetingRecordingHotkeyTriggerThresholdMS != previousMeetingRecordingHotkeyTriggerThresholdMS
         configStore.save(config)
         MuesliTheme.accentOverrideHex = config.recordingColorHex == "1e1e2e" ? nil : config.recordingColorHex
         selectedBackend = BackendOption.all.first(where: {
@@ -1518,6 +1527,9 @@ final class MuesliController: NSObject {
             config.enableComputerUseHotkey = false
             config.meetingRecordingHotkey = .meetingRecordingDefault
             config.enableMeetingRecordingHotkey = false
+            config.hotkeyTriggerThresholdMS = HotkeyTriggerTiming.defaultThresholdMilliseconds
+            config.computerUseHotkeyTriggerThresholdMS = HotkeyTriggerTiming.defaultThresholdMilliseconds
+            config.meetingRecordingHotkeyTriggerThresholdMS = HotkeyTriggerTiming.defaultMeetingThresholdMilliseconds
         }
         hotkeyMonitor.configure(.default)
         configureComputerUseHotkeyMonitor()
@@ -3852,9 +3864,9 @@ final class MuesliController: NSObject {
     }
 
     private func configureHotkeyMonitorTiming() {
-        let threshold = config.hotkeyTriggerThresholdMS
-        hotkeyMonitor.configureTriggerThreshold(milliseconds: threshold)
-        computerUseHotkeyMonitor.configureTriggerThreshold(milliseconds: threshold)
+        hotkeyMonitor.configureTriggerThreshold(milliseconds: config.hotkeyTriggerThresholdMS)
+        computerUseHotkeyMonitor.configureTriggerThreshold(milliseconds: config.computerUseHotkeyTriggerThresholdMS)
+        meetingRecordingHotkeyMonitor.configureTriggerThreshold(milliseconds: config.meetingRecordingHotkeyTriggerThresholdMS)
     }
 
     private func startComputerUseHotkeyMonitorIfNeeded() {
@@ -3871,6 +3883,12 @@ final class MuesliController: NSObject {
             fputs("[cua] computer use hotkey disabled because it matches dictation hotkey\n", stderr)
             return
         }
+        guard !config.enableMeetingRecordingHotkey
+            || !ShortcutHotkeyPolicy.hotkeysConflict(config.computerUseHotkey, config.meetingRecordingHotkey) else {
+            computerUseHotkeyMonitor.stop()
+            fputs("[cua] computer use hotkey disabled because it matches meeting recording hotkey\n", stderr)
+            return
+        }
         computerUseHotkeyMonitor.doubleTapEnabled = config.enableDoubleTapDictation
         computerUseHotkeyMonitor.configure(config.computerUseHotkey)
         computerUseHotkeyMonitor.start()
@@ -3879,6 +3897,17 @@ final class MuesliController: NSObject {
     private func startMeetingRecordingHotkeyMonitorIfNeeded() {
         guard config.enableMeetingRecordingHotkey else {
             meetingRecordingHotkeyMonitor.stop()
+            return
+        }
+        let validation = ShortcutHotkeyPolicy.validateMeetingRecordingHotkey(
+            config.meetingRecordingHotkey,
+            dictationHotkey: config.dictationHotkey,
+            computerUseHotkey: config.computerUseHotkey,
+            isComputerUseEnabled: config.enableComputerUseHotkey
+        )
+        guard validation.didUpdate else {
+            meetingRecordingHotkeyMonitor.stop()
+            fputs("[meetings] meeting recording hotkey disabled because it conflicts with another active shortcut\n", stderr)
             return
         }
         meetingRecordingHotkeyMonitor.doubleTapEnabled = false
