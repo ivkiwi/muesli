@@ -422,14 +422,6 @@ struct SettingsView: View {
                         controller.updateConfig { $0.muteSystemAudioDuringDictation = newValue }
                     }
                 }
-                Divider().background(MuesliTheme.surfaceBorder)
-                settingsRow(
-                    "Hotkey trigger threshold",
-                    description: "Lower values show the indicator sooner; double-tap keeps a short quick-tap guard."
-                ) {
-                    hotkeyTriggerThresholdControl
-                }
-                Divider().background(MuesliTheme.surfaceBorder)
                 screenContextRow("App context")
             }
         }
@@ -1422,62 +1414,6 @@ struct SettingsView: View {
     private func settingsMenu(selection: String, options: [String], onChange: @escaping (String) -> Void) -> some View {
         FixedWidthPopUp(selection: selection, options: options, onChange: onChange)
             .frame(height: 24)
-    }
-
-    private var hotkeyTriggerThresholdControl: some View {
-        let threshold = HotkeyTriggerTiming.clampedMilliseconds(appState.config.hotkeyTriggerThresholdMS)
-        return HStack(spacing: 6) {
-            thresholdStepButton(
-                systemName: "minus",
-                disabled: threshold <= HotkeyTriggerTiming.minThresholdMilliseconds
-            ) {
-                updateHotkeyTriggerThreshold(threshold - 25)
-            }
-
-            Text("\(threshold) ms")
-                .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                .foregroundStyle(MuesliTheme.textPrimary)
-                .frame(width: 72, alignment: .center)
-
-            thresholdStepButton(
-                systemName: "plus",
-                disabled: threshold >= HotkeyTriggerTiming.maxThresholdMilliseconds
-            ) {
-                updateHotkeyTriggerThreshold(threshold + 25)
-            }
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 4)
-        .background(MuesliTheme.surfacePrimary)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-        .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
-                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
-        )
-        .frame(maxWidth: .infinity, alignment: .trailing)
-    }
-
-    private func thresholdStepButton(
-        systemName: String,
-        disabled: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(disabled ? MuesliTheme.textTertiary.opacity(0.45) : MuesliTheme.textSecondary)
-                .frame(width: 24, height: 22)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(disabled)
-        .help(systemName == "minus" ? "Decrease threshold" : "Increase threshold")
-    }
-
-    private func updateHotkeyTriggerThreshold(_ value: Int) {
-        controller.updateConfig {
-            $0.hotkeyTriggerThresholdMS = HotkeyTriggerTiming.clampedMilliseconds(value)
-        }
     }
 
     private var mutedMeetingDetectionAppsControl: some View {
