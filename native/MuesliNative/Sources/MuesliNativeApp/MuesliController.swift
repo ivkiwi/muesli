@@ -3560,8 +3560,13 @@ final class MuesliController: NSObject {
                 await MainActor.run {
                     self.setMeetingProcessingStatus("Finalizing")
                 }
+                let recordingSaveDecision = await self.recordingSaveDecision(for: result.title)
                 let persistenceResult = try await MainActor.run {
-                    try self.persistCompletedMeetingResultAndDispatchHook(result, existingMeetingID: liveMeetingID)
+                    try self.persistCompletedMeetingResultAndDispatchHook(
+                        result,
+                        existingMeetingID: liveMeetingID,
+                        recordingSaveDecision: recordingSaveDecision
+                    )
                 }
                 completedMeetingID = persistenceResult.meetingID
                 if let recordingSaveError = persistenceResult.recordingSaveError {
@@ -3634,12 +3639,19 @@ final class MuesliController: NSObject {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
-    func persistCompletedMeetingResult(_ result: MeetingSessionResult, existingMeetingID: Int64? = nil) throws -> CompletedMeetingPersistenceResult {
+    func persistCompletedMeetingResult(
+        _ result: MeetingSessionResult,
+        existingMeetingID: Int64? = nil,
+        recordingSaveDecision: Bool? = nil
+    ) throws -> CompletedMeetingPersistenceResult {
         let meetingID: Int64
         var savedRecordingPath: String?
         var recordingSaveError: MeetingLifecycleError?
         do {
-            savedRecordingPath = try persistMeetingRecordingIfNeeded(for: result)
+            savedRecordingPath = try persistMeetingRecordingIfNeeded(
+                for: result,
+                saveDecision: recordingSaveDecision
+            )
         } catch let error as MeetingLifecycleError {
             recordingSaveError = error
         } catch {
@@ -3712,8 +3724,16 @@ final class MuesliController: NSObject {
         return liveTitle
     }
 
-    func persistCompletedMeetingResultAndDispatchHook(_ result: MeetingSessionResult, existingMeetingID: Int64? = nil) throws -> CompletedMeetingPersistenceResult {
-        let persistenceResult = try persistCompletedMeetingResult(result, existingMeetingID: existingMeetingID)
+    func persistCompletedMeetingResultAndDispatchHook(
+        _ result: MeetingSessionResult,
+        existingMeetingID: Int64? = nil,
+        recordingSaveDecision: Bool? = nil
+    ) throws -> CompletedMeetingPersistenceResult {
+        let persistenceResult = try persistCompletedMeetingResult(
+            result,
+            existingMeetingID: existingMeetingID,
+            recordingSaveDecision: recordingSaveDecision
+        )
         meetingHookDispatcher.dispatchCompletedMeetingHook(
             meetingID: persistenceResult.meetingID,
             completedAt: result.endTime,
@@ -3722,7 +3742,10 @@ final class MuesliController: NSObject {
         return persistenceResult
     }
 
-    private func persistMeetingRecordingIfNeeded(for result: MeetingSessionResult) throws -> String? {
+    private func persistMeetingRecordingIfNeeded(
+        for result: MeetingSessionResult,
+        saveDecision: Bool? = nil
+    ) throws -> String? {
         let shouldSave: Bool
         switch config.meetingRecordingSavePolicy {
         case .never:
@@ -3730,7 +3753,7 @@ final class MuesliController: NSObject {
         case .always:
             shouldSave = true
         case .prompt:
-            shouldSave = promptToSaveMeetingRecording(for: result.title)
+            shouldSave = saveDecision ?? true
         }
 
         guard shouldSave else {
@@ -3806,7 +3829,14 @@ final class MuesliController: NSObject {
         }
     }
 
-    private func promptToSaveMeetingRecording(for title: String) -> Bool {
+    @MainActor
+    private func recordingSaveDecision(for title: String) async -> Bool? {
+        guard config.meetingRecordingSavePolicy == .prompt else { return nil }
+        return await promptToSaveMeetingRecording(for: title)
+    }
+
+    @MainActor
+    private func promptToSaveMeetingRecording(for title: String) async -> Bool {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "Save meeting recording?"
@@ -3814,7 +3844,30 @@ final class MuesliController: NSObject {
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Save Recording")
         alert.addButton(withTitle: "Don't Save")
-        return alert.runModal() == .alertFirstButtonReturn
+        guard let window = recordingSavePromptWindow() else {
+            fputs("[muesli-native] no window available for recording save prompt; saving recording by default\n", stderr)
+            return true
+        }
+
+        return await withCheckedContinuation { continuation in
+            alert.beginSheetModal(for: window) { response in
+                continuation.resume(returning: response == .alertFirstButtonReturn)
+            }
+        }
+    }
+
+    @MainActor
+    private func recordingSavePromptWindow() -> NSWindow? {
+        if let window = historyWindowController?.presentationWindow, window.isVisible {
+            return window
+        }
+        historyWindowController?.show()
+        if let window = historyWindowController?.presentationWindow {
+            return window
+        }
+        return NSApp.windows.first { window in
+            window.isVisible && window.canBecomeKey && !(window is NSPanel)
+        }
     }
 
     private func presentErrorAlert(title: String, message: String) {

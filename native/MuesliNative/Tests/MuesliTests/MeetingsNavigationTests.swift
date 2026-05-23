@@ -415,6 +415,51 @@ struct MeetingsNavigationTests {
         #expect(storedMeeting?.savedRecordingPath == nil)
     }
 
+    @Test("persistCompletedMeetingResult honors prompt recording save decision")
+    func persistCompletedMeetingResultHonorsPromptRecordingSaveDecision() async throws {
+        let store = try makeStore()
+        let controller = MuesliController(
+            runtime: RuntimePaths(
+                repoRoot: FileManager.default.temporaryDirectory,
+                menuIcon: nil,
+                appIcon: nil,
+                bundlePath: nil
+            ),
+            dictationStore: store
+        )
+        controller.updateConfig { $0.meetingRecordingSavePolicy = .prompt }
+
+        let retainedRecordingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("retained-\(UUID().uuidString)")
+            .appendingPathExtension("wav")
+        try Data("recording".utf8).write(to: retainedRecordingURL)
+
+        let result = MeetingSessionResult(
+            title: "Prompt Decision",
+            originalTitle: "Meeting",
+            calendarEventID: nil,
+            startTime: Date(),
+            endTime: Date().addingTimeInterval(30),
+            durationSeconds: 30,
+            rawTranscript: "Prompt decision transcript.",
+            formattedNotes: "## Summary\nPrompt decision notes.",
+            retainedRecordingURL: retainedRecordingURL,
+            retainedRecordingError: nil,
+            systemRecordingURL: nil,
+            templateSnapshot: MeetingTemplates.auto.snapshot
+        )
+
+        let persistenceResult = try controller.persistCompletedMeetingResult(
+            result,
+            recordingSaveDecision: false
+        )
+
+        let storedMeeting = try store.meeting(id: persistenceResult.meetingID)
+        #expect(storedMeeting?.rawTranscript == "Prompt decision transcript.")
+        #expect(storedMeeting?.savedRecordingPath == nil)
+        #expect(FileManager.default.fileExists(atPath: retainedRecordingURL.path) == false)
+    }
+
     @Test("persistCompletedMeetingResult preserves user-edited live meeting title")
     func persistCompletedMeetingResultPreservesEditedLiveTitle() async throws {
         let store = try makeStore()
