@@ -2717,9 +2717,6 @@ final class MuesliController: NSObject {
         }
         if !didPresent {
             isPresentingMeetingTerminationConfirmation = false
-            discardMeetingStateForTermination()
-            isTerminatingAfterMeetingConfirmation = true
-            NSApp.terminate(nil)
         }
 
         return false
@@ -3879,8 +3876,7 @@ final class MuesliController: NSObject {
             historyWindowController?.show()
         }
 
-        if let window = historyWindowController?.presentationWindow,
-           window.isVisible || showHistoryIfNeeded {
+        if let window = historyWindowController?.presentationWindow, window.isVisible {
             return window
         }
 
