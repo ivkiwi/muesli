@@ -2007,34 +2007,7 @@ final class MuesliController: NSObject {
     }
 
     @objc func checkForUpdates() {
-        switch appState.sparkleUpdateStatus {
-        case .available, .downloaded:
-            installAvailableUpdate()
-        case .checking, .busy, .installing:
-            showBusyStatus(
-                UpdateInteractionPolicy.busyMessage,
-                restoring: appState.sparkleUpdateStatus
-            )
-        case .idle, .upToDate, .disabled, .failed:
-            openHistoryWindow(tab: .about)
-            probeForUpdateInformation()
-        }
-    }
-
-    func retryUpdateCheck() {
-        probeForUpdateInformation()
-    }
-
-    func installAvailableUpdate() {
-        switch UpdateInteractionPolicy.installAction(for: appState.sparkleUpdateStatus) {
-        case .presentStandardUpdater:
-            presentStandardUpdateCheck()
-        case .showBusy(let message):
-            showBusyStatus(
-                message,
-                restoring: appState.sparkleUpdateStatus
-            )
-        }
+        presentStandardUpdateCheck()
     }
 
     private func presentStandardUpdateCheck() {
@@ -2042,30 +2015,57 @@ final class MuesliController: NSObject {
             appState.sparkleUpdateStatus = .disabled(message: "Update checks are disabled for this build.")
             return
         }
-        guard updaterController.updater.canCheckForUpdates else {
-            showBusyStatus(
-                "Sparkle cannot start a new update check yet. Try again in a moment.",
-                restoring: appState.sparkleUpdateStatus
-            )
-            return
-        }
+        let existingWindows = Set(NSApplication.shared.windows.map(ObjectIdentifier.init))
+        activateApplicationForSparkle()
+        // Always enter Sparkle's standard path. Sparkle uses this same call to
+        // refocus existing updater UI, so local availability gates would make
+        // in-app buttons less reliable than the status-bar action.
         updaterController.checkForUpdates(nil)
+        focusUpdaterWindowsCreatedAfterUpdateAction(excluding: existingWindows)
     }
 
-    private func probeForUpdateInformation() {
-        guard let updaterController else {
-            appState.sparkleUpdateStatus = .disabled(message: "Update checks are disabled for this build.")
-            return
+    private func focusUpdaterWindowsCreatedAfterUpdateAction(excluding existingWindows: Set<ObjectIdentifier>) {
+        for delay in [80_000_000, 240_000_000, 600_000_000, 1_200_000_000, 2_500_000_000] {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(delay))
+                self?.focusUpdaterWindows(excluding: existingWindows)
+            }
         }
-        guard !updaterController.updater.sessionInProgress else {
-            showBusyStatus(
-                UpdateInteractionPolicy.busyMessage,
-                restoring: appState.sparkleUpdateStatus
-            )
-            return
+    }
+
+    private func focusUpdaterWindows(excluding existingWindows: Set<ObjectIdentifier>) {
+        let updaterWindows = NSApplication.shared.windows.filter { window in
+            guard window.isVisible else { return false }
+            return !existingWindows.contains(ObjectIdentifier(window)) && isLikelyUpdaterWindow(window)
         }
-        appState.sparkleUpdateStatus = .checking
-        updaterController.updater.checkForUpdateInformation()
+        guard !updaterWindows.isEmpty else { return }
+
+        activateApplicationForSparkle()
+        for window in updaterWindows {
+            window.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    private func isLikelyUpdaterWindow(_ window: NSWindow) -> Bool {
+        let className = String(describing: type(of: window))
+        if className.localizedCaseInsensitiveContains("SPU") ||
+            className.localizedCaseInsensitiveContains("SU") ||
+            className.localizedCaseInsensitiveContains("Sparkle") {
+            return true
+        }
+
+        // Sparkle's standard UI can present through AppKit alert/window
+        // classes. Keep this semantic fallback narrow and only apply it to
+        // windows created after the update action.
+        let title = window.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return false }
+        if title.localizedCaseInsensitiveContains("update") ||
+            title.localizedCaseInsensitiveContains("updater") ||
+            title.localizedCaseInsensitiveContains("new version") ||
+            title.localizedCaseInsensitiveContains("available") {
+            return true
+        }
+        return false
     }
 
     private func showBusyStatus(_ message: String, restoring previousStatus: SparkleUpdateStatus) {
@@ -2087,6 +2087,14 @@ final class MuesliController: NSObject {
             return .idle
         }
         return status
+    }
+
+    @MainActor
+    private func activateApplicationForSparkle() {
+        // Sparkle UI is opened from an LSUIElement menu-bar app. This is a
+        // user-initiated update action, so use strong activation even though
+        // AppKit deprecated the argumented API on macOS 14.
+        NSApplication.shared.activate(ignoringOtherApps: true)
     }
 
     @objc func quitApp() {
