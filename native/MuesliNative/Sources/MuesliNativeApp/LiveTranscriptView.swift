@@ -4,45 +4,23 @@
 import SwiftUI
 
 private struct LiveTranscriptGroup: Identifiable {
-    // Stable ID: index of the first message in this group. Using a deterministic
-    // Int instead of UUID prevents SwiftUI from treating every group as removed+
-    // reinserted on each transcript update, which caused O(n²) render work over
-    // long meetings and froze the UI.
+    // Stable ID: sequential index of the group in arrival order.
+    // Using a deterministic Int instead of UUID prevents SwiftUI from treating
+    // every group as removed+reinserted on each transcript update.
     let id: Int
     let speaker: String?
     let isUser: Bool
     let lines: [String]
     let timestamp: String?
-
-    static func grouped(from messages: [TranscriptChatMessage]) -> [LiveTranscriptGroup] {
-        var groups: [LiveTranscriptGroup] = []
-        for msg in messages {
-            if let last = groups.last, last.speaker == msg.speaker {
-                let updated = LiveTranscriptGroup(
-                    id: last.id,
-                    speaker: last.speaker,
-                    isUser: last.isUser,
-                    lines: last.lines + [msg.text],
-                    timestamp: last.timestamp
-                )
-                groups[groups.count - 1] = updated
-            } else {
-                groups.append(LiveTranscriptGroup(
-                    id: msg.id,
-                    speaker: msg.speaker,
-                    isUser: msg.isUser,
-                    lines: [msg.text],
-                    timestamp: msg.timestamp
-                ))
-            }
-        }
-        return groups
-    }
 }
 
 struct LiveTranscriptView: View {
     let transcript: String
     @State private var groups: [LiveTranscriptGroup] = []
+    // Tracks how many characters of transcript have been parsed into groups.
+    // On each onChange we only parse the new suffix, keeping updates O(k)
+    // where k = lines in the new chunk rather than O(n) for the full history.
+    @State private var parsedLength: Int = 0
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -66,9 +44,7 @@ struct LiveTranscriptView: View {
                 .padding(.vertical, MuesliTheme.spacing8)
             }
             .onChange(of: transcript) { _, newTranscript in
-                groups = LiveTranscriptGroup.grouped(
-                    from: TranscriptChatMessage.messages(from: newTranscript)
-                )
+                mergeNewContent(from: newTranscript)
                 DispatchQueue.main.async {
                     withAnimation(.easeOut(duration: 0.15)) {
                         proxy.scrollTo("liveTranscriptBottom", anchor: .bottom)
@@ -76,12 +52,44 @@ struct LiveTranscriptView: View {
                 }
             }
             .onAppear {
-                groups = LiveTranscriptGroup.grouped(
-                    from: TranscriptChatMessage.messages(from: transcript)
-                )
+                // @State is freshly initialized on each tab switch, so this
+                // catches up with any chunks that arrived on another tab.
+                mergeNewContent(from: transcript)
                 DispatchQueue.main.async {
                     proxy.scrollTo("liveTranscriptBottom", anchor: .bottom)
                 }
+            }
+        }
+    }
+
+    private func mergeNewContent(from newTranscript: String) {
+        guard newTranscript.count > parsedLength else {
+            // Transcript was reset (meeting ended).
+            groups = []
+            parsedLength = 0
+            return
+        }
+        let startIndex = newTranscript.index(newTranscript.startIndex, offsetBy: parsedLength)
+        parsedLength = newTranscript.count
+
+        let newMessages = TranscriptChatMessage.messages(from: String(newTranscript[startIndex...]))
+        for msg in newMessages {
+            if let last = groups.last, last.speaker == msg.speaker {
+                groups[groups.count - 1] = LiveTranscriptGroup(
+                    id: last.id,
+                    speaker: last.speaker,
+                    isUser: last.isUser,
+                    lines: last.lines + [msg.text],
+                    timestamp: last.timestamp
+                )
+            } else {
+                groups.append(LiveTranscriptGroup(
+                    id: groups.count,
+                    speaker: msg.speaker,
+                    isUser: msg.isUser,
+                    lines: [msg.text],
+                    timestamp: msg.timestamp
+                ))
             }
         }
     }

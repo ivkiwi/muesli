@@ -25,6 +25,25 @@ private enum ManualNotesSaveStatus {
     }
 }
 
+// Wrapper views that isolate observation of liveMeetingTranscript.
+// Without these, MeetingDetailView.body would observe the property and
+// re-evaluate on every chunk (every ~5s), re-rendering the entire detail view.
+// Each wrapper is the sole observer — MeetingDetailView passes appState by
+// reference and never reads liveMeetingTranscript in its own body.
+private struct LiveTranscriptSection: View {
+    let appState: AppState
+    var body: some View {
+        LiveTranscriptView(transcript: appState.liveMeetingTranscript)
+    }
+}
+
+private struct MeetingChatSection: View {
+    let appState: AppState
+    var body: some View {
+        MeetingChatView(transcript: appState.liveMeetingTranscript, config: appState.config)
+    }
+}
+
 struct MeetingDetailView: View {
     let meeting: MeetingRecord?
     let controller: MuesliController
@@ -252,14 +271,11 @@ struct MeetingDetailView: View {
                     .padding(.bottom, 24)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 case .live:
-                    LiveTranscriptView(transcript: appState.liveMeetingTranscript)
+                    LiveTranscriptSection(appState: appState)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .chat:
-                    MeetingChatView(
-                        transcript: appState.liveMeetingTranscript,
-                        config: appState.config
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    MeetingChatSection(appState: appState)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             } else {
                 let isManualNotesEditable = canEditManualNotes(for: meeting)
