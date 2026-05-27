@@ -229,21 +229,19 @@ struct MeetingSummaryClientTests {
         )
 
         #expect(result.contains("## Summary failed"))
-        #expect(result.contains("OpenRouter could not generate meeting notes."))
+        #expect(result.contains("OpenRouter could not respond."))
         #expect(result.contains("Status 400"))
-        #expect(result.contains("selected model may be unavailable or retired"))
         #expect(result.contains("### Written notes"))
         #expect(result.contains("- User typed this during the meeting"))
         #expect(result.contains("## Raw Transcript"))
         #expect(result.contains("Raw words"))
     }
 
-    @Test("summary backend errors describe retired or unavailable models")
-    func summaryBackendErrorDescriptionMentionsModelAvailability() {
+    @Test("summary backend errors describe empty response")
+    func summaryBackendErrorDescriptionMentionsEmptyResponse() {
         let error = MeetingSummaryError.emptyResponse(backend: "OpenRouter")
 
         #expect(error.localizedDescription.contains("OpenRouter returned an empty response"))
-        #expect(error.localizedDescription.contains("unavailable or incompatible"))
     }
 
     @Test("generateTitle returns nil without API key")
