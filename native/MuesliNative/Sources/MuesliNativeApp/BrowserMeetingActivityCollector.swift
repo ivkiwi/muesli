@@ -183,15 +183,22 @@ final class BrowserMeetingActivityCollector {
         if let activeTabURLProviderOverride {
             return activeTabURLProviderOverride(app)
         }
-        guard activeTabFallbackEnabled else {
-            return nil
-        }
-        return await Task.detached(priority: .utility) {
-            Self.activeTabURLViaScriptingBridge(for: app)
-        }.value
+        return await Self.activeTabURLViaScriptingBridge(for: app, deadline: 2)
     }
 
-    private static func activeTabURLViaScriptingBridge(for app: RunningAppSnapshot) -> String? {
+    private static func activeTabURLViaScriptingBridge(for app: RunningAppSnapshot, deadline: TimeInterval) async -> String? {
+        await withCheckedContinuation { continuation in
+            let completion = BrowserActiveTabProbeCompletion(continuation)
+            DispatchQueue.global(qos: .utility).async {
+                completion.resume(Self.activeTabURLViaScriptingBridgeSync(for: app))
+            }
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + deadline) {
+                completion.resume(nil)
+            }
+        }
+    }
+
+    private static func activeTabURLViaScriptingBridgeSync(for app: RunningAppSnapshot) -> String? {
         // Target the existing process by PID. Bundle-id targets can relaunch a
         // browser after the user quits it, which passive detection must avoid.
         guard browserSupportsScriptingBridgeActiveTab(app.bundleID),
@@ -202,6 +209,7 @@ final class BrowserMeetingActivityCollector {
 
         let errorDelegate = BrowserScriptingBridgeErrorDelegate()
         browser.delegate = errorDelegate
+        // ScriptingBridge uses Apple Event ticks: 120 ticks is 2 seconds.
         browser.timeout = 120
 
         guard let windows = browser.value(forKey: "windows") as? SBElementArray,
@@ -245,5 +253,23 @@ private struct CachedBrowserMeeting {
 private final class BrowserScriptingBridgeErrorDelegate: NSObject, SBApplicationDelegate {
     func eventDidFail(_ event: UnsafePointer<AppleEvent>, withError error: Error) -> Any? {
         nil
+    }
+}
+
+private final class BrowserActiveTabProbeCompletion: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<String?, Never>?
+
+    init(_ continuation: CheckedContinuation<String?, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume(_ value: String?) {
+        lock.lock()
+        let continuation = continuation
+        self.continuation = nil
+        lock.unlock()
+
+        continuation?.resume(returning: value)
     }
 }
