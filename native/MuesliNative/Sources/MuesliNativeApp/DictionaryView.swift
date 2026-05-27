@@ -333,6 +333,7 @@ private struct ThresholdEditor: View {
                 step: 0.01
             )
             .tint(Self.sliderTint)
+            .accentColor(Self.sliderTint)
 
             HStack {
                 Text("70%")
