@@ -3271,6 +3271,23 @@ final class MuesliController: NSObject {
                         return self.liveMeetingTitle(id: meetingID)
                     }
                 }
+                meetingSession.onChunkTranscribed = { [weak self, weak meetingSession] segments, speaker in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        let start = meetingSession?.startTime ?? Date()
+                        let formatter = DateFormatter()
+                        formatter.dateFormat = "HH:mm:ss"
+                        let lines = segments.compactMap { seg -> String? in
+                            let text = seg.text.trimmingCharacters(in: .whitespaces)
+                            guard !text.isEmpty else { return nil }
+                            let ts = formatter.string(from: start.addingTimeInterval(seg.start))
+                            return "[\(ts)] \(speaker): \(text)"
+                        }
+                        guard !lines.isEmpty else { return }
+                        self.appState.liveMeetingTranscript += lines.joined(separator: "\n") + "\n"
+                    }
+                }
+                appState.liveMeetingTranscript = ""
                 try await meetingSession.start()
                 if Task.isCancelled || canceledMeetingStartIDs.contains(meetingID) {
                     meetingSession.discard()
@@ -3711,6 +3728,7 @@ final class MuesliController: NSObject {
                 self.endMeetingActivity()
                 self.historyWindowController?.reload()
                 self.syncAppState()
+                self.appState.liveMeetingTranscript = ""
                 if let meetingResult {
                     self.cleanupTemporaryMeetingAudioFiles(for: meetingResult)
                 }
