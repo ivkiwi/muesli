@@ -162,17 +162,25 @@ struct BrowserMeetingActivityCollectorTests {
             shouldAttemptActiveTabFallback: { _ in false }
         )
 
-        documentURLProbe = .nonMeetingDocument
-        let clearedByNonMeetingDocument = await collector.collect(
+        documentURLProbe = .nonMeetingDocument(isFocused: false)
+        let throttledAfterBackgroundNonMeetingDocument = await collector.collect(
             runningApps: [chrome(isActive: true)],
             refresh: true,
             now: now.addingTimeInterval(4),
             shouldAttemptActiveTabFallback: { _ in false }
         )
+
+        documentURLProbe = .nonMeetingDocument(isFocused: true)
+        let clearedByNonMeetingDocument = await collector.collect(
+            runningApps: [chrome(isActive: true)],
+            refresh: true,
+            now: now.addingTimeInterval(5),
+            shouldAttemptActiveTabFallback: { _ in false }
+        )
         let cachedAfterNonMeetingDocument = await collector.collect(
             runningApps: [chrome(isActive: true)],
             refresh: false,
-            now: now.addingTimeInterval(5),
+            now: now.addingTimeInterval(6),
             shouldAttemptActiveTabFallback: { _ in false }
         )
 
@@ -180,6 +188,7 @@ struct BrowserMeetingActivityCollectorTests {
         #expect(second.map(\.normalizedID) == ["googleMeet:meet.google.com/pwm-txwq-txy"])
         #expect(cachedAfterTimeout.map(\.normalizedID) == ["googleMeet:meet.google.com/pwm-txwq-txy"])
         #expect(throttledAfterTimeout.map(\.normalizedID) == ["googleMeet:meet.google.com/pwm-txwq-txy"])
+        #expect(throttledAfterBackgroundNonMeetingDocument.map(\.normalizedID) == ["googleMeet:meet.google.com/pwm-txwq-txy"])
         #expect(clearedByNonMeetingDocument.isEmpty)
         #expect(cachedAfterNonMeetingDocument.isEmpty)
     }

@@ -100,7 +100,7 @@ final class BrowserMeetingActivityCollector {
         for app: RunningAppSnapshot,
         shouldAttemptActiveTabFallback: (String) -> Bool
     ) async -> BrowserMeetingURLProbeResult {
-        var observedNonMeetingDocumentURL = false
+        var observedFocusedNonMeetingDocumentURL = false
         if let focusedDocumentURLProvider {
             guard let rawURL = focusedDocumentURLProvider(app) else {
                 return .noMeeting
@@ -108,15 +108,17 @@ final class BrowserMeetingActivityCollector {
             if let normalized = MeetingURLNormalizer.normalize(rawURL) {
                 return .meeting(normalized, isFocused: app.isActive)
             }
-            observedNonMeetingDocumentURL = true
+            observedFocusedNonMeetingDocumentURL = true
         }
 
         let documentURLProbe = documentURLProbeProvider?(app) ?? axDocumentURLProbe(for: app)
         switch documentURLProbe {
         case .meeting(let normalized, let isFocused):
             return .meeting(normalized, isFocused: app.isActive && isFocused)
-        case .nonMeetingDocument:
-            observedNonMeetingDocumentURL = true
+        case .nonMeetingDocument(let isFocused):
+            if isFocused {
+                observedFocusedNonMeetingDocumentURL = true
+            }
         case .noDocumentURL:
             break
         }
@@ -125,12 +127,12 @@ final class BrowserMeetingActivityCollector {
             return .noMeeting
         }
         guard shouldAttemptActiveTabFallback(app.bundleID) else {
-            return observedNonMeetingDocumentURL ? .noMeeting : .skipped
+            return observedFocusedNonMeetingDocumentURL ? .noMeeting : .skipped
         }
         let activeTabResult = await activeTabURL(for: app)
         guard case .url(let url) = activeTabResult else {
             if case .timedOut = activeTabResult {
-                return observedNonMeetingDocumentURL ? .noMeeting : .inconclusive
+                return observedFocusedNonMeetingDocumentURL ? .noMeeting : .inconclusive
             }
             return .noMeeting
         }
@@ -171,14 +173,14 @@ final class BrowserMeetingActivityCollector {
 
     private func axDocumentURLProbe(for app: RunningAppSnapshot) -> BrowserDocumentURLProbeResult {
         let axApp = AXUIElementCreateApplication(app.processIdentifier)
-        var observedNonMeetingDocumentURL = false
+        var observedBackgroundNonMeetingDocumentURL = false
 
         if let window = axWindowAttribute(kAXFocusedWindowAttribute, from: axApp) {
             switch documentURLProbe(from: window, isFocused: true) {
             case .meeting(let normalized, let isFocused):
                 return .meeting(normalized, isFocused: isFocused)
             case .nonMeetingDocument:
-                observedNonMeetingDocumentURL = true
+                return .nonMeetingDocument(isFocused: true)
             case .noDocumentURL:
                 break
             }
@@ -188,7 +190,7 @@ final class BrowserMeetingActivityCollector {
             case .meeting(let normalized, let isFocused):
                 return .meeting(normalized, isFocused: isFocused)
             case .nonMeetingDocument:
-                observedNonMeetingDocumentURL = true
+                observedBackgroundNonMeetingDocumentURL = true
             case .noDocumentURL:
                 break
             }
@@ -197,7 +199,7 @@ final class BrowserMeetingActivityCollector {
         var windowsRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsRef) == .success,
               let windows = windowsRef as? [AXUIElement] else {
-            return observedNonMeetingDocumentURL ? .nonMeetingDocument : .noDocumentURL
+            return observedBackgroundNonMeetingDocumentURL ? .nonMeetingDocument(isFocused: false) : .noDocumentURL
         }
 
         for window in windows {
@@ -205,13 +207,13 @@ final class BrowserMeetingActivityCollector {
             case .meeting(let normalized, let isFocused):
                 return .meeting(normalized, isFocused: isFocused)
             case .nonMeetingDocument:
-                observedNonMeetingDocumentURL = true
+                observedBackgroundNonMeetingDocumentURL = true
             case .noDocumentURL:
                 continue
             }
         }
 
-        return observedNonMeetingDocumentURL ? .nonMeetingDocument : .noDocumentURL
+        return observedBackgroundNonMeetingDocumentURL ? .nonMeetingDocument(isFocused: false) : .noDocumentURL
     }
 
     private func axWindowAttribute(_ attribute: String, from app: AXUIElement) -> AXUIElement? {
@@ -235,7 +237,7 @@ final class BrowserMeetingActivityCollector {
         if let normalized = MeetingURLNormalizer.normalize(rawURL) {
             return .meeting(normalized, isFocused: isFocused)
         }
-        return .nonMeetingDocument
+        return .nonMeetingDocument(isFocused: isFocused)
     }
 
     private func activeTabURL(for app: RunningAppSnapshot) async -> BrowserActiveTabProbeResult {
@@ -319,7 +321,7 @@ private enum BrowserMeetingURLProbeResult {
 
 enum BrowserDocumentURLProbeResult {
     case meeting(NormalizedMeetingURL, isFocused: Bool)
-    case nonMeetingDocument
+    case nonMeetingDocument(isFocused: Bool)
     case noDocumentURL
 }
 
