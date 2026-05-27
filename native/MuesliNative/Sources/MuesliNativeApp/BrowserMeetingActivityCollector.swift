@@ -19,6 +19,7 @@ final class BrowserMeetingActivityCollector {
     private let activeTabProbeResultProvider: ((RunningAppSnapshot) -> BrowserActiveTabProbeResult)?
     private let activeTabFallbackEnabled: Bool
     private var cachedMeetings: [String: CachedBrowserMeeting] = [:]
+    private var activeTabFallbacksAwaitingFreshResult: Set<String> = []
 
     init(
         cachedMeetingTTL: TimeInterval = 30,
@@ -67,20 +68,28 @@ final class BrowserMeetingActivityCollector {
                     isFocused: isFocused
                 )
                 cachedMeetings[app.bundleID] = CachedBrowserMeeting(context: context, observedAt: now)
+                activeTabFallbacksAwaitingFreshResult.remove(app.bundleID)
                 liveMeetings.append(context)
             case .noMeeting:
                 cachedMeetings.removeValue(forKey: app.bundleID)
-            case .inconclusive, .skipped:
+                activeTabFallbacksAwaitingFreshResult.remove(app.bundleID)
+            case .inconclusive:
+                activeTabFallbacksAwaitingFreshResult.insert(app.bundleID)
                 if let cached = cachedMeetings[app.bundleID] {
+                    liveMeetings.append(context(cached.context, runningApps: browserApps))
+                }
+            case .skipped:
+                if activeTabFallbacksAwaitingFreshResult.contains(app.bundleID),
+                   let cached = cachedMeetings[app.bundleID] {
                     liveMeetings.append(context(cached.context, runningApps: browserApps))
                 }
             }
         }
 
         // Refresh passes return fresh probe results unless the active-tab
-        // fallback is throttled or inconclusive. In those cases, a TTL-bound
-        // cache entry prevents transient stalls from flickering a browser
-        // meeting off.
+        // fallback is inconclusive. Follow-up throttled skips may reuse the
+        // TTL-bound cache only until a fresh active-tab result resolves that
+        // inconclusive state.
         return liveMeetings
     }
 
@@ -124,6 +133,7 @@ final class BrowserMeetingActivityCollector {
         cachedMeetings = cachedMeetings.filter { bundleID, cached in
             runningBrowserIDs.contains(bundleID) && now.timeIntervalSince(cached.observedAt) <= cachedMeetingTTL
         }
+        activeTabFallbacksAwaitingFreshResult.formIntersection(cachedMeetings.keys)
     }
 
     private func cachedContexts(runningApps: [RunningAppSnapshot]) -> [BrowserMeetingContext] {

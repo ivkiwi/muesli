@@ -93,8 +93,8 @@ struct BrowserMeetingActivityCollectorTests {
         #expect(meetings.map(\.normalizedID) == ["googleMeet:meet.google.com/pwm-txwq-txy"])
     }
 
-    @Test("refresh returns cached room when active-tab fallback probe is throttled")
-    func refreshReturnsCachedRoomWhenActiveTabFallbackProbeIsThrottled() async {
+    @Test("refresh skips cached room when ordinary active-tab fallback probe is throttled")
+    func refreshSkipsCachedRoomWhenOrdinaryActiveTabFallbackProbeIsThrottled() async {
         var activeTabURL: String? = "https://meet.google.com/pwm-txwq-txy"
         let collector = BrowserMeetingActivityCollector(
             activeTabURLProvider: { _ in activeTabURL }
@@ -122,7 +122,7 @@ struct BrowserMeetingActivityCollectorTests {
         )
 
         #expect(first.count == 1)
-        #expect(second.map(\.normalizedID) == ["googleMeet:meet.google.com/pwm-txwq-txy"])
+        #expect(second.isEmpty)
         #expect(cachedAfterSkippedRefresh.map(\.normalizedID) == ["googleMeet:meet.google.com/pwm-txwq-txy"])
     }
 
@@ -153,10 +153,26 @@ struct BrowserMeetingActivityCollectorTests {
             now: now.addingTimeInterval(2),
             shouldAttemptActiveTabFallback: { _ in false }
         )
+        let throttledAfterTimeout = await collector.collect(
+            runningApps: [chrome(isActive: true)],
+            refresh: true,
+            now: now.addingTimeInterval(3),
+            shouldAttemptActiveTabFallback: { _ in false }
+        )
+
+        activeTabResult = .noURL
+        let clearedByFreshResult = await collector.collect(
+            runningApps: [chrome(isActive: true)],
+            refresh: true,
+            now: now.addingTimeInterval(4),
+            shouldAttemptActiveTabFallback: { _ in true }
+        )
 
         #expect(first.count == 1)
         #expect(second.map(\.normalizedID) == ["googleMeet:meet.google.com/pwm-txwq-txy"])
         #expect(cachedAfterTimeout.map(\.normalizedID) == ["googleMeet:meet.google.com/pwm-txwq-txy"])
+        #expect(throttledAfterTimeout.map(\.normalizedID) == ["googleMeet:meet.google.com/pwm-txwq-txy"])
+        #expect(clearedByFreshResult.isEmpty)
     }
 
     @Test("refresh clears cache when active-tab fallback probe runs and finds no meeting URL")
