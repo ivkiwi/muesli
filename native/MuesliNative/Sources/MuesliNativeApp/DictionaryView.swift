@@ -1,6 +1,12 @@
 import SwiftUI
 import MuesliCore
 
+private enum DictionaryRowMetrics {
+    static let arrowWidth: CGFloat = 14
+    static let actionButtonSize: CGFloat = 24
+    static let actionsWidth: CGFloat = actionButtonSize * 2 + MuesliTheme.spacing8
+}
+
 struct DictionaryView: View {
     let appState: AppState
     let controller: MuesliController
@@ -106,16 +112,14 @@ struct DictionaryView: View {
         HStack(spacing: MuesliTheme.spacing8) {
             Text("Match")
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Text("")
-                .font(.system(size: 10))
-                .frame(width: 14)
+            Color.clear
+                .frame(width: DictionaryRowMetrics.arrowWidth)
             Text("Replace")
                 .frame(maxWidth: .infinity, alignment: .leading)
             Text("Threshold")
                 .fixedSize()
-            // Space for action buttons
-            Text("")
-                .frame(width: 48)
+            Color.clear
+                .frame(width: DictionaryRowMetrics.actionsWidth)
         }
         .font(MuesliTheme.caption())
         .foregroundStyle(MuesliTheme.textTertiary)
@@ -131,11 +135,17 @@ struct DictionaryView: View {
             Image(systemName: "arrow.right")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(MuesliTheme.textTertiary)
+                .frame(width: DictionaryRowMetrics.arrowWidth)
             TextField("Replace with", text: $newReplacement)
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: .infinity)
             ThresholdPicker(value: $newThreshold)
-            Button {
+            DictionaryIconButton(
+                systemName: "checkmark",
+                label: "Add word",
+                tint: MuesliTheme.accent,
+                isDisabled: newWord.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ) {
                 let trimmedWord = newWord.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmedWord.isEmpty else { return }
                 let replacement = newReplacement.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -150,24 +160,17 @@ struct DictionaryView: View {
                 newWord = ""
                 newReplacement = ""
                 newThreshold = 0.85
-            } label: {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(MuesliTheme.accent)
             }
-            .buttonStyle(.plain)
-            .disabled(newWord.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            Button {
+            DictionaryIconButton(
+                systemName: "xmark",
+                label: "Cancel",
+                tint: MuesliTheme.textTertiary
+            ) {
                 isAdding = false
                 newWord = ""
                 newReplacement = ""
                 newThreshold = 0.85
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(MuesliTheme.textTertiary)
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, MuesliTheme.spacing16)
         .padding(.vertical, MuesliTheme.spacing12)
@@ -212,11 +215,17 @@ private struct DictionaryWordEditorRow: View {
             Image(systemName: "arrow.right")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(MuesliTheme.textTertiary)
+                .frame(width: DictionaryRowMetrics.arrowWidth)
             TextField("Replace with", text: $draftReplacement)
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: .infinity)
             ThresholdPicker(value: $draftThreshold)
-            Button {
+            DictionaryIconButton(
+                systemName: "checkmark",
+                label: "Save word",
+                tint: hasChanges && !trimmedWord.isEmpty ? MuesliTheme.accent : MuesliTheme.textTertiary,
+                isDisabled: trimmedWord.isEmpty || !hasChanges
+            ) {
                 controller.updateCustomWord(
                     CustomWord(
                         id: word.id,
@@ -225,21 +234,15 @@ private struct DictionaryWordEditorRow: View {
                         matchingThreshold: draftThreshold
                     )
                 )
-            } label: {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(hasChanges && !trimmedWord.isEmpty ? MuesliTheme.accent : MuesliTheme.textTertiary)
             }
-            .buttonStyle(.plain)
-            .disabled(trimmedWord.isEmpty || !hasChanges)
-            Button {
+            DictionaryIconButton(
+                systemName: "trash",
+                label: "Delete word",
+                tint: MuesliTheme.recording,
+                weight: .regular
+            ) {
                 controller.removeCustomWord(id: word.id)
-            } label: {
-                Image(systemName: "trash")
-                    .font(.system(size: 11))
-                    .foregroundStyle(MuesliTheme.recording)
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, MuesliTheme.spacing16)
         .padding(.vertical, MuesliTheme.spacing12)
@@ -280,6 +283,8 @@ private struct ThresholdPicker: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
+        .help("Matching threshold")
+        .accessibilityLabel("Matching threshold")
     }
 
     private static func label(for value: Double) -> String {
@@ -289,5 +294,31 @@ private struct ThresholdPicker: View {
     private static func snap(_ value: Double) -> Double {
         let nearest = (value * 20).rounded() / 20 // round to nearest 0.05
         return min(max(nearest, steps.first!), steps.last!)
+    }
+}
+
+private struct DictionaryIconButton: View {
+    let systemName: String
+    let label: String
+    let tint: Color
+    var weight: Font.Weight = .bold
+    var isDisabled = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 11, weight: weight))
+                .foregroundStyle(tint)
+                .frame(
+                    width: DictionaryRowMetrics.actionButtonSize,
+                    height: DictionaryRowMetrics.actionButtonSize
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .help(label)
+        .accessibilityLabel(label)
     }
 }
