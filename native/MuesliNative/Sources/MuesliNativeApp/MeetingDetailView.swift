@@ -39,8 +39,19 @@ private struct LiveTranscriptSection: View {
 
 private struct MeetingChatSection: View {
     let appState: AppState
+    @Binding var history: [MeetingChatView.ChatTurn]
+    @Binding var inputText: String
+    @Binding var isThinking: Bool
+    @Binding var errorMessage: String?
     var body: some View {
-        MeetingChatView(transcript: appState.liveMeetingTranscript, config: appState.config)
+        MeetingChatView(
+            transcript: appState.liveMeetingTranscript,
+            config: appState.config,
+            history: $history,
+            inputText: $inputText,
+            isThinking: $isThinking,
+            errorMessage: $errorMessage
+        )
     }
 }
 
@@ -64,6 +75,14 @@ struct MeetingDetailView: View {
     @State private var pendingTemplateID: String
     @State private var documentMode: MeetingDocumentMode
     @State private var recordingMode: RecordingContentMode = .notes
+    @State private var chatHistory: [MeetingChatView.ChatTurn] = []
+    @State private var chatInputText: String = ""
+    @State private var chatIsThinking: Bool = false
+    @State private var chatErrorMessage: String? = nil
+    @State private var postMeetingChatHistory: [MeetingChatView.ChatTurn] = []
+    @State private var postMeetingChatInputText: String = ""
+    @State private var postMeetingChatIsThinking: Bool = false
+    @State private var postMeetingChatErrorMessage: String? = nil
     @State private var titleSaveTask: DispatchWorkItem?
     @State private var notesSaveTask: DispatchWorkItem?
     @State private var transcriptSaveTask: DispatchWorkItem?
@@ -242,9 +261,8 @@ struct MeetingDetailView: View {
     private func content(for meeting: MeetingRecord) -> some View {
         if showsManualNotesEditor(for: meeting) {
             if meeting.status == .recording {
-                switch recordingMode {
-                case .notes:
-                    let isManualNotesEditable = canEditManualNotes(for: meeting)
+                let isManualNotesEditable = canEditManualNotes(for: meeting)
+                ZStack {
                     VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
                         manualNotesToolbar(for: meeting)
                             .disabled(!isManualNotesEditable)
@@ -270,12 +288,27 @@ struct MeetingDetailView: View {
                     .padding(.top, 12)
                     .padding(.bottom, 24)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                case .live:
+                    .opacity(recordingMode == .notes ? 1 : 0)
+                    .allowsHitTesting(recordingMode == .notes)
+                    .accessibilityHidden(recordingMode != .notes)
+
                     LiveTranscriptSection(appState: appState)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                case .chat:
-                    MeetingChatSection(appState: appState)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .opacity(recordingMode == .live ? 1 : 0)
+                        .allowsHitTesting(recordingMode == .live)
+                        .accessibilityHidden(recordingMode != .live)
+
+                    MeetingChatSection(
+                        appState: appState,
+                        history: $chatHistory,
+                        inputText: $chatInputText,
+                        isThinking: $chatIsThinking,
+                        errorMessage: $chatErrorMessage
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .opacity(recordingMode == .chat ? 1 : 0)
+                    .allowsHitTesting(recordingMode == .chat)
+                    .accessibilityHidden(recordingMode != .chat)
                 }
             } else {
                 let isManualNotesEditable = canEditManualNotes(for: meeting)
@@ -361,7 +394,11 @@ struct MeetingDetailView: View {
 
                     MeetingChatView(
                         transcript: meeting.rawTranscript,
-                        config: appState.config
+                        config: appState.config,
+                        history: $postMeetingChatHistory,
+                        inputText: $postMeetingChatInputText,
+                        isThinking: $postMeetingChatIsThinking,
+                        errorMessage: $postMeetingChatErrorMessage
                     )
                     .opacity(documentMode == .chat ? 1 : 0)
                     .allowsHitTesting(documentMode == .chat)
