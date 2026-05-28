@@ -300,7 +300,7 @@ final class SparkleUpdateDelegate: NSObject, SPUUpdaterDelegate, SPUStandardUser
 enum UpdateFailureGuidance {
     private static let noUpdateErrorCode = 1001
 
-    static let downloadPageURLString = "https://phequals7.github.io/muesli/"
+    static let downloadPageURLString = "https://muesli-hq.github.io/muesli/"
 
     static let message = """
     Please quit Muesli, reopen it from Applications, and try the update once more.

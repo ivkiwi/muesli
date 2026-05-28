@@ -147,7 +147,7 @@ This checklist is for **verification** after the script runs, and for manual rec
 
 ## Post-release
 
-- [ ] Verify GitHub Pages serves appcast: `curl -s https://phequals7.github.io/muesli/appcast.xml | head -5`
+- [ ] Verify GitHub Pages serves appcast: `curl -s https://muesli-hq.github.io/muesli/appcast.xml | head -5`
 - [ ] Verify the GitHub Release page exposes the DMG you just uploaded
 - [ ] Verify `docs/index.html` and `docs/llms.txt` point to the newly published GitHub Release DMG
 - [ ] Optional: install previous version and confirm Sparkle shows update prompt
