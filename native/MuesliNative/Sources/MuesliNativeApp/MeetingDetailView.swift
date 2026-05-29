@@ -47,6 +47,9 @@ struct MeetingDetailView: View {
     @State private var transcriptResummaryPromptMeetingID: Int64?
     @State private var transcriptEditOriginalTranscript: String?
     @State private var transcriptEditHadStructuredNotes = false
+    @State private var showFolderPopover = false
+    @State private var showNewFolderPrompt = false
+    @State private var newFolderName = ""
 
     init(
         meeting: MeetingRecord?,
@@ -178,6 +181,8 @@ struct MeetingDetailView: View {
                             .foregroundStyle(MuesliTheme.textSecondary)
                         templateChip(for: appliedTemplate)
                     }
+
+                    folderPill(for: meeting)
                 }
 
                 Spacer(minLength: MuesliTheme.spacing16)
@@ -916,6 +921,90 @@ struct MeetingDetailView: View {
         .clipShape(Capsule())
     }
 
+    @ViewBuilder
+    private func folderPill(for meeting: MeetingRecord) -> some View {
+        let currentFolder = meeting.folderID.flatMap { fid in
+            appState.folders.first(where: { $0.id == fid })
+        }
+        let hasFolder = currentFolder != nil
+        Button {
+            showFolderPopover.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: hasFolder ? "folder.fill" : "folder.badge.plus")
+                    .font(.system(size: 10))
+                Text(currentFolder?.name ?? "Add to folder")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .foregroundStyle(hasFolder ? MuesliTheme.accent : MuesliTheme.textSecondary)
+            .padding(.horizontal, MuesliTheme.spacing8)
+            .padding(.vertical, 4)
+            .background(hasFolder ? MuesliTheme.accentSubtle : MuesliTheme.backgroundRaised)
+            .clipShape(Capsule())
+            .overlay(
+                Capsule()
+                    .strokeBorder(hasFolder ? Color.clear : MuesliTheme.surfaceBorder, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .help(hasFolder ? "Change folder" : "Add to folder")
+        .popover(isPresented: $showFolderPopover, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 0) {
+                if !appState.folders.isEmpty {
+                    ForEach(appState.folders) { folder in
+                        let isActive = meeting.folderID == folder.id
+                        folderPopoverRow(icon: "folder", label: folder.name, isActive: isActive) {
+                            controller.moveMeeting(id: meeting.id, toFolder: isActive ? nil : folder.id)
+                            showFolderPopover = false
+                        }
+                    }
+                    Divider().padding(.vertical, 4)
+                }
+                folderPopoverRow(icon: "folder.badge.plus", label: "New Folder...") {
+                    showFolderPopover = false
+                    newFolderName = ""
+                    showNewFolderPrompt = true
+                }
+            }
+            .padding(8)
+            .frame(minWidth: 200)
+        }
+        .alert("New Folder", isPresented: $showNewFolderPrompt) {
+            TextField("Folder name", text: $newFolderName)
+            Button("Create") {
+                let trimmed = newFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return }
+                controller.createFolderAndMoveMeeting(name: trimmed, meetingID: meeting.id)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Create a new folder and move this meeting into it.")
+        }
+    }
+
+    @ViewBuilder
+    private func folderPopoverRow(icon: String, label: String, isActive: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 11))
+                    .frame(width: 16)
+                Text(label)
+                    .font(MuesliTheme.callout())
+                Spacer()
+                if isActive {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(MuesliTheme.accent)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     private var transcriptCTA: some View {
         HStack(spacing: MuesliTheme.spacing8) {
             if hasApiKey {
@@ -1205,6 +1294,9 @@ struct MeetingDetailView: View {
             documentMode = meeting.map(Self.defaultDocumentMode(for:)) ?? .notes
             isEditingNotes = false
             isEditingTranscript = false
+            showFolderPopover = false
+            showNewFolderPrompt = false
+            newFolderName = ""
         }
     }
 
