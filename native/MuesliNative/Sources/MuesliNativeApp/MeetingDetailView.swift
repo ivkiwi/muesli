@@ -1294,6 +1294,9 @@ struct MeetingDetailView: View {
             documentMode = meeting.map(Self.defaultDocumentMode(for:)) ?? .notes
             isEditingNotes = false
             isEditingTranscript = false
+            showFolderPopover = false
+            showNewFolderPrompt = false
+            newFolderName = ""
         }
     }
 
