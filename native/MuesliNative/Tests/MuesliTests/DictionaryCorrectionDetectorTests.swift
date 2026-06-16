@@ -69,6 +69,20 @@ struct DictionaryCorrectionDetectorTests {
         #expect(suggestion?.replacement == "muesli")
     }
 
+    @Test("detects muesli corrections from latest muwsly failure")
+    func detectsMuesliCorrectionFromLatestMuwslyFailure() {
+        let original = "See, I typically find the word muesli to be wrongly transcribed almost every time, so I'm just repeating muwsly twice."
+        let edited = "See, I typically find the word muesli to be wrongly transcribed almost every time, so I'm just repeating muesli twice."
+
+        let suggestion = DictionaryCorrectionDetector.suggestion(
+            originalText: original,
+            editedText: edited
+        )
+
+        #expect(suggestion?.observed == "muwsly")
+        #expect(suggestion?.replacement == "muesli")
+    }
+
     @Test("detects word correction when extra text is appended afterwards")
     func detectsCorrectionWithAdditionalTyping() {
         let original = "So this time if I say Newsly has not transcribed Newsly properly, would you be able to add it to dictionary immediately?"
@@ -127,6 +141,17 @@ struct DictionaryCorrectionDetectorTests {
             originalText: "ship teh update",
             baselineText: "ship teh update",
             currentText: "ship the update"
+        )
+
+        #expect(suggestion == nil)
+    }
+
+    @Test("does not suggest plain one character lowercase edits")
+    func skipsPlainOneCharacterLowercaseEdits() {
+        let suggestion = DictionaryCorrectionDetector.suggestion(
+            originalText: "I usually use this prompt",
+            baselineText: "I usually use this prompt",
+            currentText: "I usualy use this prompt"
         )
 
         #expect(suggestion == nil)

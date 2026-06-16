@@ -21,8 +21,8 @@ final class DictionarySuggestionPromptController {
     ) {
         dismiss()
 
-        let cardWidth: CGFloat = 384
-        let cardHeight: CGFloat = 74
+        let cardWidth: CGFloat = 420
+        let cardHeight: CGFloat = 126
         let closeButtonSize: CGFloat = 22
         let cardX = closeButtonSize / 2 + 1
         let topGutter: CGFloat = closeButtonSize / 2 + 1
@@ -278,36 +278,38 @@ private final class DictionarySuggestionPromptView: NSView {
         cardView.layer?.borderColor = NSColor.white.withAlphaComponent(0.10).cgColor
         addSubview(cardView)
 
-        let iconSize: CGFloat = 26
+        let iconSize: CGFloat = 28
         let iconView = NSImageView()
         iconView.image = NSImage(systemSymbolName: "text.book.closed", accessibilityDescription: "Dictionary")
             ?? NSImage(systemSymbolName: "text.quote", accessibilityDescription: "Dictionary")
         iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
         iconView.contentTintColor = NSColor.white.withAlphaComponent(0.86)
         iconView.imageScaling = .scaleProportionallyUpOrDown
-        iconView.frame = NSRect(x: 14, y: (cardFrame.height - iconSize) / 2 + 1, width: iconSize, height: iconSize)
+        iconView.frame = NSRect(x: 16, y: cardFrame.height - 46, width: iconSize, height: iconSize)
         cardView.addSubview(iconView)
 
-        let textX: CGFloat = 49
-        let buttonWidth: CGFloat = 68
+        let textX: CGFloat = 56
+        let buttonWidth: CGFloat = 86
         let buttonGap: CGFloat = 8
-        let buttonY: CGFloat = 22
+        let buttonY: CGFloat = 18
         let buttonHeight: CGFloat = 30
-        let ignoreX = cardFrame.width - 12 - buttonWidth
+        let ignoreX = cardFrame.width - 16 - buttonWidth
         let laterX = ignoreX - buttonGap - buttonWidth
         let addX = laterX - buttonGap - buttonWidth
-        let textMaxX = addX - 12
+        let textWidth = cardFrame.width - textX - 18
 
         let title = label("Add correction?", font: .systemFont(ofSize: 13, weight: .semibold), color: .white)
-        title.frame = NSRect(x: textX, y: 41, width: max(40, textMaxX - textX), height: 18)
+        title.frame = NSRect(x: textX, y: 92, width: textWidth, height: 18)
         cardView.addSubview(title)
 
         let detail = label(
-            "\"\(truncate(suggestion.observed, limit: 22))\" -> \"\(truncate(suggestion.replacement, limit: 22))\"",
-            font: .systemFont(ofSize: 11),
-            color: NSColor.white.withAlphaComponent(0.58)
+            "\"\(suggestion.observed)\" -> \"\(suggestion.replacement)\"",
+            font: .systemFont(ofSize: 13),
+            color: NSColor.white.withAlphaComponent(0.72),
+            lineBreakMode: .byTruncatingMiddle
         )
-        detail.frame = NSRect(x: textX, y: 22, width: max(40, textMaxX - textX), height: 16)
+        detail.toolTip = "\"\(suggestion.observed)\" -> \"\(suggestion.replacement)\""
+        detail.frame = NSRect(x: textX, y: 66, width: textWidth, height: 18)
         cardView.addSubview(detail)
 
         let add = button(title: "Add", action: #selector(addTapped), isPrimary: true)
@@ -323,11 +325,16 @@ private final class DictionarySuggestionPromptView: NSView {
         cardView.addSubview(ignore)
     }
 
-    private func label(_ text: String, font: NSFont, color: NSColor) -> NSTextField {
+    private func label(
+        _ text: String,
+        font: NSFont,
+        color: NSColor,
+        lineBreakMode: NSLineBreakMode = .byTruncatingTail
+    ) -> NSTextField {
         let label = NSTextField(labelWithString: text)
         label.font = font
         label.textColor = color
-        label.lineBreakMode = .byTruncatingTail
+        label.lineBreakMode = lineBreakMode
         return label
     }
 
@@ -343,11 +350,6 @@ private final class DictionarySuggestionPromptView: NSView {
         button.focusRingType = .none
         button.contentTintColor = .white
         return button
-    }
-
-    private func truncate(_ value: String, limit: Int) -> String {
-        guard value.count > limit else { return value }
-        return String(value.prefix(limit - 1)) + "..."
     }
 
     @objc private func addTapped() {

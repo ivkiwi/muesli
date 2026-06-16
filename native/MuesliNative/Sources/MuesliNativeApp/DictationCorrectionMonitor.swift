@@ -330,7 +330,51 @@ struct DictionaryCorrectionDetector {
             return hasSpecialDictionarySignal || replacement.contains(where: \.isUppercase)
         }
 
+        guard !isPlainSingleCharacterEdit(observed: normalizedObserved, replacement: normalizedReplacement) else {
+            return false
+        }
+
         return similarity >= minimumCorrectionSimilarity || hasSpecialDictionarySignal
+    }
+
+    private static func isPlainSingleCharacterEdit(observed: String, replacement: String) -> Bool {
+        guard observed.split(whereSeparator: \.isWhitespace).count == 1,
+              replacement.split(whereSeparator: \.isWhitespace).count == 1,
+              observed.allSatisfy({ $0.isLowercase || $0.isNumber }),
+              replacement.allSatisfy({ $0.isLowercase || $0.isNumber })
+        else { return false }
+
+        return boundedEditDistance(observed, replacement, limit: 1) <= 1
+    }
+
+    private static func boundedEditDistance(_ lhs: String, _ rhs: String, limit: Int) -> Int {
+        let lhsChars = Array(lhs)
+        let rhsChars = Array(rhs)
+        guard abs(lhsChars.count - rhsChars.count) <= limit else {
+            return limit + 1
+        }
+        guard !lhsChars.isEmpty else { return rhsChars.count }
+        guard !rhsChars.isEmpty else { return lhsChars.count }
+
+        var previous = Array(0...rhsChars.count)
+        for row in 1...lhsChars.count {
+            var current = [row] + Array(repeating: 0, count: rhsChars.count)
+            var rowMinimum = current[0]
+            for column in 1...rhsChars.count {
+                let substitutionCost = lhsChars[row - 1] == rhsChars[column - 1] ? 0 : 1
+                current[column] = min(
+                    previous[column] + 1,
+                    current[column - 1] + 1,
+                    previous[column - 1] + substitutionCost
+                )
+                rowMinimum = min(rowMinimum, current[column])
+            }
+            if rowMinimum > limit {
+                return limit + 1
+            }
+            previous = current
+        }
+        return previous[rhsChars.count]
     }
 
     private static func hasInternalCapital(_ value: String) -> Bool {
