@@ -180,6 +180,8 @@ private final class DictationLatencyLogWriter: @unchecked Sendable {
 
 @MainActor
 final class MuesliController: NSObject {
+    private static let maxDismissedDictionarySuggestionKeys = 200
+
     private let runtime: RuntimePaths
     private let configStore = ConfigStore()
     private let dictationStore: DictationStore
@@ -859,7 +861,11 @@ final class MuesliController: NSObject {
         let previousHotkeyTriggerThresholdMS = config.hotkeyTriggerThresholdMS
         let previousComputerUseHotkeyTriggerThresholdMS = config.computerUseHotkeyTriggerThresholdMS
         let previousMeetingRecordingHotkeyTriggerThresholdMS = config.meetingRecordingHotkeyTriggerThresholdMS
+        let previousEnableScreenContext = config.enableScreenContext
         mutate(&config)
+        if previousEnableScreenContext, !config.enableScreenContext {
+            dictationCorrectionMonitor.cancel()
+        }
         config.hotkeyTriggerThresholdMS = HotkeyTriggerTiming.clampedMilliseconds(config.hotkeyTriggerThresholdMS)
         config.computerUseHotkeyTriggerThresholdMS = HotkeyTriggerTiming.clampedMilliseconds(config.computerUseHotkeyTriggerThresholdMS)
         config.meetingRecordingHotkeyTriggerThresholdMS = HotkeyTriggerTiming.clampedMilliseconds(config.meetingRecordingHotkeyTriggerThresholdMS)
@@ -1551,7 +1557,7 @@ final class MuesliController: NSObject {
             if let index = config.dictionarySuggestions.firstIndex(where: { $0.key == key }) {
                 var existing = config.dictionarySuggestions[index]
                 existing.occurrenceCount += 1
-                existing.lastSeenAt = ISO8601DateFormatter().string(from: Date())
+                existing.lastSeenAt = DictionarySuggestion.timestamp()
                 if existing.appContext.isEmpty {
                     existing.appContext = suggestion.appContext
                 }
@@ -1567,7 +1573,7 @@ final class MuesliController: NSObject {
             }
         }
 
-        if presentPrompt, config.enableDictionaryCorrectionPrompts {
+        if presentPrompt {
             presentDictionarySuggestionPrompt(promptSuggestion)
         }
     }
@@ -1601,6 +1607,9 @@ final class MuesliController: NSObject {
             config.dictionarySuggestions.removeAll { $0.key == key }
             if !config.dismissedDictionarySuggestionKeys.contains(key) {
                 config.dismissedDictionarySuggestionKeys.append(key)
+            }
+            if config.dismissedDictionarySuggestionKeys.count > Self.maxDismissedDictionarySuggestionKeys {
+                config.dismissedDictionarySuggestionKeys = Array(config.dismissedDictionarySuggestionKeys.suffix(Self.maxDismissedDictionarySuggestionKeys))
             }
         }
     }
@@ -5747,7 +5756,7 @@ final class MuesliController: NSObject {
                     self.syncAppState()
                     if outputMode != .voiceNote {
                         PasteController.paste(text: text)
-                        if self.config.enableDictionaryCorrectionPrompts {
+                        if self.config.enableDictionaryCorrectionPrompts && self.config.enableScreenContext {
                             self.dictationCorrectionMonitor.start(
                                 originalText: text,
                                 appContext: storageContext,

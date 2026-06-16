@@ -2,7 +2,7 @@ import AppKit
 import ApplicationServices
 import Foundation
 
-struct DictationCorrectionTargetApp {
+struct DictationCorrectionTargetApp: Sendable {
     let processID: pid_t
     let appName: String
     let bundleID: String
@@ -363,8 +363,8 @@ final class DictationCorrectionMonitor {
     private static let steadyPollIntervalNanoseconds: UInt64 = 1_000_000_000
     private static let fastPollingWindowSeconds: TimeInterval = 10
     private static let monitoringWindowSeconds: TimeInterval = 45
-    private static let maxAccessibilityNodes = 500
-    private static let maxCandidateCharacters = 2_000
+    nonisolated private static let maxAccessibilityNodes = 140
+    nonisolated private static let maxCandidateCharacters = 2_000
 
     private var task: Task<Void, Never>?
 
@@ -377,17 +377,23 @@ final class DictationCorrectionMonitor {
         cancel()
         guard AXIsProcessTrusted() else { return }
 
-        task = Task { @MainActor in
+        task = Task {
             let fastPollingDeadline = Date().addingTimeInterval(Self.fastPollingWindowSeconds)
             let deadline = Date().addingTimeInterval(Self.monitoringWindowSeconds)
             try? await Task.sleep(nanoseconds: Self.initialPollDelayNanoseconds)
             while !Task.isCancelled, Date() < deadline {
-                if let suggestion = Self.detectSuggestion(
-                    originalText: originalText,
-                    appContext: appContext,
-                    targetApp: targetApp
-                ) {
-                    onSuggestion(suggestion)
+                let suggestion = await Task.detached(priority: .utility) {
+                    Self.detectSuggestion(
+                        originalText: originalText,
+                        appContext: appContext,
+                        targetApp: targetApp
+                    )
+                }.value
+                if Task.isCancelled { return }
+                if let suggestion {
+                    await MainActor.run {
+                        onSuggestion(suggestion)
+                    }
                     return
                 }
                 let interval = Date() < fastPollingDeadline
@@ -403,49 +409,41 @@ final class DictationCorrectionMonitor {
         task = nil
     }
 
-    private static func detectSuggestion(
+    nonisolated private static func detectSuggestion(
         originalText: String,
         appContext: String,
         targetApp: DictationCorrectionTargetApp?
     ) -> DictionarySuggestion? {
         let resolvedAppContext = appContext.isEmpty ? (targetApp?.appContext ?? "") : appContext
-        for snapshot in textSnapshots(near: originalText, appContext: resolvedAppContext, targetApp: targetApp) {
-            if let suggestion = DictionaryCorrectionDetector.suggestion(
+        var seen = Set<String>()
+
+        func suggestion(from value: String?) -> DictionarySuggestion? {
+            guard let snapshot = normalizedSnapshot(value, originalText: originalText),
+                  !seen.contains(snapshot)
+            else { return nil }
+            seen.insert(snapshot)
+            return DictionaryCorrectionDetector.suggestion(
                 originalText: originalText,
                 editedText: snapshot,
                 appContext: resolvedAppContext
-            ) {
-                return suggestion
-            }
+            )
+        }
+
+        var focusedProcessID: pid_t?
+        if let focusedSuggestion = systemFocusedTextSnapshot(
+            maxCharacters: maxCandidateCharacters,
+            processID: &focusedProcessID
+        ).flatMap(suggestion(from:)) {
+            return focusedSuggestion
+        }
+
+        if let targetApp, targetApp.processID != focusedProcessID {
+            return collectTextSnapshots(fromProcessID: targetApp.processID, evaluate: suggestion(from:))
         }
         return nil
     }
 
-    private static func textSnapshots(
-        near originalText: String,
-        appContext: String,
-        targetApp: DictationCorrectionTargetApp?
-    ) -> [String] {
-        var seen = Set<String>()
-        var candidates: [String] = []
-
-        func add(_ value: String?) {
-            guard let normalized = normalizedSnapshot(value, originalText: originalText),
-                  !seen.contains(normalized)
-            else { return }
-            seen.insert(normalized)
-            candidates.append(normalized)
-        }
-
-        let focusedProcessID = addSystemFocusedTextSnapshot(maxCharacters: maxCandidateCharacters, add: add)
-
-        for app in targetApplications(focusedProcessID: focusedProcessID, appContext: appContext, targetApp: targetApp) {
-            collectTextSnapshots(from: app, add: add)
-        }
-        return candidates
-    }
-
-    private static func normalizedSnapshot(_ value: String?, originalText: String) -> String? {
+    nonisolated private static func normalizedSnapshot(_ value: String?, originalText: String) -> String? {
         guard let value else { return nil }
         let normalized = value
             .replacingOccurrences(of: "\u{00a0}", with: " ")
@@ -462,44 +460,11 @@ final class DictationCorrectionMonitor {
         return normalized
     }
 
-    private static func targetApplications(
-        focusedProcessID: pid_t?,
-        appContext: String,
-        targetApp: DictationCorrectionTargetApp?
-    ) -> [NSRunningApplication] {
-        var apps: [NSRunningApplication] = []
-        var seen = Set<pid_t>()
-
-        func add(_ app: NSRunningApplication?) {
-            guard let app, !seen.contains(app.processIdentifier) else { return }
-            seen.insert(app.processIdentifier)
-            apps.append(app)
-        }
-
-        if let targetApp {
-            add(NSWorkspace.shared.runningApplications.first { $0.processIdentifier == targetApp.processID })
-        }
-        if let focusedProcessID {
-            add(NSWorkspace.shared.runningApplications.first { $0.processIdentifier == focusedProcessID })
-        }
-        add(NSWorkspace.shared.frontmostApplication)
-        add(runningApplication(from: appContext))
-        return apps
-    }
-
-    private static func runningApplication(from appContext: String) -> NSRunningApplication? {
-        let parts = appContext.split(separator: "|", omittingEmptySubsequences: false)
-        guard parts.count >= 2 else { return nil }
-        let bundleID = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !bundleID.isEmpty else { return nil }
-        return NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == bundleID }
-    }
-
-    private static func collectTextSnapshots(
-        from app: NSRunningApplication,
-        add: (String?) -> Void
-    ) {
-        let axApp = AXUIElementCreateApplication(app.processIdentifier)
+    nonisolated private static func collectTextSnapshots(
+        fromProcessID processID: pid_t,
+        evaluate: (String?) -> DictionarySuggestion?
+    ) -> DictionarySuggestion? {
+        let axApp = AXUIElementCreateApplication(processID)
         var roots: [AXUIElement] = []
 
         for attribute in [
@@ -514,67 +479,66 @@ final class DictationCorrectionMonitor {
         roots.append(axApp)
 
         var remainingNodes = maxAccessibilityNodes
-        var visited = Set<AXUIElement>()
+        var visited = Set<String>()
         for root in roots {
-            collectTextSnapshots(
+            if let suggestion = collectTextSnapshots(
                 from: root,
                 depth: 0,
                 remainingNodes: &remainingNodes,
                 visited: &visited,
-                add: add
-            )
-            if remainingNodes <= 0 { return }
+                evaluate: evaluate
+            ) {
+                return suggestion
+            }
+            if remainingNodes <= 0 { return nil }
         }
+        return nil
     }
 
-    private static func collectTextSnapshots(
+    nonisolated private static func collectTextSnapshots(
         from element: AXUIElement,
         depth: Int,
         remainingNodes: inout Int,
-        visited: inout Set<AXUIElement>,
-        add: (String?) -> Void
-    ) {
-        guard depth <= 10, remainingNodes > 0, !visited.contains(element) else { return }
-        visited.insert(element)
+        visited: inout Set<String>,
+        evaluate: (String?) -> DictionarySuggestion?
+    ) -> DictionarySuggestion? {
+        guard depth <= 8, remainingNodes > 0 else { return nil }
+        let visitKey = elementVisitKey(element)
+        guard !visited.contains(visitKey) else { return nil }
+        visited.insert(visitKey)
         remainingNodes -= 1
 
-        for attribute in [
-            kAXValueAttribute,
-            kAXTitleAttribute,
-            kAXDescriptionAttribute,
-            kAXHelpAttribute,
-        ] {
-            var valueRef: CFTypeRef?
-            if AXUIElementCopyAttributeValue(element, attribute as CFString, &valueRef) == .success {
-                add(valueRef as? String)
-            }
+        var valueRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valueRef) == .success,
+           let suggestion = evaluate(valueRef as? String) {
+            return suggestion
         }
 
         for childAttribute in [
             kAXVisibleChildrenAttribute,
             kAXChildrenAttribute,
             kAXContentsAttribute,
-            kAXRowsAttribute,
-            kAXColumnsAttribute,
         ] {
             for child in axElementArrayAttribute(childAttribute, from: element) {
-                collectTextSnapshots(
+                if let suggestion = collectTextSnapshots(
                     from: child,
                     depth: depth + 1,
                     remainingNodes: &remainingNodes,
                     visited: &visited,
-                    add: add
-                )
-                if remainingNodes <= 0 { return }
+                    evaluate: evaluate
+                ) {
+                    return suggestion
+                }
+                if remainingNodes <= 0 { return nil }
             }
         }
+        return nil
     }
 
-    @discardableResult
-    private static func addSystemFocusedTextSnapshot(
+    nonisolated private static func systemFocusedTextSnapshot(
         maxCharacters: Int = 20_000,
-        add: (String?) -> Void
-    ) -> pid_t? {
+        processID focusedProcessID: inout pid_t?
+    ) -> String? {
         let system = AXUIElementCreateSystemWide()
         var focusedRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
@@ -583,14 +547,14 @@ final class DictationCorrectionMonitor {
         else { return nil }
 
         let element = focused as! AXUIElement
-        add(textSnapshot(from: element, maxCharacters: maxCharacters))
-
-        var processID: pid_t = 0
-        guard AXUIElementGetPid(element, &processID) == .success else { return nil }
-        return processID
+        var pid: pid_t = 0
+        if AXUIElementGetPid(element, &pid) == .success {
+            focusedProcessID = pid
+        }
+        return textSnapshot(from: element, maxCharacters: maxCharacters)
     }
 
-    private static func textSnapshot(from element: AXUIElement, maxCharacters: Int) -> String? {
+    nonisolated private static func textSnapshot(from element: AXUIElement, maxCharacters: Int) -> String? {
         var charCountRef: CFTypeRef?
         if AXUIElementCopyAttributeValue(element, kAXNumberOfCharactersAttribute as CFString, &charCountRef) == .success,
            let count = charCountRef as? Int,
@@ -606,7 +570,21 @@ final class DictationCorrectionMonitor {
         return value
     }
 
-    private static func axElementAttribute(_ attribute: String, from element: AXUIElement) -> AXUIElement? {
+    nonisolated private static func elementVisitKey(_ element: AXUIElement) -> String {
+        var pid: pid_t = 0
+        _ = AXUIElementGetPid(element, &pid)
+
+        let role = axStringAttribute(kAXRoleAttribute, from: element)
+        let position = cgPointAttribute(kAXPositionAttribute, from: element)
+        let size = cgSizeAttribute(kAXSizeAttribute, from: element)
+
+        if let position, let size {
+            return "\(pid)|\(role)|\(Int(position.x))|\(Int(position.y))|\(Int(size.width))|\(Int(size.height))"
+        }
+        return "\(pid)|\(role)|\(CFHash(element))"
+    }
+
+    nonisolated private static func axElementAttribute(_ attribute: String, from element: AXUIElement) -> AXUIElement? {
         var valueRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &valueRef) == .success,
               let value = valueRef,
@@ -615,7 +593,7 @@ final class DictationCorrectionMonitor {
         return (value as! AXUIElement)
     }
 
-    private static func axElementArrayAttribute(_ attribute: String, from element: AXUIElement) -> [AXUIElement] {
+    nonisolated private static func axElementArrayAttribute(_ attribute: String, from element: AXUIElement) -> [AXUIElement] {
         var valueRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &valueRef) == .success,
               let value = valueRef
@@ -625,5 +603,39 @@ final class DictationCorrectionMonitor {
             return [value as! AXUIElement]
         }
         return (value as? [AXUIElement]) ?? []
+    }
+
+    nonisolated private static func axStringAttribute(_ attribute: String, from element: AXUIElement) -> String {
+        var valueRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &valueRef) == .success else {
+            return ""
+        }
+        return (valueRef as? String) ?? ""
+    }
+
+    nonisolated private static func cgPointAttribute(_ attribute: String, from element: AXUIElement) -> CGPoint? {
+        var valueRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &valueRef) == .success,
+              let valueRef,
+              CFGetTypeID(valueRef) == AXValueGetTypeID()
+        else { return nil }
+        let value = valueRef as! AXValue
+        guard AXValueGetType(value) == .cgPoint else { return nil }
+        var point = CGPoint.zero
+        guard AXValueGetValue(value, .cgPoint, &point) else { return nil }
+        return point
+    }
+
+    nonisolated private static func cgSizeAttribute(_ attribute: String, from element: AXUIElement) -> CGSize? {
+        var valueRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &valueRef) == .success,
+              let valueRef,
+              CFGetTypeID(valueRef) == AXValueGetTypeID()
+        else { return nil }
+        let value = valueRef as! AXValue
+        guard AXValueGetType(value) == .cgSize else { return nil }
+        var size = CGSize.zero
+        guard AXValueGetValue(value, .cgSize, &size) else { return nil }
+        return size
     }
 }

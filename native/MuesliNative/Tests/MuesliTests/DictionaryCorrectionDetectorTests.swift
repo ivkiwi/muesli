@@ -156,12 +156,12 @@ struct DictionaryCorrectionDetectorTests {
 
 @Suite("Dictionary suggestion config")
 struct DictionarySuggestionConfigTests {
-    @Test("old configs decode with correction prompts enabled")
+    @Test("old configs decode with correction prompts disabled")
     func oldConfigDefaults() throws {
         let data = Data(#"{"custom_words":[]}"#.utf8)
         let config = try JSONDecoder().decode(AppConfig.self, from: data)
 
-        #expect(config.enableDictionaryCorrectionPrompts)
+        #expect(!config.enableDictionaryCorrectionPrompts)
         #expect(config.dictionarySuggestions.isEmpty)
         #expect(config.dismissedDictionarySuggestionKeys.isEmpty)
     }
@@ -172,5 +172,16 @@ struct DictionarySuggestionConfigTests {
             DictionarySuggestion.key(observed: " Museli ", replacement: "Muesli")
                 == DictionarySuggestion.key(observed: "museli", replacement: " muesli ")
         )
+    }
+
+    @Test("suggestion app display name hides bundle identifier")
+    func suggestionAppDisplayName() {
+        let suggestion = DictionarySuggestion(
+            observed: "museli",
+            replacement: "muesli",
+            appContext: "Codex|com.openai.codex"
+        )
+
+        #expect(suggestion.appDisplayName == "Codex")
     }
 }

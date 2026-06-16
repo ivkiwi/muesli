@@ -439,11 +439,13 @@ struct SettingsView: View {
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow(
                     "Dictionary suggestions",
-                    description: "Suggest adding words when you correct dictation output."
+                    description: "Suggest adding words when you correct dictation output. Requires Screen Context."
                 ) {
                     settingsSwitch(isOn: appState.config.enableDictionaryCorrectionPrompts) { newValue in
                         controller.setDictionaryCorrectionPromptsEnabled(newValue)
                     }
+                    .disabled(!appState.config.enableScreenContext)
+                    .help(appState.config.enableScreenContext ? "Suggest corrections after dictation edits." : "Enable Screen Context first.")
                 }
                 if appState.config.enablePostProcessor && !downloadedPostProcOptions.isEmpty {
                     Divider().background(MuesliTheme.surfaceBorder)

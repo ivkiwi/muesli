@@ -49,6 +49,8 @@ struct DictionaryView: View {
                 .toggleStyle(.switch)
                 .font(MuesliTheme.caption())
                 .foregroundStyle(MuesliTheme.textSecondary)
+                .disabled(!appState.config.enableScreenContext)
+                .help(appState.config.enableScreenContext ? "Suggest corrections after dictation edits." : "Enable Screen Context first.")
                 Button {
                     isAdding = true
                     newWord = ""
@@ -269,8 +271,8 @@ private struct DictionarySuggestionRow: View {
 
     private var detailText: String {
         var parts = ["Seen \(suggestion.occurrenceCount)x"]
-        if !suggestion.appContext.isEmpty {
-            parts.append(suggestion.appContext)
+        if !suggestion.appDisplayName.isEmpty {
+            parts.append(suggestion.appDisplayName)
         }
         return parts.joined(separator: " | ")
     }

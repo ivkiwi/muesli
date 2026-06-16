@@ -532,14 +532,14 @@ struct CustomWord: Codable, Equatable, Identifiable {
     }
 }
 
-struct DictionarySuggestion: Codable, Equatable, Identifiable {
+struct DictionarySuggestion: Codable, Equatable, Identifiable, Sendable {
     var id = UUID()
     var observed: String
     var replacement: String
     var appContext: String
     var occurrenceCount: Int = 1
-    var createdAt: String = ISO8601DateFormatter().string(from: Date())
-    var lastSeenAt: String = ISO8601DateFormatter().string(from: Date())
+    var createdAt: String = DictionarySuggestion.timestamp()
+    var lastSeenAt: String = DictionarySuggestion.timestamp()
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -557,8 +557,8 @@ struct DictionarySuggestion: Codable, Equatable, Identifiable {
         replacement: String,
         appContext: String = "",
         occurrenceCount: Int = 1,
-        createdAt: String = ISO8601DateFormatter().string(from: Date()),
-        lastSeenAt: String = ISO8601DateFormatter().string(from: Date())
+        createdAt: String = DictionarySuggestion.timestamp(),
+        lastSeenAt: String = DictionarySuggestion.timestamp()
     ) {
         self.id = id
         self.observed = observed
@@ -577,9 +577,27 @@ struct DictionarySuggestion: Codable, Equatable, Identifiable {
         CustomWord(word: observed, replacement: replacement, matchingThreshold: 0.92)
     }
 
+    var appDisplayName: String {
+        let name = appContext
+            .split(separator: "|", omittingEmptySubsequences: false)
+            .first
+            .map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return name.isEmpty ? appContext : name
+    }
+
     static func key(observed: String, replacement: String) -> String {
         "\(normalize(observed))->\(normalize(replacement))"
     }
+
+    static func timestamp() -> String {
+        iso8601Lock.lock()
+        defer { iso8601Lock.unlock() }
+        return iso8601.string(from: Date())
+    }
+
+    private static let iso8601 = ISO8601DateFormatter()
+    private static let iso8601Lock = NSLock()
 
     private static func normalize(_ value: String) -> String {
         value
@@ -815,7 +833,7 @@ struct AppConfig: Codable {
     ]
     var dictionarySuggestions: [DictionarySuggestion] = []
     var dismissedDictionarySuggestionKeys: [String] = []
-    var enableDictionaryCorrectionPrompts: Bool = true
+    var enableDictionaryCorrectionPrompts: Bool = false
     var folderOrder: [Int64] = []
     var soundEnabled: Bool = true
     var pauseMediaDuringDictation: Bool = false

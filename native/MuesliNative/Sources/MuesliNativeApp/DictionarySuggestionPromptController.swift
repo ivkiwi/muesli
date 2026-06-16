@@ -11,7 +11,6 @@ final class DictionarySuggestionPromptController {
     private var dismissDeadline: Date?
     private var remainingDismissDuration: TimeInterval = 0
     private var isDismissPaused = false
-    private var onAutoDismiss: (() -> Void)?
 
     func show(
         suggestion: DictionarySuggestion,
@@ -139,7 +138,7 @@ final class DictionarySuggestionPromptController {
         dismissTimer?.invalidate()
         dismissDeadline = Date().addingTimeInterval(duration)
         dismissTimer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) { [weak self] _ in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self?.dismiss()
             }
         }
@@ -205,7 +204,7 @@ final class DictionarySuggestionPromptController {
 
 @MainActor
 private final class DictionarySuggestionPanel: NSPanel {
-    override var canBecomeKey: Bool { true }
+    override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 }
 
