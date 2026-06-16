@@ -4,6 +4,8 @@ import Foundation
 /// Native Swift transcription backend for FunASR's SenseVoiceSmall via FluidAudio.
 actor SenseVoiceTranscriber {
     private var manager: SenseVoiceManager?
+    private var isLoading = false
+    private var hasCompletedWarmup = false
     private static let precision: SenseVoiceEncoderPrecision = .int8
 
     enum TranscriberError: Error, LocalizedError {
@@ -19,13 +21,21 @@ actor SenseVoiceTranscriber {
 
     /// Downloads models if needed and initializes the SenseVoice manager.
     func loadModels(progress: ((Double, String?) -> Void)? = nil) async throws {
+        while isLoading {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            if manager != nil { return }
+        }
         if manager != nil { return }
+
+        isLoading = true
+        defer { isLoading = false }
 
         fputs("[sensevoice] downloading/loading models...\n", stderr)
         let modelDirectory = try await Self.downloadRequiredModels(progress: progress)
         progress?(0.95, "Loading SenseVoice...")
         let models = try SenseVoiceModels.load(from: modelDirectory, precision: Self.precision)
         self.manager = SenseVoiceManager(models: models)
+        await warmupIfNeeded(progress: progress)
         progress?(1.0, nil)
         fputs("[sensevoice] models ready\n", stderr)
     }
@@ -40,6 +50,7 @@ actor SenseVoiceTranscriber {
 
     func shutdown() {
         manager = nil
+        hasCompletedWarmup = false
     }
 
     static let cacheRelativePath = "Library/Application Support/FluidAudio/Models/sensevoice-small-coreml"
@@ -61,7 +72,6 @@ actor SenseVoiceTranscriber {
     private static func downloadRequiredModels(progress: ((Double, String?) -> Void)?) async throws -> URL {
         let directory = cacheDirectory()
         if SenseVoiceModels.modelsExist(at: directory, precision: precision) {
-            progress?(1.0, nil)
             return directory
         }
 
@@ -126,5 +136,20 @@ actor SenseVoiceTranscriber {
         )
         try data.write(to: vocabularyURL, options: .atomic)
         progress?(0.95, "SenseVoice vocabulary ready...")
+    }
+
+    private func warmupIfNeeded(progress: ((Double, String?) -> Void)?) async {
+        guard !hasCompletedWarmup, let manager else { return }
+
+        progress?(0.98, "Warming up SenseVoice...")
+        fputs("[sensevoice] warmup: running silent audio for CoreML compilation...\n", stderr)
+        do {
+            let silence = [Float](repeating: 0, count: 16_000)
+            _ = try await manager.transcribe(audio: silence)
+            hasCompletedWarmup = true
+            fputs("[sensevoice] warmup complete\n", stderr)
+        } catch {
+            fputs("[sensevoice] warmup failed: \(error)\n", stderr)
+        }
     }
 }
