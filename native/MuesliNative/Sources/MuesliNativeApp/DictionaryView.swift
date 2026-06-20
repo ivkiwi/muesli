@@ -6,6 +6,7 @@ private enum DictionaryRowMetrics {
     static let thresholdWidth: CGFloat = 76
     static let actionButtonSize: CGFloat = 24
     static let actionsWidth: CGFloat = actionButtonSize * 2 + MuesliTheme.spacing8
+    static let suggestionPageSize = 10
 }
 
 struct DictionaryView: View {
@@ -17,6 +18,7 @@ struct DictionaryView: View {
     @State private var newReplacement = ""
     @State private var newThreshold = 0.85
     @State private var isShowingScreenContextPrompt = false
+    @State private var suggestionPage = 0
 
     var body: some View {
         ScrollView {
@@ -120,9 +122,13 @@ struct DictionaryView: View {
 
             Divider().background(MuesliTheme.surfaceBorder)
 
-            ForEach(appState.config.dictionarySuggestions) { suggestion in
+            ForEach(visibleDictionarySuggestions) { suggestion in
                 DictionarySuggestionRow(suggestion: suggestion, controller: controller)
                 Divider().background(MuesliTheme.surfaceBorder)
+            }
+
+            if suggestionPageCount > 1 {
+                suggestionPaginationControls
             }
         }
         .background(MuesliTheme.backgroundRaised)
@@ -131,6 +137,62 @@ struct DictionaryView: View {
             RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
+    }
+
+    private var visibleDictionarySuggestions: [DictionarySuggestion] {
+        let suggestions = appState.config.dictionarySuggestions
+        guard !suggestions.isEmpty else { return [] }
+        let startIndex = boundedSuggestionPage * DictionaryRowMetrics.suggestionPageSize
+        let endIndex = min(startIndex + DictionaryRowMetrics.suggestionPageSize, suggestions.count)
+        return Array(suggestions[startIndex..<endIndex])
+    }
+
+    private var suggestionPageCount: Int {
+        let count = appState.config.dictionarySuggestions.count
+        guard count > 0 else { return 0 }
+        return (count + DictionaryRowMetrics.suggestionPageSize - 1) / DictionaryRowMetrics.suggestionPageSize
+    }
+
+    private var boundedSuggestionPage: Int {
+        min(max(suggestionPage, 0), max(suggestionPageCount - 1, 0))
+    }
+
+    private var suggestionRangeText: String {
+        let count = appState.config.dictionarySuggestions.count
+        guard count > 0 else { return "" }
+        let start = boundedSuggestionPage * DictionaryRowMetrics.suggestionPageSize + 1
+        let end = min(start + DictionaryRowMetrics.suggestionPageSize - 1, count)
+        return "\(start)-\(end) of \(count)"
+    }
+
+    private var suggestionPaginationControls: some View {
+        HStack(spacing: MuesliTheme.spacing8) {
+            Text(suggestionRangeText)
+                .font(MuesliTheme.caption())
+                .foregroundStyle(MuesliTheme.textTertiary)
+
+            Spacer()
+
+            DictionaryIconButton(
+                systemName: "chevron.left",
+                label: "Previous suggestions",
+                tint: MuesliTheme.textSecondary,
+                isDisabled: boundedSuggestionPage == 0
+            ) {
+                suggestionPage = max(boundedSuggestionPage - 1, 0)
+            }
+
+            DictionaryIconButton(
+                systemName: "chevron.right",
+                label: "Next suggestions",
+                tint: MuesliTheme.textSecondary,
+                isDisabled: boundedSuggestionPage >= suggestionPageCount - 1
+            ) {
+                suggestionPage = min(boundedSuggestionPage + 1, max(suggestionPageCount - 1, 0))
+            }
+        }
+        .padding(.horizontal, MuesliTheme.spacing16)
+        .padding(.vertical, MuesliTheme.spacing8)
     }
 
     private var wordList: some View {
