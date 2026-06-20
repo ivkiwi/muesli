@@ -1,4 +1,6 @@
+import AppKit
 import SwiftUI
+import TelemetryDeck
 import MuesliCore
 
 enum DictationFilter: Hashable {
@@ -20,6 +22,7 @@ struct DictationsView: View {
     let appState: AppState
     let controller: MuesliController
     @State private var selectedFilter: DictationFilter = .all
+    @State private var bridgePromptSeen = false
 
     private var groupedDictations: [(header: String, records: [DictationRecord])] {
         let calendar = Calendar.current
@@ -73,6 +76,12 @@ struct DictationsView: View {
                 dictationStats: appState.dictationStats,
                 meetingStats: appState.meetingStats
             )
+
+            if appState.config.showIOSCompanionPrompt {
+                iPhoneBridgeCard
+                    .padding(.horizontal, MuesliTheme.spacing24)
+                    .padding(.bottom, MuesliTheme.spacing12)
+            }
 
             if appState.config.resolvedOnboardingUseCase.includesVoiceNotes {
                 HStack {
@@ -169,6 +178,205 @@ struct DictationsView: View {
                 }
             }
         }
+    }
+
+    private var bridgeState: ICloudBridgeState {
+        appState.iCloudBridgeState
+    }
+
+    private var iPhoneBridgeCard: some View {
+        HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
+            BridgeSyncIcon(
+                systemName: bridgeIcon,
+                isAnimating: bridgeSyncIconIsAnimating,
+                font: .system(size: 18, weight: .semibold)
+            )
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(bridgeIconColor)
+                .frame(width: 28)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(bridgeTitle)
+                    .font(MuesliTheme.body())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                Text(bridgeSubtitle)
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: MuesliTheme.spacing12)
+
+            Button {
+                bridgePrimaryAction()
+            } label: {
+                HStack(spacing: 6) {
+                    Text(bridgeButtonTitle)
+                    BridgeSyncIcon(
+                        systemName: bridgeButtonIcon,
+                        isAnimating: bridgeButtonIconIsAnimating,
+                        font: .system(size: 12, weight: .semibold)
+                    )
+                }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .frame(height: 28)
+                    .background(MuesliTheme.accent)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            }
+            .buttonStyle(.plain)
+            .disabled(bridgeActionDisabled)
+            .help(bridgeButtonHelp)
+
+            Button {
+                controller.updateConfig { $0.showIOSCompanionPrompt = false }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                    .frame(width: 28, height: 28)
+                    .background(MuesliTheme.surfacePrimary)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            }
+            .buttonStyle(.plain)
+            .help("Hide iOS companion prompt")
+        }
+        .padding(MuesliTheme.spacing12)
+        .background(MuesliTheme.backgroundRaised)
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .overlay(
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+        )
+        .onAppear {
+            guard !bridgePromptSeen else { return }
+            bridgePromptSeen = true
+            TelemetryDeck.signal("bridge_prompt_seen", parameters: ["platform": "macos"])
+        }
+    }
+
+    private var bridgeSyncIconIsAnimating: Bool {
+        isBridgeSyncWorking && bridgeIcon == "arrow.triangle.2.circlepath"
+    }
+
+    private var bridgeButtonIconIsAnimating: Bool {
+        isBridgeSyncWorking && bridgeButtonIcon == "arrow.triangle.2.circlepath"
+    }
+
+    private var isBridgeSyncWorking: Bool {
+        bridgeState == .checkingICloud || bridgeState == .syncing
+    }
+
+    private var bridgeIcon: String {
+        switch bridgeState {
+        case .active:
+            return "checkmark.icloud"
+        case .checkingICloud, .syncing:
+            return "arrow.triangle.2.circlepath"
+        case .needsICloud, .error:
+            return "exclamationmark.icloud"
+        case .notConfigured:
+            return "iphone.gen3"
+        }
+    }
+
+    private var bridgeIconColor: Color {
+        switch bridgeState {
+        case .active:
+            return MuesliTheme.success
+        case .needsICloud, .error:
+            return MuesliTheme.transcribing
+        default:
+            return MuesliTheme.accent
+        }
+    }
+
+    private var bridgeTitle: String {
+        switch bridgeState {
+        case .active:
+            return "Synced with iPhone"
+        case .checkingICloud, .syncing:
+            return "Setting up private iCloud sync"
+        case .needsICloud:
+            return "Sign in to iCloud to sync"
+        case .error:
+            return "iPhone sync needs attention"
+        case .notConfigured:
+            return "Use Muesli on iPhone"
+        }
+    }
+
+    private var bridgeSubtitle: String {
+        switch bridgeState {
+        case .active:
+            if let lastSyncedAt = appState.iCloudLastSyncedAt {
+                return "Private text sync is on · \(relativeSyncTime(lastSyncedAt))"
+            }
+            return "Private iCloud text sync is on. Audio stays local."
+        case .checkingICloud:
+            return "Checking this Mac's iCloud account..."
+        case .syncing:
+            return "Creating the sync channel and pulling your latest text records."
+        case .needsICloud, .error:
+            return appState.iCloudBridgeMessage ?? "Open iCloud settings, then try again."
+        case .notConfigured:
+            return "Your Muesli history follows you through private iCloud. Audio stays local."
+        }
+    }
+
+    private var bridgeButtonTitle: String {
+        switch bridgeState {
+        case .active:
+            return "Sync"
+        case .checkingICloud, .syncing:
+            return "Syncing"
+        case .needsICloud, .error:
+            return "Try again"
+        case .notConfigured:
+            return "Set up private iCloud sync"
+        }
+    }
+
+    private var bridgeButtonIcon: String {
+        switch bridgeState {
+        case .notConfigured:
+            return "icloud"
+        default:
+            return "arrow.triangle.2.circlepath"
+        }
+    }
+
+    private var bridgeActionDisabled: Bool {
+        bridgeState == .checkingICloud || bridgeState == .syncing
+    }
+
+    private var bridgeButtonHelp: String {
+        switch bridgeState {
+        case .active:
+            return "Sync text with iCloud"
+        case .checkingICloud, .syncing:
+            return "Sync setup is in progress"
+        default:
+            return "Set up private iCloud text sync"
+        }
+    }
+
+    private func bridgePrimaryAction() {
+        switch bridgeState {
+        case .active:
+            controller.performICloudSync()
+        case .checkingICloud, .syncing:
+            break
+        default:
+            controller.enableIPhoneBridgeSync()
+        }
+    }
+
+    private func relativeSyncTime(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 
     private var emptyStateInstruction: String {
@@ -323,6 +531,44 @@ struct DictationsView: View {
             return clean.count > 5 ? String(clean.suffix(8).prefix(5)) : clean
         }
         return Self.timeFormatter.string(from: date)
+    }
+}
+
+private struct BridgeSyncIcon: View {
+    let systemName: String
+    let isAnimating: Bool
+    let font: Font
+    @State private var rotationDegrees = 0.0
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(font)
+            .symbolRenderingMode(.hierarchical)
+            .rotationEffect(.degrees(rotationDegrees))
+            .onAppear {
+                updateRotation(animated: false)
+            }
+            .onChange(of: isAnimating) { _, _ in
+                updateRotation(animated: true)
+            }
+    }
+
+    private func updateRotation(animated: Bool) {
+        guard isAnimating else {
+            if animated {
+                withAnimation(.easeOut(duration: 0.15)) {
+                    rotationDegrees = 0
+                }
+            } else {
+                rotationDegrees = 0
+            }
+            return
+        }
+
+        rotationDegrees = 0
+        withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) {
+            rotationDegrees = 360
+        }
     }
 }
 
