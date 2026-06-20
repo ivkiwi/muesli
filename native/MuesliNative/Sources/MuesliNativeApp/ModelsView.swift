@@ -562,6 +562,7 @@ struct ModelsView: View {
         case "qwen": return "qwen-logo"
         case "nemotron": return "nvidia-logo"
         case "canary": return "qwen-logo"
+        case "sensevoice": return "qwen-logo"
         default: return nil
         }
     }
