@@ -929,14 +929,7 @@ final class MuesliController: NSObject {
             enableICloudPersistentSync()
             scheduleICloudSync(delay: 0.2, userInitiated: false)
         } else if wasICloudSyncEnabled && !config.iCloudSyncEnabled {
-            cancelActiveICloudSyncTask()
-            iCloudSyncDebounceTask?.cancel()
-            iCloudSyncDebounceTask = nil
-            iCloudSubscriptionTask?.cancel()
-            iCloudSubscriptionTask = nil
-            bridgeActivationPending = false
-            appState.isICloudBridgeActivationPending = false
-            appState.iCloudSyncStatus = "iCloud sync is off."
+            disableICloudSyncRuntimeState()
         }
     }
 
@@ -947,8 +940,10 @@ final class MuesliController: NSObject {
     func setICloudSyncEnabledFromSettings(_ enabled: Bool) {
         if enabled {
             enableIPhoneBridgeSync()
-        } else {
+        } else if config.iCloudSyncEnabled {
             updateConfig { $0.iCloudSyncEnabled = false }
+        } else {
+            disableICloudSyncRuntimeState()
         }
     }
 
@@ -1182,6 +1177,17 @@ final class MuesliController: NSObject {
             bridgeActivationPending = false
             appState.isICloudBridgeActivationPending = false
         }
+    }
+
+    private func disableICloudSyncRuntimeState() {
+        cancelActiveICloudSyncTask()
+        iCloudSyncDebounceTask?.cancel()
+        iCloudSyncDebounceTask = nil
+        iCloudSubscriptionTask?.cancel()
+        iCloudSubscriptionTask = nil
+        bridgeActivationPending = false
+        appState.isICloudBridgeActivationPending = false
+        appState.iCloudSyncStatus = "iCloud sync is off."
     }
 
     private func resetICloudSubscriptionState() {
