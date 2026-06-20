@@ -1990,7 +1990,7 @@ public final class DictationStore {
             cloud_change_tag = excluded.cloud_change_tag,
             last_synced_at = excluded.last_synced_at,
             sync_dirty = 0
-        WHERE excluded.updated_at >= dictations.updated_at
+        WHERE excluded.updated_at > dictations.updated_at
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
@@ -2050,7 +2050,7 @@ public final class DictationStore {
             cloud_change_tag = excluded.cloud_change_tag,
             last_synced_at = excluded.last_synced_at,
             sync_dirty = 0
-        WHERE excluded.updated_at >= meetings.updated_at
+        WHERE excluded.updated_at > meetings.updated_at
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {

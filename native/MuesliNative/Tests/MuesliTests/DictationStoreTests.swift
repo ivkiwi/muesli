@@ -45,6 +45,71 @@ struct DictationStoreTests {
         return DictationStore(databaseURL: url)
     }
 
+    private func sqliteTestError(_ message: String) -> NSError {
+        NSError(domain: "DictationStoreTests", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+
+    private func setDictationDirtyText(
+        recordName: String,
+        text: String,
+        updatedAt: Date,
+        store: DictationStore
+    ) throws {
+        var db: OpaquePointer?
+        guard sqlite3_open(store.databasePath().path, &db) == SQLITE_OK else {
+            throw sqliteTestError("failed to open test database")
+        }
+        defer { sqlite3_close(db) }
+
+        let sql = """
+        UPDATE dictations
+        SET raw_text = ?, word_count = ?, updated_at = ?, sync_dirty = 1
+        WHERE cloud_record_name = ?
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw sqliteTestError("failed to prepare dictation update")
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, (text as NSString).utf8String, -1, nil)
+        sqlite3_bind_int(statement, 2, Int32(DictationStore.countWords(in: text)))
+        sqlite3_bind_double(statement, 3, updatedAt.timeIntervalSince1970)
+        sqlite3_bind_text(statement, 4, (recordName as NSString).utf8String, -1, nil)
+        guard sqlite3_step(statement) == SQLITE_DONE, sqlite3_changes(db) == 1 else {
+            throw sqliteTestError("failed to dirty dictation row")
+        }
+    }
+
+    private func setMeetingDirtyTitle(
+        recordName: String,
+        title: String,
+        updatedAt: Date,
+        store: DictationStore
+    ) throws {
+        var db: OpaquePointer?
+        guard sqlite3_open(store.databasePath().path, &db) == SQLITE_OK else {
+            throw sqliteTestError("failed to open test database")
+        }
+        defer { sqlite3_close(db) }
+
+        let sql = """
+        UPDATE meetings
+        SET title = ?, updated_at = ?, sync_dirty = 1
+        WHERE cloud_record_name = ?
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw sqliteTestError("failed to prepare meeting update")
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, (title as NSString).utf8String, -1, nil)
+        sqlite3_bind_double(statement, 2, updatedAt.timeIntervalSince1970)
+        sqlite3_bind_text(statement, 3, (recordName as NSString).utf8String, -1, nil)
+        guard sqlite3_step(statement) == SQLITE_DONE, sqlite3_changes(db) == 1 else {
+            throw sqliteTestError("failed to dirty meeting row")
+        }
+    }
+
     @Test("migration creates tables without error")
     func migration() throws {
         let store = try makeStore()
@@ -188,6 +253,49 @@ struct DictationStoreTests {
         let row = try #require(try store.recentDictations(limit: 1).first)
         #expect(row.rawText == "Newer local text")
         #expect(try store.textRecordsNeedingSync().isEmpty)
+    }
+
+    @Test("same timestamp synced dictation preserves dirty local edit")
+    func sameTimestampSyncedDictationPreservesDirtyLocalEdit() throws {
+        let store = try makeStore()
+        let timestamp = Date(timeIntervalSince1970: 1_770_000_000)
+
+        #expect(try store.upsertSyncedTextRecord(SyncTextRecord(
+            id: "dictation-ios-tie",
+            kind: .dictation,
+            text: "Original cloud text",
+            source: "ios",
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            durationSeconds: 2,
+            wordCount: 3,
+            cloudChangeTag: "tag-original"
+        )))
+
+        try setDictationDirtyText(
+            recordName: "dictation-ios-tie",
+            text: "Local edit with tied timestamp",
+            updatedAt: timestamp,
+            store: store
+        )
+
+        let applied = try store.upsertSyncedTextRecord(SyncTextRecord(
+            id: "dictation-ios-tie",
+            kind: .dictation,
+            text: "Remote tied text",
+            source: "ios",
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            durationSeconds: 2,
+            wordCount: 3,
+            cloudChangeTag: "tag-tied"
+        ))
+
+        #expect(applied == false)
+        let row = try #require(try store.recentDictations(limit: 1).first)
+        #expect(row.rawText == "Local edit with tied timestamp")
+        let dirty = try #require(try store.textRecordsNeedingSync().first { $0.id == "dictation-ios-tie" })
+        #expect(dirty.text == "Local edit with tied timestamp")
     }
 
     @Test("local Mac dictation sync record uses macOS source")
@@ -342,6 +450,59 @@ struct DictationStoreTests {
         let meeting = try #require(try store.recentMeetings(limit: 1).first)
         #expect(meeting.source == .meeting)
         #expect(try store.textRecordsNeedingSync().isEmpty)
+    }
+
+    @Test("same timestamp synced meeting preserves dirty local edit")
+    func sameTimestampSyncedMeetingPreservesDirtyLocalEdit() throws {
+        let store = try makeStore()
+        let timestamp = Date(timeIntervalSince1970: 1_770_000_000)
+
+        #expect(try store.upsertSyncedTextRecord(SyncTextRecord(
+            id: "meeting-ios-tie",
+            kind: .meeting,
+            title: "Original meeting",
+            text: "Original transcript",
+            summaryText: "Original notes",
+            source: "ios",
+            meetingStatus: .completed,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            startedAt: timestamp,
+            endedAt: timestamp.addingTimeInterval(60),
+            durationSeconds: 60,
+            wordCount: 2,
+            cloudChangeTag: "tag-original"
+        )))
+
+        try setMeetingDirtyTitle(
+            recordName: "meeting-ios-tie",
+            title: "Local meeting title",
+            updatedAt: timestamp,
+            store: store
+        )
+
+        let applied = try store.upsertSyncedTextRecord(SyncTextRecord(
+            id: "meeting-ios-tie",
+            kind: .meeting,
+            title: "Remote tied meeting",
+            text: "Remote transcript",
+            summaryText: "Remote notes",
+            source: "ios",
+            meetingStatus: .completed,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            startedAt: timestamp,
+            endedAt: timestamp.addingTimeInterval(60),
+            durationSeconds: 60,
+            wordCount: 2,
+            cloudChangeTag: "tag-tied"
+        ))
+
+        #expect(applied == false)
+        let row = try #require(try store.recentMeetings(limit: 1).first)
+        #expect(row.title == "Local meeting title")
+        let dirty = try #require(try store.textRecordsNeedingSync().first { $0.id == "meeting-ios-tie" })
+        #expect(dirty.title == "Local meeting title")
     }
 
     @Test("deleted unsynced local text records are not uploaded")
