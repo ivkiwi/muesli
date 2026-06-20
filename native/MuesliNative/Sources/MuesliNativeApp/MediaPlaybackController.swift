@@ -30,14 +30,22 @@ enum MediaPlaybackState: Equatable, CustomStringConvertible {
 protocol MediaPlaybackClient {
     /// Whether the current now-playing application is actually producing audio.
     /// `.unknown` is returned when the signal cannot be obtained.
-    func nowPlayingPlaybackState() -> MediaPlaybackState
+    func nowPlayingPlaybackState(completion: @escaping (MediaPlaybackState) -> Void)
     func sendMediaPlayPauseToggle()
 }
 
 final class MediaPlaybackController: MediaPlaybackManaging {
+    private enum PauseState: Equatable {
+        case idle
+        case checkingBegin(Int)
+        case paused
+        case checkingRestore(Int)
+    }
+
     private let client: MediaPlaybackClient
     private let queue: DispatchQueue
-    private var pausedForSession = false
+    private var pauseState: PauseState = .idle
+    private var generation = 0
 
     init(
         client: MediaPlaybackClient = SystemMediaPlaybackClient(),
@@ -48,48 +56,86 @@ final class MediaPlaybackController: MediaPlaybackManaging {
     }
 
     func beginDictationMediaPause(enabled: Bool, routeKind: AudioOutputRouteKind) {
-        queue.sync { [self] in
+        queue.async { [self] in
             guard enabled else { return }
-            guard !pausedForSession else { return }
             guard routeKind == .speakerLike else { return }
-            // The media key is a blind global toggle: sending it to already-
-            // paused media would *start* playback. Only pause when we can
-            // positively confirm something is actually playing. IsRunningOutput
-            // cannot be used here because it stays true for paused media
-            // (browsers/video players keep their audio engine alive while
-            // paused), so an unknown state must also be a no-op.
-            guard client.nowPlayingPlaybackState() == .playing else { return }
-            client.sendMediaPlayPauseToggle()
-            pausedForSession = true
+            switch pauseState {
+            case .idle:
+                generation += 1
+                let token = generation
+                pauseState = .checkingBegin(token)
+                client.nowPlayingPlaybackState { [weak self] playbackState in
+                    self?.queue.async {
+                        self?.handleBeginPlaybackState(playbackState, token: token)
+                    }
+                }
+            case .checkingRestore:
+                // A new dictation began before the previous restore query
+                // completed. Keep the media paused and let this new session own
+                // the eventual restore instead of briefly resuming playback.
+                pauseState = .paused
+            case .checkingBegin, .paused:
+                return
+            }
         }
     }
 
     func restoreDictationMediaPause() {
         queue.async { [self] in
-            guard pausedForSession else { return }
-            pausedForSession = false
-            // We only paused media we confirmed was playing, so resume it. Do
-            // not gate on IsRunningOutput here: a paused video still reports
-            // its audio engine as running, which would block the resume and
-            // strand playback. Only skip the resume when something is actively
-            // playing again (the user resumed/started playback) so we do not
-            // pause it. When state is unknown, prefer restoring media we know
-            // Muesli paused over leaving playback stranded.
-            guard client.nowPlayingPlaybackState() != .playing else { return }
-            client.sendMediaPlayPauseToggle()
+            switch pauseState {
+            case .checkingBegin:
+                // The user released before we confirmed active playback. Cancel
+                // the pending pause so a late callback cannot start media.
+                pauseState = .idle
+            case .paused:
+                generation += 1
+                let token = generation
+                pauseState = .checkingRestore(token)
+                client.nowPlayingPlaybackState { [weak self] playbackState in
+                    self?.queue.async {
+                        self?.handleRestorePlaybackState(playbackState, token: token)
+                    }
+                }
+            case .idle, .checkingRestore:
+                return
+            }
         }
     }
 
     func waitForIdle() {
         queue.sync {}
+        queue.sync {}
+    }
+
+    private func handleBeginPlaybackState(_ playbackState: MediaPlaybackState, token: Int) {
+        guard pauseState == .checkingBegin(token) else { return }
+        // The media key is a blind global toggle: sending it to already-paused
+        // media would start playback. Only pause when we can positively confirm
+        // something is actually playing. Unknown is also a no-op.
+        guard playbackState == .playing else {
+            pauseState = .idle
+            return
+        }
+        client.sendMediaPlayPauseToggle()
+        pauseState = .paused
+    }
+
+    private func handleRestorePlaybackState(_ playbackState: MediaPlaybackState, token: Int) {
+        guard pauseState == .checkingRestore(token) else { return }
+        pauseState = .idle
+        // We only paused media we confirmed was playing, so resume it unless
+        // something is actively playing again. Unknown still restores to avoid
+        // leaving media stranded after Muesli paused it.
+        guard playbackState != .playing else { return }
+        client.sendMediaPlayPauseToggle()
     }
 }
 
 final class SystemMediaPlaybackClient: MediaPlaybackClient {
     private let nowPlaying = NowPlayingMediaRemoteClient()
 
-    func nowPlayingPlaybackState() -> MediaPlaybackState {
-        nowPlaying.playbackState()
+    func nowPlayingPlaybackState(completion: @escaping (MediaPlaybackState) -> Void) {
+        nowPlaying.playbackState(completion: completion)
     }
 
     func sendMediaPlayPauseToggle() {
@@ -124,17 +170,16 @@ final class SystemMediaPlaybackClient: MediaPlaybackClient {
 /// playing — the signal that `kAudioProcessPropertyIsRunningOutput` cannot
 /// provide (an app's audio engine stays running while media is paused).
 ///
-/// The query is asynchronous (MediaRemote delivers the result on a dispatch
-/// queue), so it is turned into a synchronous call with a short timeout. The
-/// private symbols have been stable across macOS releases for many years; if
-/// the framework or symbol is unavailable we conservatively report `.unknown`
-/// and the caller treats that as "do not toggle".
+/// MediaRemote replies asynchronously. Results are delivered through
+/// `DispatchQueue.main` because the XPC-backed callback path is more reliable
+/// on a queue with a run loop, and timeout fallback is also asynchronous so
+/// dictation start is never blocked on media state detection.
 private final class NowPlayingMediaRemoteClient {
     private typealias MRNowPlayingIsPlayingHandler = @convention(block) (Bool) -> Void
     private typealias MRGetNowPlayingIsPlayingFn =
         @convention(c) (DispatchQueue, MRNowPlayingIsPlayingHandler) -> Void
 
-    private let callbackQueue = DispatchQueue(label: "com.muesli.media-playback.now-playing")
+    private let timeoutQueue = DispatchQueue(label: "com.muesli.media-playback.now-playing-timeout")
     private let queryTimeout: DispatchTimeInterval
     private let isPlayingFn: MRGetNowPlayingIsPlayingFn?
 
@@ -153,20 +198,29 @@ private final class NowPlayingMediaRemoteClient {
         self.isPlayingFn = unsafeBitCast(symbol, to: MRGetNowPlayingIsPlayingFn.self)
     }
 
-    func playbackState() -> MediaPlaybackState {
-        guard let isPlayingFn else { return .unknown }
-        let semaphore = DispatchSemaphore(value: 0)
-        var didCall = false
-        var isPlaying = false
+    func playbackState(completion: @escaping (MediaPlaybackState) -> Void) {
+        guard let isPlayingFn else {
+            completion(.unknown)
+            return
+        }
+        let lock = NSLock()
+        var completed = false
+        let finish: (MediaPlaybackState) -> Void = { state in
+            lock.lock()
+            guard !completed else {
+                lock.unlock()
+                return
+            }
+            completed = true
+            lock.unlock()
+            completion(state)
+        }
         let handler: MRNowPlayingIsPlayingHandler = { value in
-            isPlaying = value
-            didCall = true
-            semaphore.signal()
+            finish(value ? .playing : .notPlaying)
         }
-        isPlayingFn(callbackQueue, handler)
-        if semaphore.wait(timeout: .now() + queryTimeout) == .timedOut {
-            return .unknown
+        isPlayingFn(DispatchQueue.main, handler)
+        timeoutQueue.asyncAfter(deadline: .now() + queryTimeout) {
+            finish(.unknown)
         }
-        return didCall ? (isPlaying ? .playing : .notPlaying) : .unknown
     }
 }

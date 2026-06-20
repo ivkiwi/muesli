@@ -76,6 +76,45 @@ struct MediaPlaybackControllerTests {
         #expect(client.toggleCalls == 2)
     }
 
+    @Test("begin does not block while playback state is pending")
+    func beginDoesNotBlockWhilePlaybackStateIsPending() {
+        let client = FakeMediaPlaybackClient(playbackState: .playing, completesImmediately: false)
+        let controller = makeController(client: client)
+
+        controller.beginDictationMediaPause(enabled: true, routeKind: .speakerLike)
+        controller.waitForIdle()
+
+        #expect(client.pendingQueryCount == 1)
+        #expect(client.toggleCalls == 0)
+
+        client.completeNext(with: .playing)
+        controller.waitForIdle()
+
+        #expect(client.toggleCalls == 1)
+    }
+
+    @Test("restore does not block while playback state is pending")
+    func restoreDoesNotBlockWhilePlaybackStateIsPending() {
+        let client = FakeMediaPlaybackClient(playbackState: .playing)
+        let controller = makeController(client: client)
+
+        controller.beginDictationMediaPause(enabled: true, routeKind: .speakerLike)
+        controller.waitForIdle()
+        #expect(client.toggleCalls == 1)
+
+        client.completesImmediately = false
+        controller.restoreDictationMediaPause()
+        controller.waitForIdle()
+
+        #expect(client.pendingQueryCount == 1)
+        #expect(client.toggleCalls == 1)
+
+        client.completeNext(with: .notPlaying)
+        controller.waitForIdle()
+
+        #expect(client.toggleCalls == 2)
+    }
+
     @Test("restore does not toggle if user already resumed playback")
     func restoreDoesNotToggleResumedPlayback() {
         let client = FakeMediaPlaybackClient(playbackState: .playing)
@@ -105,6 +144,53 @@ struct MediaPlaybackControllerTests {
         #expect(client.toggleCalls == 2)
     }
 
+    @Test("release before playback query completes does not toggle")
+    func releaseBeforePlaybackQueryCompletesDoesNotToggle() {
+        let client = FakeMediaPlaybackClient(playbackState: .playing, completesImmediately: false)
+        let controller = makeController(client: client)
+
+        controller.beginDictationMediaPause(enabled: true, routeKind: .speakerLike)
+        controller.restoreDictationMediaPause()
+        controller.waitForIdle()
+
+        client.completeNext(with: .playing)
+        controller.waitForIdle()
+
+        #expect(client.toggleCalls == 0)
+    }
+
+    @Test("new begin during restore keeps media paused for next session")
+    func newBeginDuringRestoreKeepsMediaPausedForNextSession() {
+        let client = FakeMediaPlaybackClient(playbackState: .playing)
+        let controller = makeController(client: client)
+
+        controller.beginDictationMediaPause(enabled: true, routeKind: .speakerLike)
+        controller.waitForIdle()
+        #expect(client.toggleCalls == 1)
+
+        client.completesImmediately = false
+        controller.restoreDictationMediaPause()
+        controller.waitForIdle()
+        #expect(client.pendingQueryCount == 1)
+
+        controller.beginDictationMediaPause(enabled: true, routeKind: .speakerLike)
+        controller.waitForIdle()
+
+        client.completeNext(with: .notPlaying)
+        controller.waitForIdle()
+
+        #expect(client.toggleCalls == 1)
+
+        controller.restoreDictationMediaPause()
+        controller.waitForIdle()
+        #expect(client.pendingQueryCount == 1)
+
+        client.completeNext(with: .notPlaying)
+        controller.waitForIdle()
+
+        #expect(client.toggleCalls == 2)
+    }
+
     @Test("duplicate begin only pauses once")
     func duplicateBeginOnlyPausesOnce() {
         let client = FakeMediaPlaybackClient(playbackState: .playing)
@@ -127,17 +213,33 @@ struct MediaPlaybackControllerTests {
 
 private final class FakeMediaPlaybackClient: MediaPlaybackClient {
     var playbackState: MediaPlaybackState
+    var completesImmediately: Bool
     var toggleCalls = 0
+    private var pendingCompletions: [(MediaPlaybackState) -> Void] = []
 
-    init(playbackState: MediaPlaybackState) {
+    init(playbackState: MediaPlaybackState, completesImmediately: Bool = true) {
         self.playbackState = playbackState
+        self.completesImmediately = completesImmediately
     }
 
-    func nowPlayingPlaybackState() -> MediaPlaybackState {
-        playbackState
+    var pendingQueryCount: Int {
+        pendingCompletions.count
+    }
+
+    func nowPlayingPlaybackState(completion: @escaping (MediaPlaybackState) -> Void) {
+        guard completesImmediately else {
+            pendingCompletions.append(completion)
+            return
+        }
+        completion(playbackState)
     }
 
     func sendMediaPlayPauseToggle() {
         toggleCalls += 1
+    }
+
+    func completeNext(with playbackState: MediaPlaybackState) {
+        let completion = pendingCompletions.removeFirst()
+        completion(playbackState)
     }
 }
