@@ -17,6 +17,7 @@ public enum DictationStoreError: Error, LocalizedError {
 
 public final class DictationStore {
     private static let iso8601Formatter = ISO8601DateFormatter()
+    private static let iso8601FormatterLock = NSLock()
 
     private let databaseURL: URL
     private static let dictationColumns = """
@@ -2070,11 +2071,15 @@ public final class DictationStore {
     }
 
     private func parseISODate(_ value: String) -> Date? {
-        Self.iso8601Formatter.date(from: value)
+        Self.iso8601FormatterLock.lock()
+        defer { Self.iso8601FormatterLock.unlock() }
+        return Self.iso8601Formatter.date(from: value)
     }
 
     private func formatISODate(_ date: Date) -> String {
-        Self.iso8601Formatter.string(from: date)
+        Self.iso8601FormatterLock.lock()
+        defer { Self.iso8601FormatterLock.unlock() }
+        return Self.iso8601Formatter.string(from: date)
     }
 
     private func dateFromUnixColumn(_ statement: OpaquePointer?, index: Int32) -> Date? {
