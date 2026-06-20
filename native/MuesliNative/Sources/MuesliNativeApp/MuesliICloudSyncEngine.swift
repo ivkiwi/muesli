@@ -331,7 +331,7 @@ final class MuesliICloudSyncEngine {
                     offset: offset
                 )
                 guard !records.isEmpty else { break }
-                _ = try await saveInBatches(records: records.map(Self.syncZoneCloudRecord(from:)))
+                _ = try await saveInBatches(records: records.map { Self.syncZoneCloudRecord(from: $0) })
                 offset += records.count
             }
         }
@@ -354,7 +354,8 @@ final class MuesliICloudSyncEngine {
                 dirtyRecordsByName[dirtyRecord.id] = dirtyRecord
             }
 
-            let savedRecords = try await saveInBatches(records: dirtyRecords.map(Self.syncZoneCloudRecord(from:)))
+            let uploadRecords = try await cloudRecordsForDirtyUpload(dirtyRecords)
+            let savedRecords = try await saveInBatches(records: uploadRecords)
             guard !savedRecords.isEmpty else {
                 return (uploaded, try store.hasTextRecordsNeedingSync())
             }
@@ -381,6 +382,15 @@ final class MuesliICloudSyncEngine {
         }
 
         return (uploaded, try store.hasTextRecordsNeedingSync())
+    }
+
+    private func cloudRecordsForDirtyUpload(_ dirtyRecords: [SyncTextRecord]) async throws -> [CKRecord] {
+        let recordIDs = dirtyRecords.map { CKRecord.ID(recordName: $0.id, zoneID: Schema.syncZoneID) }
+        let existingRecords = try await fetchExistingRecords(recordIDs: recordIDs)
+        return dirtyRecords.map { dirtyRecord in
+            let recordID = CKRecord.ID(recordName: dirtyRecord.id, zoneID: Schema.syncZoneID)
+            return Self.syncZoneCloudRecord(from: dirtyRecord, baseRecord: existingRecords[recordID])
+        }
     }
 
     private func fetchTextRecordsPage(cursor: CKQueryOperation.Cursor?) async throws -> ICloudQueryPage {
@@ -517,6 +527,54 @@ final class MuesliICloudSyncEngine {
         }
     }
 
+    private func fetchExistingRecords(recordIDs: [CKRecord.ID]) async throws -> [CKRecord.ID: CKRecord] {
+        guard !recordIDs.isEmpty else { return [:] }
+        return try await withCheckedThrowingContinuation { continuation in
+            let operation = CKFetchRecordsOperation(recordIDs: recordIDs)
+            let lock = NSLock()
+            var fetchedRecords: [CKRecord.ID: CKRecord] = [:]
+            var nonMissingError: Error?
+
+            operation.perRecordResultBlock = { recordID, result in
+                lock.lock()
+                defer { lock.unlock() }
+                switch result {
+                case .success(let record):
+                    fetchedRecords[recordID] = record
+                case .failure(let error):
+                    if !Self.isUnknownItemError(error), nonMissingError == nil {
+                        nonMissingError = error
+                    }
+                }
+            }
+
+            operation.fetchRecordsResultBlock = { result in
+                lock.lock()
+                let records = fetchedRecords
+                let firstNonMissingError = nonMissingError
+                lock.unlock()
+
+                if let firstNonMissingError {
+                    continuation.resume(throwing: firstNonMissingError)
+                    return
+                }
+
+                switch result {
+                case .success:
+                    continuation.resume(returning: records)
+                case .failure(let error):
+                    if Self.containsOnlyUnknownItemErrors(error) {
+                        continuation.resume(returning: records)
+                    } else {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+
+            database.add(operation)
+        }
+    }
+
     private func save(records: [CKRecord]) async throws -> [CKRecord] {
         guard !records.isEmpty else { return [] }
         return try await withCheckedThrowingContinuation { continuation in
@@ -586,9 +644,9 @@ final class MuesliICloudSyncEngine {
         }
     }
 
-    static func syncZoneCloudRecord(from record: SyncTextRecord) -> CKRecord {
+    static func syncZoneCloudRecord(from record: SyncTextRecord, baseRecord: CKRecord? = nil) -> CKRecord {
         let recordID = CKRecord.ID(recordName: record.id, zoneID: Schema.syncZoneID)
-        let cloud = CKRecord(recordType: Schema.textRecordType, recordID: recordID)
+        let cloud = baseRecord ?? CKRecord(recordType: Schema.textRecordType, recordID: recordID)
         cloud["kind"] = record.kind.rawValue as NSString
         cloud["source"] = record.source as NSString?
         cloud["localSource"] = record.localSource as NSString?
@@ -679,6 +737,26 @@ final class MuesliICloudSyncEngine {
             .joined(separator: " ")
         return message.contains(Schema.syncZoneName.lowercased())
             && (message.contains("zone not found") || message.contains("zone does not exist"))
+    }
+
+    private static func isUnknownItemError(_ error: Error) -> Bool {
+        if let ckError = error as? CKError {
+            return ckError.code == .unknownItem
+        }
+        return false
+    }
+
+    private static func containsOnlyUnknownItemErrors(_ error: Error) -> Bool {
+        guard let ckError = error as? CKError else { return false }
+        if ckError.code == .unknownItem {
+            return true
+        }
+        if ckError.code == .partialFailure,
+           let partialErrors = ckError.partialErrorsByItemID,
+           !partialErrors.isEmpty {
+            return partialErrors.values.allSatisfy(isUnknownItemError)
+        }
+        return false
     }
 
     static func isChangeTokenExpired(_ error: Error) -> Bool {

@@ -799,6 +799,37 @@ struct DictationStoreTests {
         #expect(changedKeys.isSuperset(of: ["title", "text", "speakerTranscript", "summaryText", "manualNotes"]))
     }
 
+    @Test("sync cloud record can update an existing server record")
+    func syncCloudRecordCanUpdateExistingServerRecord() throws {
+        let updatedAt = Date(timeIntervalSince1970: 1_770_000_000)
+        let recordID = CKRecord.ID(
+            recordName: "dictation-existing-record",
+            zoneID: CKRecordZone.ID(zoneName: "MuesliSyncZone", ownerName: CKCurrentUserDefaultName)
+        )
+        let baseRecord = CKRecord(recordType: "MuesliTextRecord", recordID: recordID)
+        baseRecord["text"] = "Server text" as NSString
+        baseRecord["updatedAt"] = updatedAt.addingTimeInterval(-60) as NSDate
+
+        let cloud = MuesliICloudSyncEngine.syncZoneCloudRecord(
+            from: SyncTextRecord(
+                id: recordID.recordName,
+                kind: .dictation,
+                text: "Local dirty text",
+                source: "macos",
+                createdAt: updatedAt.addingTimeInterval(-60),
+                updatedAt: updatedAt,
+                durationSeconds: 2,
+                wordCount: 3
+            ),
+            baseRecord: baseRecord
+        )
+
+        #expect(cloud === baseRecord)
+        #expect(cloud.recordID == recordID)
+        #expect(cloud["text"] as? String == "Local dirty text")
+        #expect(cloud["updatedAt"] as? Date == updatedAt)
+    }
+
     @Test("synced iOS meeting preserves source and excludes audio")
     func syncedIOSMeetingPreservesSourceAndExcludesAudio() throws {
         let store = try makeStore()

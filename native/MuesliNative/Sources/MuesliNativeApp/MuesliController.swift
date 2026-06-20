@@ -4006,7 +4006,7 @@ final class MuesliController: NSObject {
     }
 
     private func deleteManualNotesDraftAfterDiscard(id: Int64) {
-        try? dictationStore.deleteMeeting(id: id)
+        deleteMeetingDraftAndScheduleSync(id: id)
         clearCachedMeetingManualNotes(id: id)
         clearCachedMeetingTitle(id: id)
         if appState.selectedMeetingID == id {
@@ -4027,7 +4027,7 @@ final class MuesliController: NSObject {
     private func resolveLiveMeetingAfterStartFailure(id: Int64) {
         let manualNotes = manualNotesForLiveMeeting(id: id)
         if manualNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            try? dictationStore.deleteMeeting(id: id)
+            deleteMeetingDraftAndScheduleSync(id: id)
             clearCachedMeetingManualNotes(id: id)
             clearCachedMeetingTitle(id: id)
             if appState.selectedMeetingID == id {
@@ -4054,7 +4054,7 @@ final class MuesliController: NSObject {
     private func resolveLiveMeetingAfterStopFailure(id: Int64) {
         let manualNotes = manualNotesForLiveMeeting(id: id)
         if manualNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            try? dictationStore.deleteMeeting(id: id)
+            deleteMeetingDraftAndScheduleSync(id: id)
             clearCachedMeetingManualNotes(id: id)
             clearCachedMeetingTitle(id: id)
             if appState.selectedMeetingID == id {
@@ -4073,6 +4073,15 @@ final class MuesliController: NSObject {
             activeMeetingAudioWarning = nil
         }
         syncAppState()
+    }
+
+    private func deleteMeetingDraftAndScheduleSync(id: Int64) {
+        do {
+            try dictationStore.deleteMeeting(id: id)
+            scheduleICloudSyncAfterLocalChange()
+        } catch {
+            fputs("[muesli-native] failed to delete meeting draft \(id): \(error)\n", stderr)
+        }
     }
 
     private func updateActiveMeetingAudioWarning(meetingID: Int64, health: MeetingMicHealthSnapshot) {
