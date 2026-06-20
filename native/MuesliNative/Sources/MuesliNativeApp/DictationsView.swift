@@ -183,7 +183,6 @@ struct DictationsView: View {
     private enum BridgeState {
         case notConfigured
         case checkingICloud
-        case readyToEnable
         case syncing
         case active
         case needsICloud
@@ -302,7 +301,7 @@ struct DictationsView: View {
             return "arrow.triangle.2.circlepath"
         case .needsICloud, .error:
             return "exclamationmark.icloud"
-        case .notConfigured, .readyToEnable:
+        case .notConfigured:
             return "iphone.gen3"
         }
     }
@@ -328,7 +327,7 @@ struct DictationsView: View {
             return "Sign in to iCloud to sync"
         case .error:
             return "iPhone sync needs attention"
-        case .notConfigured, .readyToEnable:
+        case .notConfigured:
             return "Use Muesli on iPhone"
         }
     }
@@ -346,7 +345,7 @@ struct DictationsView: View {
             return "Creating the sync channel and pulling your latest text records."
         case .needsICloud, .error:
             return appState.iCloudSyncStatus ?? "Open iCloud settings, then try again."
-        case .notConfigured, .readyToEnable:
+        case .notConfigured:
             return "Your Muesli history follows you through private iCloud. Audio stays local."
         }
     }
@@ -359,14 +358,14 @@ struct DictationsView: View {
             return "Syncing"
         case .needsICloud, .error:
             return "Try again"
-        case .notConfigured, .readyToEnable:
+        case .notConfigured:
             return "Set up private iCloud sync"
         }
     }
 
     private var bridgeButtonIcon: String {
         switch bridgeState {
-        case .notConfigured, .readyToEnable:
+        case .notConfigured:
             return "icloud"
         default:
             return "arrow.triangle.2.circlepath"

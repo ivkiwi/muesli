@@ -206,6 +206,31 @@ struct DictationStoreTests {
         let record = try #require(try store.textRecordsNeedingSync().first { $0.kind == .dictation })
         #expect(record.text == "Captured on Mac")
         #expect(record.source == "macos")
+        #expect(record.localSource == "dictation")
+    }
+
+    @Test("local Mac CUA dictation keeps subtype through sync record")
+    func localMacCUADictationKeepsSubtypeThroughSyncRecord() throws {
+        let sourceStore = try makeStore()
+        let targetStore = try makeStore()
+        let endedAt = Date(timeIntervalSince1970: 1_770_000_000)
+
+        _ = try sourceStore.insertDictation(
+            text: "Captured through CUA",
+            durationSeconds: 2,
+            source: "cua",
+            startedAt: endedAt.addingTimeInterval(-2),
+            endedAt: endedAt
+        )
+
+        let outbound = try #require(try sourceStore.textRecordsNeedingSync().first { $0.kind == .dictation })
+        #expect(outbound.source == "macos")
+        #expect(outbound.localSource == "cua")
+
+        let applied = try targetStore.upsertSyncedTextRecord(outbound)
+        #expect(applied)
+        let imported = try #require(try targetStore.recentDictations(limit: 1).first)
+        #expect(imported.source == "cua")
     }
 
     @Test("local Mac meeting sync record uses macOS source")
@@ -227,7 +252,37 @@ struct DictationStoreTests {
         let record = try #require(try store.textRecordsNeedingSync().first { $0.kind == .meeting })
         #expect(record.title == "Mac Meeting")
         #expect(record.source == "macos")
+        #expect(record.localSource == MeetingSource.meeting.rawValue)
+        #expect(record.speakerTranscript == "Mac transcript")
         #expect(record.meetingStatus == .completed)
+    }
+
+    @Test("local Mac audio import meeting keeps subtype through sync record")
+    func localMacAudioImportMeetingKeepsSubtypeThroughSyncRecord() throws {
+        let sourceStore = try makeStore()
+        let targetStore = try makeStore()
+        let startedAt = Date(timeIntervalSince1970: 1_770_000_000)
+
+        try sourceStore.insertMeeting(
+            title: "Imported Meeting",
+            calendarEventID: nil,
+            startTime: startedAt,
+            endTime: startedAt.addingTimeInterval(90),
+            rawTranscript: "Imported transcript",
+            formattedNotes: "Imported notes",
+            micAudioPath: nil,
+            systemAudioPath: nil,
+            source: .audioImport
+        )
+
+        let outbound = try #require(try sourceStore.textRecordsNeedingSync().first { $0.kind == .meeting })
+        #expect(outbound.source == "macos")
+        #expect(outbound.localSource == MeetingSource.audioImport.rawValue)
+
+        let applied = try targetStore.upsertSyncedTextRecord(outbound)
+        #expect(applied)
+        let imported = try #require(try targetStore.recentMeetings(limit: 1).first)
+        #expect(imported.source == .audioImport)
     }
 
     @Test("migration repairs macOS-origin meeting source corrupted by stale iOS CloudKit metadata")
@@ -449,7 +504,8 @@ struct DictationStoreTests {
             id: "meeting-ios-1",
             kind: .meeting,
             title: "iPhone Meeting",
-            text: "Speaker 1: shipped text only",
+            text: "Plain transcript",
+            speakerTranscript: "Speaker 1: shipped text only",
             summaryText: "## Summary\nText only",
             manualNotes: "- Follow up",
             source: "ios",
@@ -474,6 +530,12 @@ struct DictationStoreTests {
         #expect(meeting.systemAudioPath == nil)
         #expect(meeting.savedRecordingPath == nil)
         #expect(try store.textRecordsNeedingSync().isEmpty)
+    }
+
+    @Test("CloudKit expired change token errors are detected")
+    func cloudKitExpiredChangeTokenErrorsAreDetected() {
+        #expect(MuesliICloudSyncEngine.isChangeTokenExpired(CKError(.changeTokenExpired)))
+        #expect(!MuesliICloudSyncEngine.isChangeTokenExpired(CKError(.networkUnavailable)))
     }
 
     @Test("unknown meeting source falls back to meeting")

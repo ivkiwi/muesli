@@ -239,12 +239,24 @@ final class MuesliICloudSyncEngine {
         var previousToken = changeTokenStore.loadToken()
         var records: [CKRecord] = []
         var finalToken: CKServerChangeToken?
+        var retriedExpiredToken = false
 
         while true {
-            let page = try await fetchZoneChangesPage(
-                zoneID: Schema.syncZoneID,
-                previousServerChangeToken: previousToken
-            )
+            let page: ICloudZoneChangesPage
+            do {
+                page = try await fetchZoneChangesPage(
+                    zoneID: Schema.syncZoneID,
+                    previousServerChangeToken: previousToken
+                )
+            } catch {
+                guard !retriedExpiredToken, Self.isChangeTokenExpired(error) else { throw error }
+                retriedExpiredToken = true
+                changeTokenStore.clearToken()
+                previousToken = nil
+                records.removeAll()
+                finalToken = nil
+                continue
+            }
             records.append(contentsOf: page.records)
             previousToken = page.serverChangeToken
             finalToken = page.serverChangeToken
@@ -578,6 +590,7 @@ final class MuesliICloudSyncEngine {
         let cloud = CKRecord(recordType: Schema.textRecordType, recordID: recordID)
         cloud["kind"] = record.kind.rawValue as NSString
         cloud["source"] = record.source as NSString?
+        cloud["localSource"] = record.localSource as NSString?
         cloud["meetingStatus"] = record.meetingStatus?.rawValue as NSString?
         cloud["engineIdentifier"] = record.engineIdentifier as NSString?
         cloud["createdAt"] = record.createdAt as NSDate
@@ -623,6 +636,7 @@ final class MuesliICloudSyncEngine {
             summaryText: record["summaryText"] as? String,
             manualNotes: record["manualNotes"] as? String,
             source: record["source"] as? String,
+            localSource: record["localSource"] as? String,
             meetingStatus: (record["meetingStatus"] as? String).flatMap(MeetingStatus.init(rawValue:)),
             engineIdentifier: record["engineIdentifier"] as? String,
             createdAt: createdAt,
@@ -666,6 +680,21 @@ final class MuesliICloudSyncEngine {
             && (message.contains("zone not found") || message.contains("zone does not exist"))
     }
 
+    static func isChangeTokenExpired(_ error: Error) -> Bool {
+        if let ckError = error as? CKError {
+            if ckError.code == .changeTokenExpired {
+                return true
+            }
+            if ckError.code == .partialFailure,
+               ckError.partialErrorsByItemID?.values.contains(where: isChangeTokenExpired) == true {
+                return true
+            }
+        }
+        let nsError = error as NSError
+        return nsError.domain == CKError.errorDomain
+            && nsError.code == CKError.Code.changeTokenExpired.rawValue
+    }
+
     private static func isMissingLegacyDefaultZoneRecords(_ error: Error) -> Bool {
         if let ckError = error as? CKError {
             if ckError.code == .unknownItem {
@@ -701,6 +730,7 @@ final class MuesliICloudSyncEngine {
             "summaryText",
             "manualNotes",
             "source",
+            "localSource",
             "meetingStatus",
             "engineIdentifier",
             "createdAt",

@@ -16,6 +16,8 @@ public enum DictationStoreError: Error, LocalizedError {
 }
 
 public final class DictationStore {
+    private static let iso8601Formatter = ISO8601DateFormatter()
+
     private let databaseURL: URL
     private static let dictationColumns = """
     d.id, d.timestamp, d.duration_seconds, d.raw_text, d.app_context, d.word_count, d.source,
@@ -213,9 +215,9 @@ public final class DictationStore {
         }
         defer { sqlite3_finalize(statement) }
 
-        let timestamp = ISO8601DateFormatter().string(from: endedAt)
-        let started = ISO8601DateFormatter().string(from: startedAt)
-        let ended = ISO8601DateFormatter().string(from: endedAt)
+        let timestamp = formatISODate(endedAt)
+        let started = formatISODate(startedAt)
+        let ended = formatISODate(endedAt)
         sqlite3_bind_text(statement, 1, (timestamp as NSString).utf8String, -1, nil)
         sqlite3_bind_double(statement, 2, durationSeconds)
         sqlite3_bind_text(statement, 3, (text as NSString).utf8String, -1, nil)
@@ -532,9 +534,8 @@ public final class DictationStore {
         }
         defer { sqlite3_finalize(statement) }
 
-        let formatter = ISO8601DateFormatter()
-        let startString = formatter.string(from: startTime)
-        let endString = formatter.string(from: endTime)
+        let startString = formatISODate(startTime)
+        let endString = formatISODate(endTime)
         let durationSeconds = max(endTime.timeIntervalSince(startTime), 0)
         let wordCount = Self.countWords(in: rawTranscript)
 
@@ -1639,12 +1640,14 @@ public final class DictationStore {
         let startedAt = parseOptionalISODate(statement, index: 4)
         let endedAt = parseOptionalISODate(statement, index: 5)
         let updatedAt = dateFromUnixColumn(statement, index: 9) ?? endedAt ?? createdAt
-        let source = cloudSyncSource(from: statement, index: 8)
+        let localSource = normalizedSourceColumn(from: statement, index: 8)
+        let source = cloudSyncDeviceSource(localSource)
         return SyncTextRecord(
             id: recordName,
             kind: .dictation,
             text: stringColumn(statement, index: 1),
             source: source,
+            localSource: localSource,
             createdAt: createdAt,
             updatedAt: updatedAt,
             startedAt: startedAt,
@@ -1662,16 +1665,20 @@ public final class DictationStore {
         let createdAt = parseISODate(startTime) ?? Date()
         let duration = sqlite3_column_double(statement, 6)
         let updatedAt = dateFromUnixColumn(statement, index: 10) ?? createdAt
-        let source = cloudSyncSource(from: statement, index: 8)
+        let rawTranscript = stringColumn(statement, index: 2)
+        let localSource = normalizedSourceColumn(from: statement, index: 8)
+        let source = cloudSyncDeviceSource(localSource)
         let meetingStatus = MeetingStatus(rawValue: stringColumn(statement, index: 9)) ?? .completed
         return SyncTextRecord(
             id: recordName,
             kind: .meeting,
             title: stringColumn(statement, index: 1),
-            text: stringColumn(statement, index: 2),
+            text: rawTranscript,
+            speakerTranscript: rawTranscript,
             summaryText: optionalStringColumn(statement, index: 3),
             manualNotes: optionalStringColumn(statement, index: 4),
             source: source,
+            localSource: localSource,
             meetingStatus: meetingStatus,
             createdAt: createdAt,
             updatedAt: updatedAt,
@@ -1684,12 +1691,15 @@ public final class DictationStore {
         )
     }
 
-    private func cloudSyncSource(from statement: OpaquePointer?, index: Int32) -> String {
+    private func normalizedSourceColumn(from statement: OpaquePointer?, index: Int32) -> String? {
         let source = optionalStringColumn(statement, index: index)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
+        return source?.isEmpty == true ? nil : source
+    }
 
-        switch source {
+    private func cloudSyncDeviceSource(_ localSource: String?) -> String {
+        switch localSource {
         case "ios", "iphone":
             return "ios"
         case "macos", "mac":
@@ -1700,6 +1710,11 @@ public final class DictationStore {
     }
 
     private func syncImportSource(for record: SyncTextRecord, fallback: String) -> String {
+        if let localSource = normalizedSyncLocalSource(record.localSource, kind: record.kind),
+           record.source == "macos" || isMacGeneratedCloudRecordName(record.id, prefix: record.kind.rawValue) {
+            return localSource
+        }
+
         switch record.kind {
         case .dictation where isMacGeneratedCloudRecordName(record.id, prefix: "dictation"):
             return "dictation"
@@ -1707,6 +1722,19 @@ public final class DictationStore {
             return MeetingSource.meeting.rawValue
         default:
             return record.source ?? fallback
+        }
+    }
+
+    private func normalizedSyncLocalSource(_ source: String?, kind: SyncTextRecordKind) -> String? {
+        let normalized = source?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard let normalized, !normalized.isEmpty else { return nil }
+        switch kind {
+        case .dictation:
+            return normalized
+        case .meeting:
+            return MeetingSource(rawValue: normalized)?.rawValue
         }
     }
 
@@ -1874,7 +1902,8 @@ public final class DictationStore {
         sqlite3_bind_text(statement, 2, (formatISODate(start) as NSString).utf8String, -1, nil)
         sqlite3_bind_text(statement, 3, (formatISODate(end) as NSString).utf8String, -1, nil)
         sqlite3_bind_double(statement, 4, record.durationSeconds)
-        sqlite3_bind_text(statement, 5, (record.text as NSString).utf8String, -1, nil)
+        let rawTranscript = record.speakerTranscript ?? record.text
+        sqlite3_bind_text(statement, 5, (rawTranscript as NSString).utf8String, -1, nil)
         bindOptionalText(record.summaryText, at: 6, statement: statement)
         let meetingStatus = record.meetingStatus ?? .completed
         sqlite3_bind_text(statement, 7, (meetingStatus.rawValue as NSString).utf8String, -1, nil)
@@ -2041,11 +2070,11 @@ public final class DictationStore {
     }
 
     private func parseISODate(_ value: String) -> Date? {
-        ISO8601DateFormatter().date(from: value)
+        Self.iso8601Formatter.date(from: value)
     }
 
     private func formatISODate(_ date: Date) -> String {
-        ISO8601DateFormatter().string(from: date)
+        Self.iso8601Formatter.string(from: date)
     }
 
     private func dateFromUnixColumn(_ statement: OpaquePointer?, index: Int32) -> Date? {
