@@ -38,6 +38,11 @@ private struct ICloudQueryPage {
     let cursor: CKQueryOperation.Cursor?
 }
 
+private struct ICloudChangedRecords {
+    let records: [CKRecord]
+    let finalToken: CKServerChangeToken?
+}
+
 protocol ICloudChangeTokenStore {
     func loadToken() -> CKServerChangeToken?
     func saveToken(_ token: CKServerChangeToken)
@@ -131,13 +136,16 @@ final class MuesliICloudSyncEngine {
         try await ensureSyncZone()
         try await migrateDefaultZoneIfNeeded(store: store)
 
-        let remoteRecords = try await fetchChangedTextRecords()
+        let remoteChanges = try await fetchChangedTextRecords()
         var downloaded = ICloudSyncKindCounts()
-        for record in remoteRecords {
+        for record in remoteChanges.records {
             guard let syncRecord = Self.syncTextRecord(from: record) else { continue }
             if try store.upsertSyncedTextRecord(syncRecord) {
                 downloaded.increment(syncRecord.kind)
             }
+        }
+        if let finalToken = remoteChanges.finalToken {
+            changeTokenStore.saveToken(finalToken)
         }
 
         let dirtyRecords = try store.textRecordsNeedingSync()
@@ -236,13 +244,14 @@ final class MuesliICloudSyncEngine {
         }
     }
 
-    private func fetchChangedTextRecords() async throws -> [CKRecord] {
+    private func fetchChangedTextRecords() async throws -> ICloudChangedRecords {
         try await fetchChangedTextRecordsUsingStoredToken()
     }
 
-    private func fetchChangedTextRecordsUsingStoredToken() async throws -> [CKRecord] {
+    private func fetchChangedTextRecordsUsingStoredToken() async throws -> ICloudChangedRecords {
         var previousToken = changeTokenStore.loadToken()
         var records: [CKRecord] = []
+        var finalToken: CKServerChangeToken?
 
         while true {
             let page = try await fetchZoneChangesPage(
@@ -251,13 +260,13 @@ final class MuesliICloudSyncEngine {
             )
             records.append(contentsOf: page.records)
             previousToken = page.serverChangeToken
-            changeTokenStore.saveToken(page.serverChangeToken)
+            finalToken = page.serverChangeToken
             if !page.moreComing {
                 break
             }
         }
 
-        return records
+        return ICloudChangedRecords(records: records, finalToken: finalToken)
     }
 
     private func migrateDefaultZoneIfNeeded(store: DictationStore) async throws {
@@ -270,36 +279,63 @@ final class MuesliICloudSyncEngine {
         }
 
         changeTokenStore.clearToken()
-        let existingSyncZoneRecords = try await fetchChangedTextRecordsUsingStoredToken()
-        for record in existingSyncZoneRecords {
+        let existingSyncZoneChanges = try await fetchChangedTextRecordsUsingStoredToken()
+        for record in existingSyncZoneChanges.records {
             guard let syncRecord = Self.syncTextRecord(from: record) else { continue }
             _ = try store.upsertSyncedTextRecord(syncRecord)
         }
+        if let finalToken = existingSyncZoneChanges.finalToken {
+            changeTokenStore.saveToken(finalToken)
+        }
 
-        let migrationRecords = try store.textRecordsForSyncMigration()
-        _ = try await saveInBatches(records: migrationRecords.map(Self.syncZoneCloudRecord(from:)))
+        try await uploadLocalMigrationRecords(store: store)
 
         changeTokenStore.clearToken()
-        let primedSyncZoneRecords = try await fetchChangedTextRecordsUsingStoredToken()
-        for record in primedSyncZoneRecords {
+        let primedSyncZoneChanges = try await fetchChangedTextRecordsUsingStoredToken()
+        for record in primedSyncZoneChanges.records {
             guard let syncRecord = Self.syncTextRecord(from: record) else { continue }
             _ = try store.upsertSyncedTextRecord(syncRecord)
+        }
+        if let finalToken = primedSyncZoneChanges.finalToken {
+            changeTokenStore.saveToken(finalToken)
         }
 
         defaults.set(true, forKey: Schema.migratedDefaultZoneKey)
     }
 
     private func fetchAllDefaultZoneTextRecords() async throws -> [CKRecord] {
-        var cursor: CKQueryOperation.Cursor?
-        var records: [CKRecord] = []
+        do {
+            var cursor: CKQueryOperation.Cursor?
+            var records: [CKRecord] = []
 
-        repeat {
-            let page = try await fetchTextRecordsPage(cursor: cursor)
-            records.append(contentsOf: page.records)
-            cursor = page.cursor
-        } while cursor != nil
+            repeat {
+                let page = try await fetchTextRecordsPage(cursor: cursor)
+                records.append(contentsOf: page.records)
+                cursor = page.cursor
+            } while cursor != nil
 
-        return records
+            return records
+        } catch {
+            guard Self.isMissingLegacyDefaultZoneRecords(error) else { throw error }
+            return []
+        }
+    }
+
+    private func uploadLocalMigrationRecords(store: DictationStore) async throws {
+        let batchSize = 500
+        for kind in [SyncTextRecordKind.dictation, .meeting] {
+            var offset = 0
+            while true {
+                let records = try store.textRecordsForSyncMigration(
+                    kind: kind,
+                    limit: batchSize,
+                    offset: offset
+                )
+                guard !records.isEmpty else { break }
+                _ = try await saveInBatches(records: records.map(Self.syncZoneCloudRecord(from:)))
+                offset += records.count
+            }
+        }
     }
 
     private func fetchTextRecordsPage(cursor: CKQueryOperation.Cursor?) async throws -> ICloudQueryPage {
@@ -559,21 +595,6 @@ final class MuesliICloudSyncEngine {
         return SyncTextRecordKind(rawValue: raw)
     }
 
-    private static func isDefaultZoneChangeFetchUnsupported(_ error: Error) -> Bool {
-        let nsError = error as NSError
-        let message = [
-            nsError.localizedDescription,
-            nsError.localizedFailureReason,
-            nsError.localizedRecoverySuggestion,
-            String(describing: nsError),
-        ]
-            .compactMap { $0?.lowercased() }
-            .joined(separator: " ")
-        return message.contains("appdefaultzone")
-            && message.contains("does not support")
-            && message.contains("change")
-    }
-
     private static func isSyncZoneMissing(_ error: Error) -> Bool {
         if let ckError = error as? CKError {
             if ckError.code == .unknownItem {
@@ -597,6 +618,32 @@ final class MuesliICloudSyncEngine {
             .joined(separator: " ")
         return message.contains(Schema.syncZoneName.lowercased())
             && (message.contains("zone not found") || message.contains("zone does not exist"))
+    }
+
+    private static func isMissingLegacyDefaultZoneRecords(_ error: Error) -> Bool {
+        if let ckError = error as? CKError {
+            if ckError.code == .unknownItem {
+                return true
+            }
+            if ckError.code == .partialFailure,
+               ckError.partialErrorsByItemID?.values.contains(where: { partialError in
+                   (partialError as? CKError)?.code == .unknownItem
+               }) == true {
+                return true
+            }
+        }
+
+        let nsError = error as NSError
+        let message = [
+            nsError.localizedDescription,
+            nsError.localizedFailureReason,
+            nsError.localizedRecoverySuggestion,
+            String(describing: nsError),
+        ]
+            .compactMap { $0?.lowercased() }
+            .joined(separator: " ")
+        return (message.contains("unknown item") || message.contains("not found") || message.contains("does not exist"))
+            && (message.contains(Schema.textRecordType.lowercased()) || message.contains("record type"))
     }
 
     private static var desiredTextRecordKeys: [CKRecord.FieldKey] {

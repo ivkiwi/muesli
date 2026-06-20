@@ -955,18 +955,30 @@ final class MuesliController: NSObject {
         appState.iCloudSyncStatus = "Checking iCloud..."
         TelemetryDeck.signal("bridge_enable_started", parameters: ["platform": "macos"])
 
-        Task { [weak self] in
+        iCloudSyncGeneration += 1
+        let generation = iCloudSyncGeneration
+        iCloudSubscriptionTask?.cancel()
+        iCloudSubscriptionTask = Task { [weak self] in
             do {
                 try await MuesliICloudSyncEngine().ensureTextRecordSubscription()
                 await MainActor.run {
-                    guard let self else { return }
+                    guard let self, self.iCloudSyncGeneration == generation else { return }
+                    self.iCloudSubscriptionTask = nil
                     self.hasEnsuredICloudSubscription = true
                     self.appState.iCloudSyncStatus = "Setting up private iCloud sync..."
                     self.updateConfig { $0.iCloudSyncEnabled = true }
                 }
+            } catch is CancellationError {
+                await MainActor.run {
+                    guard let self, self.iCloudSyncGeneration == generation else { return }
+                    self.iCloudSubscriptionTask = nil
+                    self.bridgeActivationPending = false
+                    self.appState.isICloudBridgeActivationPending = false
+                }
             } catch {
                 await MainActor.run {
-                    guard let self else { return }
+                    guard let self, self.iCloudSyncGeneration == generation else { return }
+                    self.iCloudSubscriptionTask = nil
                     self.bridgeActivationPending = false
                     self.appState.isICloudBridgeActivationPending = false
                     self.appState.iCloudSyncStatus = "Sync needs iCloud: \(error.localizedDescription)"
