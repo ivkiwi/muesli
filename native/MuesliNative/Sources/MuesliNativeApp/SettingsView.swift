@@ -482,10 +482,7 @@ struct SettingsView: View {
             }
             return "Linked device: \(remoteDeviceName)"
         }
-        if let localDeviceName = appState.iCloudBridgeLocalDeviceName {
-            return "This Mac: \(localDeviceName)"
-        }
-        return nil
+        return "No linked iPhone yet."
     }
 
     private var dictationSettingsPane: some View {

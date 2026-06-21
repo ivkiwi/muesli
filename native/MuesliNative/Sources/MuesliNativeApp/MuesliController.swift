@@ -1265,8 +1265,9 @@ final class MuesliController: NSObject {
                     self.iCloudSyncTask = nil
                     self.appState.isICloudSyncInProgress = false
                     let summary = self.formatICloudSyncSummary(result)
+                    let remoteDeviceName = MuesliBridgeDeviceIdentity.remoteDeviceDisplayName ?? "iPhone"
                     self.appState.iCloudSyncStatus = result.downloaded.total > 0
-                        ? "Synced with iPhone."
+                        ? "Synced with \(remoteDeviceName)."
                         : "All text is up to date."
                     self.appState.iCloudBridgeState = .active
                     self.appState.iCloudBridgeMessage = nil
