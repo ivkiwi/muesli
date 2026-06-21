@@ -1376,10 +1376,7 @@ final class MuesliController: NSObject {
         iCloudSyncTask?.cancel()
         iCloudSyncTask = nil
         appState.isICloudSyncInProgress = false
-        if bridgeActivationPending {
-            bridgeActivationPending = false
-            appState.isICloudBridgeActivationPending = false
-        }
+        resetBridgeDiscoveryRuntimeState()
         refreshICloudBridgeStateForConfig()
     }
 
@@ -1390,11 +1387,17 @@ final class MuesliController: NSObject {
         iCloudSubscriptionTask?.cancel()
         iCloudSubscriptionTask = nil
         resetICloudSubscriptionState()
-        bridgeActivationPending = false
-        appState.isICloudBridgeActivationPending = false
+        resetBridgeDiscoveryRuntimeState()
         appState.iCloudSyncStatus = "iCloud sync is off."
         appState.iCloudBridgeState = .notConfigured
         appState.iCloudBridgeMessage = nil
+    }
+
+    private func resetBridgeDiscoveryRuntimeState() {
+        bridgeActivationPending = false
+        bridgeDiscoveryPending = false
+        bridgeDiscoveryFollowUpPending = false
+        appState.isICloudBridgeActivationPending = false
     }
 
     private func resetICloudSubscriptionState() {

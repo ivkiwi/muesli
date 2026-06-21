@@ -288,6 +288,27 @@ struct MuesliBridgeDeviceIdentityTests {
     }
 }
 
+@Suite("ICloudBridgeAppState")
+struct ICloudBridgeAppStateTests {
+    @MainActor
+    @Test("companion device name only returns iOS and iPadOS remotes")
+    func companionDeviceNameOnlyReturnsCompanionPlatforms() {
+        let state = AppState()
+
+        state.iCloudBridgeRemoteDeviceName = "Pranav MacBook"
+        state.iCloudBridgeRemoteDevicePlatform = "macOS"
+        #expect(state.iCloudBridgeCompanionDeviceName == nil)
+
+        state.iCloudBridgeRemoteDeviceName = "picophone"
+        state.iCloudBridgeRemoteDevicePlatform = "iOS"
+        #expect(state.iCloudBridgeCompanionDeviceName == "picophone")
+
+        state.iCloudBridgeRemoteDeviceName = "iPad"
+        state.iCloudBridgeRemoteDevicePlatform = " iPadOS "
+        #expect(state.iCloudBridgeCompanionDeviceName == "iPad")
+    }
+}
+
 @Suite("MuesliBridgeDeviceRefreshPolicy")
 struct MuesliBridgeDeviceRefreshPolicyTests {
     @Test("user initiated sync forces bridge device refresh")
