@@ -323,10 +323,11 @@ struct DictationsView: View {
     private var bridgeTitle: String {
         switch bridgeState {
         case .active:
+            let deviceName = appState.iCloudBridgeRemoteDeviceName ?? "iPhone"
             if let lastSyncedAt = appState.iCloudLastSyncedAt {
-                return "Synced with iPhone · \(relativeSyncTime(lastSyncedAt))"
+                return "Synced with \(deviceName) · \(relativeSyncTime(lastSyncedAt))"
             }
-            return "Synced with iPhone"
+            return "Synced with \(deviceName)"
         case .checkingICloud, .syncing:
             return "Setting up private iCloud sync"
         case .needsICloud:
@@ -341,6 +342,9 @@ struct DictationsView: View {
     private var bridgeSubtitle: String {
         switch bridgeState {
         case .active:
+            if let deviceName = appState.iCloudBridgeRemoteDeviceName {
+                return "Private iCloud text sync is on with \(deviceName). Audio stays local."
+            }
             return "Private iCloud text sync is on. Scan the QR to finish setup on iPhone. Audio stays local."
         case .checkingICloud:
             return "Checking this Mac's iCloud account..."

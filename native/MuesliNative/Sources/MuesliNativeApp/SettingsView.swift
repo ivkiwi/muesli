@@ -416,6 +416,12 @@ struct SettingsView: View {
                                 .font(MuesliTheme.caption())
                                 .foregroundStyle(MuesliTheme.textTertiary)
                         }
+                        if let linkedDeviceText = syncLinkedDeviceText {
+                            Text(linkedDeviceText)
+                                .font(MuesliTheme.caption())
+                                .foregroundStyle(MuesliTheme.textTertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                     Spacer(minLength: MuesliTheme.spacing16)
                     actionButton("Sync now", systemImage: "arrow.triangle.2.circlepath") {
@@ -466,6 +472,17 @@ struct SettingsView: View {
     private var syncLastSyncedText: String? {
         guard let date = appState.iCloudLastSyncedAt else { return nil }
         return DateFormatter.localizedString(from: date, dateStyle: .medium, timeStyle: .short)
+    }
+
+    private var syncLinkedDeviceText: String? {
+        guard appState.config.iCloudSyncEnabled else { return nil }
+        if let remoteDeviceName = appState.iCloudBridgeRemoteDeviceName {
+            return "Linked device: \(remoteDeviceName)"
+        }
+        if let localDeviceName = appState.iCloudBridgeLocalDeviceName {
+            return "This Mac: \(localDeviceName)"
+        }
+        return nil
     }
 
     private var dictationSettingsPane: some View {

@@ -104,6 +104,9 @@ final class AppState {
     var isICloudBridgeActivationPending: Bool = false
     var iCloudBridgeState: ICloudBridgeState = .notConfigured
     var iCloudBridgeMessage: String?
+    var iCloudBridgeLocalDeviceName: String?
+    var iCloudBridgeRemoteDeviceName: String?
+    var iCloudBridgeRemoteDevicePlatform: String?
     var iCloudLastSyncSummary: String?
     var iCloudLastSyncedAt: Date?
     var modelPreparationTitle: String?
