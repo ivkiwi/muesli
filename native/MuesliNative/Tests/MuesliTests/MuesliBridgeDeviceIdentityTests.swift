@@ -274,6 +274,7 @@ struct MuesliBridgeDeviceRefreshPolicyTests {
         #expect(MuesliBridgeDeviceRefreshPolicy.shouldForceRefresh(
             userInitiated: true,
             bridgeActivationPending: false,
+            bridgeDiscoveryTriggered: false,
             hasKnownRemoteDevice: true
         ))
     }
@@ -283,6 +284,7 @@ struct MuesliBridgeDeviceRefreshPolicyTests {
         #expect(MuesliBridgeDeviceRefreshPolicy.shouldForceRefresh(
             userInitiated: false,
             bridgeActivationPending: true,
+            bridgeDiscoveryTriggered: false,
             hasKnownRemoteDevice: true
         ))
     }
@@ -292,6 +294,17 @@ struct MuesliBridgeDeviceRefreshPolicyTests {
         #expect(MuesliBridgeDeviceRefreshPolicy.shouldForceRefresh(
             userInitiated: false,
             bridgeActivationPending: false,
+            bridgeDiscoveryTriggered: true,
+            hasKnownRemoteDevice: false
+        ))
+    }
+
+    @Test("background sync uses throttle before a remote device is known")
+    func backgroundSyncUsesThrottleBeforeRemoteDeviceIsKnown() {
+        #expect(!MuesliBridgeDeviceRefreshPolicy.shouldForceRefresh(
+            userInitiated: false,
+            bridgeActivationPending: false,
+            bridgeDiscoveryTriggered: false,
             hasKnownRemoteDevice: false
         ))
     }
@@ -301,6 +314,7 @@ struct MuesliBridgeDeviceRefreshPolicyTests {
         #expect(!MuesliBridgeDeviceRefreshPolicy.shouldForceRefresh(
             userInitiated: false,
             bridgeActivationPending: false,
+            bridgeDiscoveryTriggered: true,
             hasKnownRemoteDevice: true
         ))
     }
