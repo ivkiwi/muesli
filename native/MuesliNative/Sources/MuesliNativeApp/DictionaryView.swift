@@ -40,7 +40,7 @@ struct DictionaryView: View {
                 controller.requestDictionaryCorrectionAccessibilityEnable()
             }
         } message: {
-            Text("Dictionary suggestions need Accessibility to detect text edits after dictation. Grant access, restart Muesli, then turn suggestions on.")
+            Text("Dictionary suggestions briefly read focused app text via Accessibility after dictation. Grant access, restart Muesli, then turn suggestions on.")
         }
     }
 
@@ -61,7 +61,7 @@ struct DictionaryView: View {
                 .toggleStyle(.switch)
                 .font(MuesliTheme.caption())
                 .foregroundStyle(MuesliTheme.textSecondary)
-                .help("Suggest corrections after dictation edits.")
+                .help("Briefly reads focused app text after dictation to detect corrections.")
                 Button {
                     isAdding = true
                     newWord = ""
@@ -111,7 +111,7 @@ struct DictionaryView: View {
                     Text("Suggested Corrections")
                         .font(MuesliTheme.headline())
                         .foregroundStyle(MuesliTheme.textPrimary)
-                    Text("Corrections Muesli noticed after recent dictations.")
+                    Text("Corrections Muesli noticed by briefly reading focused app text after dictation.")
                         .font(MuesliTheme.caption())
                         .foregroundStyle(MuesliTheme.textTertiary)
                 }

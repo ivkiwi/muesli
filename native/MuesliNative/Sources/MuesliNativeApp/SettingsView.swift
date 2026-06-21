@@ -235,7 +235,7 @@ struct SettingsView: View {
                 controller.requestDictionaryCorrectionAccessibilityEnable()
             }
         } message: {
-            Text("Dictionary suggestions need Accessibility to detect text edits after dictation. Grant access, restart Muesli, then turn suggestions on.")
+            Text("Dictionary suggestions briefly read focused app text via Accessibility after dictation. Grant access, restart Muesli, then turn suggestions on.")
         }
     }
 
@@ -531,12 +531,12 @@ struct SettingsView: View {
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow(
                     "Dictionary suggestions",
-                    description: "Suggest adding words when you correct dictation output. Requires Accessibility."
+                    description: "Suggest words after corrections by briefly reading focused app text via Accessibility."
                 ) {
                     settingsSwitch(isOn: appState.config.enableDictionaryCorrectionPrompts) { newValue in
                         handleDictionaryCorrectionPromptsToggle(newValue)
                     }
-                    .help("Suggest corrections after dictation edits.")
+                    .help("Briefly reads focused app text after dictation to detect corrections.")
                 }
                 if appState.config.enablePostProcessor && !downloadedPostProcOptions.isEmpty {
                     Divider().background(MuesliTheme.surfaceBorder)
