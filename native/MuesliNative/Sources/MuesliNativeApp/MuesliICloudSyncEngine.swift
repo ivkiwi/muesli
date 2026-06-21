@@ -114,7 +114,9 @@ enum MuesliBridgeDeviceIdentity {
         }
 
         let deviceName = currentDeviceName()
-        defaults.set(deviceName, forKey: localDeviceNameKey)
+        if defaults.string(forKey: localDeviceNameKey) != deviceName {
+            defaults.set(deviceName, forKey: localDeviceNameKey)
+        }
         return MuesliBridgeDeviceSnapshot(
             deviceID: deviceID,
             platform: "macOS",

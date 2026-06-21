@@ -317,6 +317,7 @@ final class MuesliController: NSObject {
     private var hasEnsuredICloudSubscription = false
     private var bridgeActivationPending = false
     private var bridgeDiscoveryPending = false
+    private var bridgeDiscoveryFollowUpPending = false
     private var hasStarted = false
 
     init(
@@ -1255,7 +1256,7 @@ final class MuesliController: NSObject {
                 appState.iCloudSyncStatus = "Sync already in progress."
             }
             if bridgeDiscoveryPending {
-                scheduleICloudSync(delay: 1.0, userInitiated: false)
+                bridgeDiscoveryFollowUpPending = true
             }
             return
         }
@@ -1321,8 +1322,14 @@ final class MuesliController: NSObject {
                         self.ensureICloudSubscription()
                     }
                     self.refreshUI()
-                    if result.hasPendingUploads {
-                        self.scheduleICloudSync(delay: 0.2, userInitiated: false)
+                    let shouldRunBridgeDiscoveryFollowUp = self.bridgeDiscoveryFollowUpPending
+                    self.bridgeDiscoveryFollowUpPending = false
+                    if result.hasPendingUploads || shouldRunBridgeDiscoveryFollowUp {
+                        self.scheduleICloudSync(
+                            delay: 0.2,
+                            userInitiated: false,
+                            bridgeDiscoveryTriggered: shouldRunBridgeDiscoveryFollowUp
+                        )
                     }
                 }
             } catch is CancellationError {
@@ -1330,6 +1337,7 @@ final class MuesliController: NSObject {
                     guard let self, self.iCloudSyncGeneration == generation else { return }
                     self.iCloudSyncTask = nil
                     self.appState.isICloudSyncInProgress = false
+                    self.bridgeDiscoveryFollowUpPending = false
                     if self.bridgeActivationPending {
                         self.bridgeActivationPending = false
                         self.appState.isICloudBridgeActivationPending = false
@@ -1341,6 +1349,7 @@ final class MuesliController: NSObject {
                     guard let self, self.iCloudSyncGeneration == generation else { return }
                     self.iCloudSyncTask = nil
                     self.appState.isICloudSyncInProgress = false
+                    self.bridgeDiscoveryFollowUpPending = false
                     let message = error.localizedDescription
                     self.appState.iCloudSyncStatus = "Sync failed: \(message)"
                     if MuesliICloudSyncEngine.isICloudAccountAvailabilityError(error) {
