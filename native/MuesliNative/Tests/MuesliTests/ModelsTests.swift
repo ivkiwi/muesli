@@ -89,12 +89,14 @@ struct BackendOptionTests {
         #expect(!BackendOption.experimental.contains(.cohereTranscribe))
     }
 
-    @Test("onboarding model choices exclude experimental models")
-    func onboardingModelsExcludeExperimentalOptions() {
-        #expect(BackendOption.onboarding == [.parakeetMultilingual, .whisperTinyEnglish, .whisperSmall, .cohereTranscribe])
-        for option in BackendOption.experimental {
+    @Test("onboarding offers the conservative models plus Nemotron 3.5")
+    func onboardingModelChoices() {
+        #expect(BackendOption.onboarding == [.parakeetMultilingual, .whisperTinyEnglish, .whisperSmall, .cohereTranscribe, .nemotron35Multilingual])
+        // Nemotron 3.5 is the only experimental model intentionally surfaced in onboarding.
+        for option in BackendOption.experimental where option != .nemotron35Multilingual {
             #expect(!BackendOption.onboarding.contains(option))
         }
+        #expect(BackendOption.onboarding.contains(.nemotron35Multilingual))
     }
 
     @Test("Whisper models use WhisperKit CoreML identifiers")

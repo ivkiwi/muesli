@@ -764,7 +764,8 @@ struct NemotronBackendMetadataTests {
     func descriptionWarnings() {
         let desc = BackendOption.nemotronStreaming.description
         #expect(desc.contains("Experimental"))
-        #expect(desc.contains("Handsfree"))
+        #expect(desc.contains("Hold-to-talk"))
+        #expect(desc.contains("handsfree"))
         #expect(desc.contains("punctuation") || desc.contains("No punctuation"))
     }
 
@@ -779,30 +780,21 @@ struct NemotronBackendMetadataTests {
     }
 }
 
-@Suite("Nemotron hold-to-talk block policy")
-struct NemotronHoldToTalkPolicyTests {
+@Suite("Nemotron dictation mode policy")
+struct NemotronDictationModePolicyTests {
 
-    // MuesliController.handleStart() checks `isStreamingDictationBackend`
-    // (backend == "nemotron" || "nemotron35") to intercept hold-to-talk and
-    // route users to handsfree mode instead.
+    // MuesliController.handleStart() no longer blocks hold-to-talk for any backend:
+    // both Nemotron variants now support hold-to-talk (record → transcribe on release)
+    // in addition to double-tap handsfree streaming (handleToggleStart, gated by
+    // isStreamingDictationBackend = backend == "nemotron" || "nemotron35").
     private static let streamingBackends: Set<String> = ["nemotron", "nemotron35"]
 
-    @Test("both Nemotron streaming variants are blocked from hold-to-talk")
-    func streamingBackendsAreBlocked() {
-        let blocked = BackendOption.all.filter { Self.streamingBackends.contains($0.backend) }
-        #expect(blocked.count == 2)
-        #expect(blocked.contains(.nemotronStreaming))
-        #expect(blocked.contains(.nemotron35Multilingual))
-    }
-
-    @Test("all non-streaming backends are allowed in hold-to-talk")
-    func nonStreamingBackendsAllowHoldToTalk() {
-        let allowed = BackendOption.all.filter { !Self.streamingBackends.contains($0.backend) }
-        for backend in allowed {
-            #expect(!Self.streamingBackends.contains(backend.backend),
-                    "\(backend.label) should not be blocked from hold-to-talk")
-        }
-        #expect(allowed.count == BackendOption.all.count - 2)
+    @Test("both Nemotron variants are recognized as streaming (double-tap) backends")
+    func bothNemotronVariantsStream() {
+        let streaming = BackendOption.all.filter { Self.streamingBackends.contains($0.backend) }
+        #expect(streaming.count == 2)
+        #expect(streaming.contains(.nemotronStreaming))
+        #expect(streaming.contains(.nemotron35Multilingual))
     }
 
     @MainActor
@@ -813,7 +805,7 @@ struct NemotronHoldToTalkPolicyTests {
         let indicator = FloatingIndicatorController(configStore: configStore)
         // First setState creates the panel so subsequent calls are correctly sequenced
         indicator.setState(.idle, config: config)
-        indicator.showWarning("Double-tap for Nemotron handsfree mode", icon: "⚡", duration: 0.01)
+        indicator.showWarning("test warning", icon: "⚡", duration: 0.01)
         indicator.close()
     }
 
@@ -914,7 +906,8 @@ struct Nemotron35BackendMetadataTests {
     func descriptionWarnings() {
         let desc = BackendOption.nemotron35Multilingual.description
         #expect(desc.contains("Experimental"))
-        #expect(desc.contains("Handsfree"))
+        #expect(desc.contains("Hold-to-talk"))
+        #expect(desc.contains("handsfree"))
         #expect(desc.contains("Multilingual"))
         #expect(desc.contains("Hindi"))
         #expect(desc.contains("punctuation"))

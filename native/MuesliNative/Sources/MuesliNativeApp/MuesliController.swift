@@ -5237,18 +5237,12 @@ final class MuesliController: NSObject {
         if isMeetingRecording() { return }
         if blockDictationForMeetingActivityIfNeeded() { return }
 
-        // Nemotron is handsfree-only — block hold-to-talk and show a hint
-        if isStreamingDictationBackend {
-            dictationAudioSessionManager.cancel(reason: "nemotron-hold-blocked")
-            fputs("[muesli-native] hold-to-talk blocked for Nemotron, showing warning\n", stderr)
-            indicator.showWarning("Double-tap for Nemotron handsfree mode", icon: "⚡")
-            setState(.idle)
-            meetingMonitor.resumeAfterCooldown()
-            meetingMonitor.refreshState()
-            finishDictationLatencyTrace("nemotron_hold_blocked")
-            return
-        }
-
+        // Nemotron backends support hold-to-talk (record → transcribe on release) in
+        // addition to double-tap handsfree streaming. The hold path uses the normal
+        // record-then-transcribe pipeline below; double-tap streaming is handled in
+        // handleToggleStart. Prepare/arm pre-warm is intentionally skipped for these
+        // backends (see isStreamingDictationBackend) so the double-tap detection window
+        // stays clean; beginRecording cold-starts here just like the toggle path.
         fputs("[muesli-native] recording start\n", stderr)
         meetingMonitor.suppressWhileActive()
         beginDictationOutput()

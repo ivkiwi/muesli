@@ -69,7 +69,7 @@ struct BackendOption: Equatable {
         model: "FluidInference/nemotron-speech-streaming-en-0.6b-coreml",
         label: "Nemotron Streaming (Experimental)",
         sizeLabel: "~600 MB",
-        description: "Experimental. NVIDIA streaming RNNT. English-only. Handsfree mode only. No punctuation (RNNT limitation). Append-only — no corrections.",
+        description: "Experimental. NVIDIA streaming RNNT. English-only. Hold-to-talk or double-tap handsfree (live text). No punctuation (RNNT limitation). Append-only — no corrections.",
         recommended: false
     )
 
@@ -78,7 +78,7 @@ struct BackendOption: Equatable {
         model: "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML",
         label: "Nemotron 3.5 Multilingual (Experimental)",
         sizeLabel: "~665 MB",
-        description: "Experimental. NVIDIA Nemotron 3.5 streaming RNNT. Multilingual incl. Hindi, Chinese, Japanese + 100+ locales (auto-detect). Native punctuation. Handsfree mode only. Append-only — no corrections.",
+        description: "Experimental. NVIDIA Nemotron 3.5 streaming RNNT. Multilingual incl. Hindi, Chinese, Japanese + 100+ locales (auto-detect). Native punctuation. Hold-to-talk or double-tap handsfree (live text). Append-only — no corrections.",
         recommended: false
     )
 
@@ -127,8 +127,10 @@ struct BackendOption: Equatable {
     /// Models available for download and use.
     static let all: [BackendOption] = parakeetFamily + whisperFamily + [.cohereTranscribe] + experimental
 
-    /// Conservative first-run choices. Experimental models stay in Models.
-    static let onboarding: [BackendOption] = [.parakeetMultilingual, .whisperTinyEnglish, .whisperSmall, .cohereTranscribe]
+    /// Conservative first-run choices. Experimental models stay in Models, except
+    /// Nemotron 3.5 Multilingual which is intentionally offered under "Other models"
+    /// during onboarding (it supports hold-to-talk like the conservative models).
+    static let onboarding: [BackendOption] = [.parakeetMultilingual, .whisperTinyEnglish, .whisperSmall, .cohereTranscribe, .nemotron35Multilingual]
 
     /// Models coming soon — shown greyed out in the Models tab.
     static let comingSoon: [BackendOption] = []
