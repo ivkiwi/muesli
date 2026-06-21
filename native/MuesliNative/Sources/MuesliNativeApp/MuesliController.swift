@@ -1254,6 +1254,9 @@ final class MuesliController: NSObject {
             if userInitiated {
                 appState.iCloudSyncStatus = "Sync already in progress."
             }
+            if bridgeDiscoveryPending {
+                scheduleICloudSync(delay: 1.0, userInitiated: false)
+            }
             return
         }
         if userInitiated {

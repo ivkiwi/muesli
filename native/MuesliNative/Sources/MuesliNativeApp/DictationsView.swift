@@ -676,7 +676,8 @@ private struct IPhoneBridgeQRCodeSheet: View {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(deepLinkURL.absoluteString, forType: .string)
                     didCopySetupLink = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(1500))
                         didCopySetupLink = false
                     }
                 }
