@@ -1237,13 +1237,7 @@ final class MuesliController: NSObject {
         }
     }
 
-    private func startICloudSync(
-        userInitiated: Bool,
-        bridgeDiscoveryTriggered: Bool = false
-    ) {
-        if bridgeDiscoveryTriggered {
-            bridgeDiscoveryPending = true
-        }
+    private func startICloudSync(userInitiated: Bool) {
         guard config.iCloudSyncEnabled else {
             if userInitiated {
                 appState.iCloudSyncStatus = "Turn on iCloud sync first."
