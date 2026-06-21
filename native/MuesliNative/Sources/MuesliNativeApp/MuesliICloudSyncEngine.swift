@@ -168,9 +168,12 @@ enum MuesliBridgeDeviceIdentity {
 
     static func updateRemoteDevices(from records: [CKRecord], defaults: UserDefaults = .standard) {
         let localID = defaults.string(forKey: localDeviceIDKey) ?? ""
-        let latestRemote = records
+        let remoteDevices = records
             .compactMap(Self.snapshot(from:))
             .filter { $0.deviceID != localID }
+
+        let candidateDevices = remoteDevices.filter { isCompanionPlatform($0.platform) }
+        let latestRemote = (candidateDevices.isEmpty ? remoteDevices : candidateDevices)
             .max { $0.lastSeenAt < $1.lastSeenAt }
 
         guard let latestRemote else {
@@ -189,6 +192,15 @@ enum MuesliBridgeDeviceIdentity {
 
     static func hasRemoteDevice(defaults: UserDefaults = .standard) -> Bool {
         defaults.string(forKey: remoteDeviceIDKey) != nil
+    }
+
+    private static func isCompanionPlatform(_ platform: String) -> Bool {
+        switch platform.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "ios", "ipados":
+            return true
+        default:
+            return false
+        }
     }
 
     static func snapshot(from record: CKRecord) -> MuesliBridgeDeviceSnapshot? {

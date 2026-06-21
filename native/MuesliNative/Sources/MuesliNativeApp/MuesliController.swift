@@ -1244,12 +1244,14 @@ final class MuesliController: NSObject {
         let store = dictationStore
         iCloudSyncGeneration += 1
         let generation = iCloudSyncGeneration
+        let bridgeActivationPendingAtStart = bridgeActivationPending
+        let hasKnownRemoteDeviceAtStart = MuesliBridgeDeviceIdentity.hasRemoteDevice()
         iCloudSyncTask = Task { [weak self] in
             do {
                 let forceBridgeDeviceRefresh = MuesliBridgeDeviceRefreshPolicy.shouldForceRefresh(
                     userInitiated: userInitiated,
-                    bridgeActivationPending: self?.bridgeActivationPending == true,
-                    hasKnownRemoteDevice: MuesliBridgeDeviceIdentity.hasRemoteDevice()
+                    bridgeActivationPending: bridgeActivationPendingAtStart,
+                    hasKnownRemoteDevice: hasKnownRemoteDeviceAtStart
                 )
                 let result = try await MuesliICloudSyncEngine().sync(
                     store: store,
