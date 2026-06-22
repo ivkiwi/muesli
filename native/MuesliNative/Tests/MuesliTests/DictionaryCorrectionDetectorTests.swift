@@ -116,6 +116,21 @@ struct DictionaryCorrectionDetectorTests {
         #expect(suggestion?.replacement == "muesli")
     }
 
+    @Test("detects multiple proper noun corrections from one edited snapshot")
+    func detectsMultipleProperNounCorrectionsFromOneSnapshot() {
+        let original = "Okay, testing the dictionary prompt once again. So let us see if it can transcribe Mailapur, Mandavali, Trivanmir, Teenagar, Alvarped."
+        let edited = "Okay, testing the dictionary prompt once again. So let us see if it can transcribe Mylapore, Mandavali, Thiruvanmiyur, TNagar, Alwarpet."
+
+        let suggestions = DictionaryCorrectionDetector.suggestions(
+            originalText: original,
+            editedText: edited,
+            maxSuggestions: 3
+        )
+
+        #expect(suggestions.map(\.observed) == ["Mailapur", "Trivanmir", "Teenagar"])
+        #expect(suggestions.map(\.replacement) == ["Mylapore", "Thiruvanmiyur", "TNagar"])
+    }
+
     @Test("detects word correction when extra text is appended afterwards")
     func detectsCorrectionWithAdditionalTyping() {
         let original = "So this time if I say Newsly has not transcribed Newsly properly, would you be able to add it to dictionary immediately?"

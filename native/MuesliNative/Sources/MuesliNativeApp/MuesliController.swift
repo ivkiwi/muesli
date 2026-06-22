@@ -6,6 +6,7 @@ import Foundation
 import Sparkle
 import TelemetryDeck
 import MuesliCore
+import os
 
 private enum DictationOutputMode {
     case paste
@@ -183,6 +184,7 @@ private final class DictationLatencyLogWriter: @unchecked Sendable {
 final class MuesliController: NSObject {
     private static let maxDismissedDictionarySuggestionKeys = 200
     private static let maxDictionarySuggestions = 50
+    private static let dictionarySuggestionLogger = Logger(subsystem: "com.muesli.native", category: "DictionarySuggestion")
 
     private let runtime: RuntimePaths
     private let configStore = ConfigStore()
@@ -1920,19 +1922,35 @@ final class MuesliController: NSObject {
     }
 
     func addDictionarySuggestion(_ suggestion: DictionarySuggestion, presentPrompt: Bool = false) {
-        guard config.enableDictionaryCorrectionPrompts else { return }
+        guard config.enableDictionaryCorrectionPrompts else {
+            logDictionarySuggestion("skip reason=disabled key=\(suggestion.key)")
+            return
+        }
         let trimmedObserved = suggestion.observed.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedReplacement = suggestion.replacement.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedObserved.isEmpty, !trimmedReplacement.isEmpty else { return }
-        guard trimmedObserved != trimmedReplacement else { return }
+        guard !trimmedObserved.isEmpty, !trimmedReplacement.isEmpty else {
+            logDictionarySuggestion("skip reason=empty")
+            return
+        }
+        guard trimmedObserved != trimmedReplacement else {
+            logDictionarySuggestion("skip reason=sameText")
+            return
+        }
 
         let key = DictionarySuggestion.key(observed: trimmedObserved, replacement: trimmedReplacement)
-        guard !config.dismissedDictionarySuggestionKeys.contains(key) else { return }
+        guard !config.dismissedDictionarySuggestionKeys.contains(key) else {
+            logDictionarySuggestion("skip reason=dismissed key=\(key)")
+            return
+        }
         guard !config.customWords.contains(where: {
             DictionarySuggestion.key(observed: $0.word, replacement: $0.targetWord) == key
-        }) else { return }
+        }) else {
+            logDictionarySuggestion("skip reason=customWordExists key=\(key)")
+            return
+        }
 
         var promptSuggestion = suggestion
+        var persistenceAction = "insert"
         updateConfig { config in
             if let index = config.dictionarySuggestions.firstIndex(where: { $0.key == key }) {
                 var existing = config.dictionarySuggestions[index]
@@ -1944,6 +1962,7 @@ final class MuesliController: NSObject {
                 config.dictionarySuggestions.remove(at: index)
                 config.dictionarySuggestions.insert(existing, at: 0)
                 promptSuggestion = existing
+                persistenceAction = "update"
             } else {
                 promptSuggestion = DictionarySuggestion(
                     observed: trimmedObserved,
@@ -1957,6 +1976,7 @@ final class MuesliController: NSObject {
             }
         }
 
+        logDictionarySuggestion("persist action=\(persistenceAction) key=\(key) presentPrompt=\(presentPrompt)")
         if presentPrompt {
             presentDictionarySuggestionPrompt(promptSuggestion)
         }
@@ -1983,6 +2003,7 @@ final class MuesliController: NSObject {
             config.dictionarySuggestions.removeAll { $0.key == key }
             config.dismissedDictionarySuggestionKeys.removeAll { $0 == key }
         }
+        logDictionarySuggestion("accept key=\(key)")
     }
 
     private func dismissDictionarySuggestion(_ suggestion: DictionarySuggestion) {
@@ -1996,9 +2017,11 @@ final class MuesliController: NSObject {
                 config.dismissedDictionarySuggestionKeys = Array(config.dismissedDictionarySuggestionKeys.suffix(Self.maxDismissedDictionarySuggestionKeys))
             }
         }
+        logDictionarySuggestion("ignore key=\(key)")
     }
 
     private func presentDictionarySuggestionPrompt(_ suggestion: DictionarySuggestion) {
+        logDictionarySuggestion("present key=\(suggestion.key)")
         dictionarySuggestionPrompt.show(
             suggestion: suggestion,
             anchorFrame: indicator.currentFrame,
@@ -2009,6 +2032,11 @@ final class MuesliController: NSObject {
                 self?.dismissDictionarySuggestion(suggestion)
             }
         )
+    }
+
+    private func logDictionarySuggestion(_ message: String) {
+        Self.dictionarySuggestionLogger.debug("\(message, privacy: .public)")
+        fputs("[dictionary-suggestion] \(message)\n", stderr)
     }
 
     func updateCustomWord(_ word: CustomWord) {
@@ -6242,8 +6270,8 @@ final class MuesliController: NSObject {
                                 originalText: text,
                                 appContext: storageContext,
                                 targetApp: correctionTargetApp
-                            ) { [weak self] suggestion in
-                                self?.addDictionarySuggestion(suggestion, presentPrompt: true)
+                            ) { [weak self] suggestion, shouldPresentPrompt in
+                                self?.addDictionarySuggestion(suggestion, presentPrompt: shouldPresentPrompt)
                             }
                         }
                     }

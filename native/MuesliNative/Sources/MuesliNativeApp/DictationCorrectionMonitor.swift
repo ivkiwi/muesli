@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import Foundation
+import os
 
 struct DictationCorrectionTargetApp: Sendable {
     let processID: pid_t
@@ -27,11 +28,27 @@ struct DictionaryCorrectionDetector {
         editedText: String,
         appContext: String = ""
     ) -> DictionarySuggestion? {
-        suggestion(
+        suggestions(
             originalText: originalText,
             baselineText: originalText,
             currentText: editedText,
-            appContext: appContext
+            appContext: appContext,
+            maxSuggestions: 1
+        ).first
+    }
+
+    static func suggestions(
+        originalText: String,
+        editedText: String,
+        appContext: String = "",
+        maxSuggestions: Int = Int.max
+    ) -> [DictionarySuggestion] {
+        suggestions(
+            originalText: originalText,
+            baselineText: originalText,
+            currentText: editedText,
+            appContext: appContext,
+            maxSuggestions: maxSuggestions
         )
     }
 
@@ -41,28 +58,56 @@ struct DictionaryCorrectionDetector {
         currentText: String,
         appContext: String = ""
     ) -> DictionarySuggestion? {
-        guard !originalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        guard baselineText != currentText else { return nil }
-        guard hasSufficientSharedContext(originalText: originalText, editedText: currentText) else { return nil }
+        suggestions(
+            originalText: originalText,
+            baselineText: baselineText,
+            currentText: currentText,
+            appContext: appContext,
+            maxSuggestions: 1
+        ).first
+    }
 
-        if let suggestion = fragmentSuggestion(
+    static func suggestions(
+        originalText: String,
+        baselineText: String,
+        currentText: String,
+        appContext: String = "",
+        maxSuggestions: Int = Int.max
+    ) -> [DictionarySuggestion] {
+        guard maxSuggestions > 0 else { return [] }
+        guard !originalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+        guard baselineText != currentText else { return [] }
+        guard hasSufficientSharedContext(originalText: originalText, editedText: currentText) else { return [] }
+
+        var results: [DictionarySuggestion] = []
+        var seenKeys = Set<String>()
+
+        func append(_ suggestion: DictionarySuggestion?) {
+            guard results.count < maxSuggestions, let suggestion else { return }
+            guard !seenKeys.contains(suggestion.key) else { return }
+            seenKeys.insert(suggestion.key)
+            results.append(suggestion)
+        }
+
+        append(fragmentSuggestion(
             originalText: originalText,
             baselineText: baselineText,
             currentText: currentText,
             appContext: appContext
-        ) {
-            return suggestion
+        ))
+
+        if results.count < maxSuggestions {
+            for suggestion in tokenAlignedSuggestions(
+                originalText: originalText,
+                editedText: currentText,
+                appContext: appContext,
+                maxSuggestions: maxSuggestions - results.count
+            ) {
+                append(suggestion)
+            }
         }
 
-        if let suggestion = tokenAlignedSuggestion(
-            originalText: originalText,
-            editedText: currentText,
-            appContext: appContext
-        ) {
-            return suggestion
-        }
-
-        return nil
+        return results
     }
 
     private static func fragmentSuggestion(
@@ -93,17 +138,21 @@ struct DictionaryCorrectionDetector {
         let normalized: String
     }
 
-    private static func tokenAlignedSuggestion(
+    private static func tokenAlignedSuggestions(
         originalText: String,
         editedText: String,
-        appContext: String
-    ) -> DictionarySuggestion? {
+        appContext: String,
+        maxSuggestions: Int
+    ) -> [DictionarySuggestion] {
+        guard maxSuggestions > 0 else { return [] }
         let originalTokens = wordTokens(in: originalText)
         let editedTokens = wordTokens(in: editedText)
-        guard !originalTokens.isEmpty, !editedTokens.isEmpty else { return nil }
-        guard originalTokens.count <= 160, editedTokens.count <= 220 else { return nil }
+        guard !originalTokens.isEmpty, !editedTokens.isEmpty else { return [] }
+        guard originalTokens.count <= 160, editedTokens.count <= 220 else { return [] }
 
         let operations = alignmentOperations(from: originalTokens, to: editedTokens)
+        var suggestions: [DictionarySuggestion] = []
+        var seenKeys = Set<String>()
         for operation in operations {
             guard case .substitution(let observed, let replacement) = operation else { continue }
             guard let observedCandidate = normalizedCandidate(observed.text),
@@ -115,13 +164,19 @@ struct DictionaryCorrectionDetector {
             guard isLikelyDictionaryCorrection(observed: observedCandidate, replacement: replacementCandidate) else {
                 continue
             }
-            return DictionarySuggestion(
+            let suggestion = DictionarySuggestion(
                 observed: observedCandidate,
                 replacement: replacementCandidate,
                 appContext: appContext
             )
+            guard !seenKeys.contains(suggestion.key) else { continue }
+            seenKeys.insert(suggestion.key)
+            suggestions.append(suggestion)
+            if suggestions.count >= maxSuggestions {
+                break
+            }
         }
-        return nil
+        return suggestions
     }
 
     static func hasSufficientSharedContext(originalText: String, editedText: String) -> Bool {
@@ -476,12 +531,15 @@ struct DictationCorrectionSnapshotStabilizer {
 
 @MainActor
 final class DictationCorrectionMonitor {
+    nonisolated private static let logger = Logger(subsystem: "com.muesli.native", category: "DictionaryCorrection")
+
     private static let initialPollDelayNanoseconds: UInt64 = 100_000_000
     private static let fastPollIntervalNanoseconds: UInt64 = 150_000_000
     private static let steadyPollIntervalNanoseconds: UInt64 = 1_000_000_000
     private static let fastPollingWindowSeconds: TimeInterval = 10
     private static let monitoringWindowSeconds: TimeInterval = 45
     private static let snapshotQuietWindowSeconds: TimeInterval = 1.5
+    nonisolated private static let maxSuggestionsPerSession = 3
     nonisolated private static let maxAccessibilityNodes = 140
     nonisolated private static let maxCandidateCharacters = 2_000
 
@@ -491,17 +549,28 @@ final class DictationCorrectionMonitor {
         originalText: String,
         appContext: String,
         targetApp: DictationCorrectionTargetApp?,
-        onSuggestion: @escaping @MainActor (DictionarySuggestion) -> Void
+        onSuggestion: @escaping @MainActor (DictionarySuggestion, Bool) -> Void
     ) {
         cancel()
-        guard AXIsProcessTrusted() else { return }
+        Self.log("start originalCharacters=\(originalText.count) target=\(targetApp?.appContext ?? appContext)")
+        guard AXIsProcessTrusted() else {
+            Self.log("not-started axTrusted=false")
+            return
+        }
 
         task = Task {
             let fastPollingDeadline = Date().addingTimeInterval(Self.fastPollingWindowSeconds)
             let deadline = Date().addingTimeInterval(Self.monitoringWindowSeconds)
             var stabilizer = DictationCorrectionSnapshotStabilizer()
+            var pollCount = 0
+            var observedSnapshotCount = 0
+            var stableSnapshotCount = 0
+            var emittedSuggestionCount = 0
+            var emittedSuggestionKeys = Set<String>()
+            var lastLoggedSnapshotCount: Int?
             try? await Task.sleep(nanoseconds: Self.initialPollDelayNanoseconds)
             while !Task.isCancelled, Date() < deadline {
+                pollCount += 1
                 let snapshots = await Task.detached(priority: .utility) {
                     Self.detectEditedSnapshots(
                         originalText: originalText,
@@ -509,26 +578,50 @@ final class DictationCorrectionMonitor {
                     )
                 }.value
                 if Task.isCancelled { return }
+                if !snapshots.isEmpty {
+                    observedSnapshotCount += snapshots.count
+                    if lastLoggedSnapshotCount != snapshots.count {
+                        Self.log("poll=\(pollCount) snapshots=\(snapshots.count)")
+                        lastLoggedSnapshotCount = snapshots.count
+                    }
+                } else {
+                    lastLoggedSnapshotCount = nil
+                }
                 let stableSnapshots = stabilizer.observe(
                     snapshots: snapshots,
                     now: Date(),
                     quietWindow: Self.snapshotQuietWindowSeconds
                 )
+                if !stableSnapshots.isEmpty {
+                    stableSnapshotCount += stableSnapshots.count
+                    Self.log("poll=\(pollCount) stableSnapshots=\(stableSnapshots.count)")
+                }
                 for stableSnapshot in stableSnapshots {
-                    let suggestion = await Task.detached(priority: .utility) {
-                        Self.suggestion(
+                    let suggestions = await Task.detached(priority: .utility) {
+                        Self.suggestions(
                             originalText: originalText,
                             editedSnapshot: stableSnapshot,
                             appContext: appContext,
-                            targetApp: targetApp
+                            targetApp: targetApp,
+                            maxSuggestions: Self.maxSuggestionsPerSession
                         )
                     }.value
                     if Task.isCancelled { return }
-                    if let suggestion {
+                    if suggestions.isEmpty {
+                        Self.log("stableSnapshot rejected suggestions=0")
+                    }
+                    for suggestion in suggestions where !emittedSuggestionKeys.contains(suggestion.key) {
+                        let shouldPresentPrompt = emittedSuggestionCount == 0
+                        emittedSuggestionKeys.insert(suggestion.key)
+                        emittedSuggestionCount += 1
+                        Self.log("emit suggestion=\(suggestion.key) presentPrompt=\(shouldPresentPrompt)")
                         await MainActor.run {
-                            onSuggestion(suggestion)
+                            onSuggestion(suggestion, shouldPresentPrompt)
                         }
-                        return
+                        if emittedSuggestionCount >= Self.maxSuggestionsPerSession {
+                            Self.log("complete reason=maxSuggestions count=\(emittedSuggestionCount)")
+                            return
+                        }
                     }
                 }
                 let interval = Date() < fastPollingDeadline
@@ -536,6 +629,7 @@ final class DictationCorrectionMonitor {
                     : Self.steadyPollIntervalNanoseconds
                 try? await Task.sleep(nanoseconds: interval)
             }
+            Self.log("complete reason=timeout polls=\(pollCount) snapshots=\(observedSnapshotCount) stableSnapshots=\(stableSnapshotCount) suggestions=\(emittedSuggestionCount)")
         }
     }
 
@@ -544,18 +638,25 @@ final class DictationCorrectionMonitor {
         task = nil
     }
 
-    nonisolated private static func suggestion(
+    nonisolated private static func suggestions(
         originalText: String,
         editedSnapshot: String,
         appContext: String,
-        targetApp: DictationCorrectionTargetApp?
-    ) -> DictionarySuggestion? {
+        targetApp: DictationCorrectionTargetApp?,
+        maxSuggestions: Int
+    ) -> [DictionarySuggestion] {
         let resolvedAppContext = appContext.isEmpty ? (targetApp?.appContext ?? "") : appContext
-        return DictionaryCorrectionDetector.suggestion(
+        return DictionaryCorrectionDetector.suggestions(
             originalText: originalText,
             editedText: editedSnapshot,
-            appContext: resolvedAppContext
+            appContext: resolvedAppContext,
+            maxSuggestions: maxSuggestions
         )
+    }
+
+    nonisolated private static func log(_ message: String) {
+        logger.debug("\(message, privacy: .public)")
+        fputs("[dictionary-monitor] \(message)\n", stderr)
     }
 
     nonisolated private static func detectEditedSnapshots(
