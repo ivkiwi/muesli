@@ -22,6 +22,7 @@ struct DictationCorrectionTargetApp: Sendable {
 
 struct DictionaryCorrectionDetector {
     private static let minimumCorrectionSimilarity = 0.64
+    private static let maxObservedTokensPerDictionaryWord = 2
 
     static func suggestion(
         originalText: String,
@@ -223,6 +224,9 @@ struct DictionaryCorrectionDetector {
         maxSuggestions: Int
     ) -> [DictionarySuggestion] {
         guard maxSuggestions > 0 else { return [] }
+        guard run.observedTokens.count <= run.replacementTokens.count * maxObservedTokensPerDictionaryWord else {
+            return []
+        }
         var results: [DictionarySuggestion] = []
         var observedIndex = 0
 
@@ -232,7 +236,7 @@ struct DictionaryCorrectionDetector {
             var bestSuggestion: DictionarySuggestion?
             var bestObservedLength = 0
             var bestSimilarity = 0.0
-            let maxObservedLength = min(3, run.observedTokens.count - observedIndex)
+            let maxObservedLength = min(maxObservedTokensPerDictionaryWord, run.observedTokens.count - observedIndex)
 
             for observedLength in 1...maxObservedLength {
                 let observedText = run.observedTokens[observedIndex..<(observedIndex + observedLength)]
@@ -432,7 +436,9 @@ struct DictionaryCorrectionDetector {
     private static func isWordScopedSuggestion(observed: String, replacement: String) -> Bool {
         let observedTokens = observed.split(whereSeparator: \.isWhitespace)
         let replacementTokens = replacement.split(whereSeparator: \.isWhitespace)
-        guard replacementTokens.count == 1, (1...3).contains(observedTokens.count) else {
+        guard replacementTokens.count == 1,
+              (1...maxObservedTokensPerDictionaryWord).contains(observedTokens.count)
+        else {
             return false
         }
         if observedTokens.count == 1 {

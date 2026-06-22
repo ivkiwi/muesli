@@ -160,6 +160,19 @@ struct DictionaryCorrectionDetectorTests {
         #expect(suggestions.map(\.replacement) == ["Thoraipakkam", "Karapakkam", "Nungambakkam"])
     }
 
+    @Test("does not suggest three token collapse corrections")
+    func skipsThreeTokenCollapseCorrections() {
+        let original = "can it transcribe Thoray I Pakam properly in this sentence"
+        let edited = "can it transcribe Thoraipakkam properly in this sentence"
+
+        let suggestion = DictionaryCorrectionDetector.suggestion(
+            originalText: original,
+            editedText: edited
+        )
+
+        #expect(suggestion == nil)
+    }
+
     @Test("detects word correction when extra text is appended afterwards")
     func detectsCorrectionWithAdditionalTyping() {
         let original = "So this time if I say Newsly has not transcribed Newsly properly, would you be able to add it to dictionary immediately?"
