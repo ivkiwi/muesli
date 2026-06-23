@@ -185,6 +185,9 @@ final class MuesliController: NSObject {
     private static let maxDismissedDictionarySuggestionKeys = 200
     private static let maxDictionarySuggestions = 50
     private static let dictionarySuggestionLogger = Logger(subsystem: "com.muesli.native", category: "DictionarySuggestion")
+    private static let pendingDictionaryCorrectionAccessibilityEnableKey = "dictionaryCorrectionPrompts.pendingAccessibilityEnable"
+    private static let pendingDictionaryCorrectionAccessibilityRequestedAtKey = "dictionaryCorrectionPrompts.pendingAccessibilityRequestedAt"
+    private static let dictionaryCorrectionAccessibilityIntentTimeout: TimeInterval = 24 * 60 * 60
 
     private let runtime: RuntimePaths
     private let configStore = ConfigStore()
@@ -386,6 +389,7 @@ final class MuesliController: NSObject {
         CoreAudioSystemRecorder.cleanupStaleDevices()
 
         syncLaunchAtLoginConfigWithSystem()
+        reconcilePendingDictionaryCorrectionAccessibilityEnable()
 
         // Clean up leftover audio temp files from previous sessions.
         cleanupTemporaryDirectory(
@@ -2122,6 +2126,7 @@ final class MuesliController: NSObject {
 
     func setDictionaryCorrectionPromptsEnabled(_ enabled: Bool) {
         if !enabled {
+            clearPendingDictionaryCorrectionAccessibilityEnable()
             dictationCorrectionMonitor.cancel()
             updateConfig { $0.enableDictionaryCorrectionPrompts = false }
             return
@@ -2137,16 +2142,54 @@ final class MuesliController: NSObject {
     @discardableResult
     func requestDictionaryCorrectionAccessibilityEnable() -> Bool {
         guard !AXIsProcessTrusted() else {
+            clearPendingDictionaryCorrectionAccessibilityEnable()
             setDictionaryCorrectionPromptsEnabled(true)
             return true
         }
+        markPendingDictionaryCorrectionAccessibilityEnable()
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
         AXIsProcessTrustedWithOptions(options)
         if AXIsProcessTrusted() {
+            clearPendingDictionaryCorrectionAccessibilityEnable()
             setDictionaryCorrectionPromptsEnabled(true)
             return true
         }
         return false
+    }
+
+    @discardableResult
+    func reconcilePendingDictionaryCorrectionAccessibilityEnable(now: Date = Date()) -> Bool {
+        guard isPendingDictionaryCorrectionAccessibilityEnable else { return false }
+        guard !isPendingDictionaryCorrectionAccessibilityEnableExpired(now: now) else {
+            clearPendingDictionaryCorrectionAccessibilityEnable()
+            return false
+        }
+        guard AXIsProcessTrusted() else { return false }
+        clearPendingDictionaryCorrectionAccessibilityEnable()
+        setDictionaryCorrectionPromptsEnabled(true)
+        return true
+    }
+
+    private var isPendingDictionaryCorrectionAccessibilityEnable: Bool {
+        UserDefaults.standard.bool(forKey: Self.pendingDictionaryCorrectionAccessibilityEnableKey)
+    }
+
+    private func markPendingDictionaryCorrectionAccessibilityEnable(now: Date = Date()) {
+        let defaults = UserDefaults.standard
+        defaults.set(true, forKey: Self.pendingDictionaryCorrectionAccessibilityEnableKey)
+        defaults.set(now.timeIntervalSince1970, forKey: Self.pendingDictionaryCorrectionAccessibilityRequestedAtKey)
+    }
+
+    private func clearPendingDictionaryCorrectionAccessibilityEnable() {
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: Self.pendingDictionaryCorrectionAccessibilityEnableKey)
+        defaults.removeObject(forKey: Self.pendingDictionaryCorrectionAccessibilityRequestedAtKey)
+    }
+
+    private func isPendingDictionaryCorrectionAccessibilityEnableExpired(now: Date) -> Bool {
+        let requestedAt = UserDefaults.standard.double(forKey: Self.pendingDictionaryCorrectionAccessibilityRequestedAtKey)
+        guard requestedAt > 0 else { return true }
+        return now.timeIntervalSince1970 - requestedAt > Self.dictionaryCorrectionAccessibilityIntentTimeout
     }
 
     @discardableResult

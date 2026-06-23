@@ -93,6 +93,16 @@ struct DictionaryCorrectionDetectorTests {
         #expect(suggestion == nil)
     }
 
+    @Test("does not accept prefix-only acronym corrections")
+    func skipsPrefixOnlyAcronymCorrection() {
+        let suggestion = DictionaryCorrectionDetector.suggestion(
+            originalText: "we discussed north american expansion today",
+            editedText: "we discussed NASA expansion today"
+        )
+
+        #expect(suggestion == nil)
+    }
+
     @Test("detects numeric shorthand corrections")
     func detectsNumericShorthandCorrection() {
         let suggestion = DictionaryCorrectionDetector.suggestion(
@@ -219,6 +229,22 @@ struct DictionaryCorrectionDetectorTests {
         #expect(suggestion?.observed == "Newsly")
         #expect(suggestion?.replacement == "muesli")
         #expect(suggestion?.appContext == "Codex|com.openai.chat")
+    }
+
+    @Test("detects a correction inside a large focused text snapshot")
+    func detectsCorrectionInsideLargeFocusedTextSnapshot() {
+        let prefix = (0..<140).map { "prefix\($0)" }.joined(separator: " ")
+        let suffix = (0..<140).map { "suffix\($0)" }.joined(separator: " ")
+        let original = "\(prefix) I like museli today \(suffix)"
+        let edited = "\(prefix) I like muesli today \(suffix)"
+
+        let suggestion = DictionaryCorrectionDetector.suggestion(
+            originalText: original,
+            editedText: edited
+        )
+
+        #expect(suggestion?.observed == "museli")
+        #expect(suggestion?.replacement == "muesli")
     }
 
     @Test("detects a word correction next to an inserted word")

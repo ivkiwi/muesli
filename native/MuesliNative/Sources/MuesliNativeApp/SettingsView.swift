@@ -235,7 +235,7 @@ struct SettingsView: View {
                 controller.requestDictionaryCorrectionAccessibilityEnable()
             }
         } message: {
-            Text("Dictionary suggestions briefly read focused app text via Accessibility after dictation. Grant access, restart Muesli, then turn suggestions on.")
+            Text("Dictionary suggestions briefly read focused app text via Accessibility after dictation. Grant access, then relaunch Muesli to turn suggestions on.")
         }
     }
 
@@ -1505,6 +1505,7 @@ struct SettingsView: View {
     private func refreshPermissionStatuses(refreshLaunchAtLogin: Bool = false) {
         micGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         accessibilityGranted = AXIsProcessTrusted()
+        controller.reconcilePendingDictionaryCorrectionAccessibilityEnable()
         inputMonitoringGranted = CGPreflightListenEventAccess()
         screenRecordingGranted = CGPreflightScreenCaptureAccess()
         if refreshLaunchAtLogin {

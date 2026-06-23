@@ -23,6 +23,10 @@ struct DictationCorrectionTargetApp: Sendable {
 struct DictionaryCorrectionDetector {
     private static let minimumCorrectionSimilarity = 0.64
     private static let maxObservedTokensPerDictionaryWord = 2
+    private static let alignmentContextTokenCount = 4
+    private static let maxAlignmentWindowTokens = 96
+    private static let maxAlignmentCellCount = 12_000
+    private static let spellChecker = NSSpellChecker()
 
     private struct CorrectionCandidate {
         let observed: String
@@ -196,9 +200,9 @@ struct DictionaryCorrectionDetector {
         let originalTokens = wordTokens(in: originalText)
         let editedTokens = wordTokens(in: editedText)
         guard !originalTokens.isEmpty, !editedTokens.isEmpty else { return [] }
-        guard originalTokens.count <= 160, editedTokens.count <= 220 else { return [] }
+        guard let tokenWindow = alignmentTokenWindow(from: originalTokens, to: editedTokens) else { return [] }
 
-        let operations = alignmentOperations(from: originalTokens, to: editedTokens)
+        let operations = alignmentOperations(from: tokenWindow.original, to: tokenWindow.edited)
         var candidates: [CorrectionCandidate] = []
         var seenKeys = Set<String>()
 
@@ -221,6 +225,46 @@ struct DictionaryCorrectionDetector {
             if candidates.count >= maxCandidates { break }
         }
         return candidates
+    }
+
+    private static func alignmentTokenWindow(
+        from originalTokens: [WordToken],
+        to editedTokens: [WordToken]
+    ) -> (original: [WordToken], edited: [WordToken])? {
+        var prefix = 0
+        while prefix < originalTokens.count,
+              prefix < editedTokens.count,
+              originalTokens[prefix].normalized == editedTokens[prefix].normalized {
+            prefix += 1
+        }
+
+        var originalSuffix = originalTokens.count
+        var editedSuffix = editedTokens.count
+        while originalSuffix > prefix,
+              editedSuffix > prefix,
+              originalTokens[originalSuffix - 1].normalized == editedTokens[editedSuffix - 1].normalized {
+            originalSuffix -= 1
+            editedSuffix -= 1
+        }
+
+        let originalStart = max(0, prefix - alignmentContextTokenCount)
+        let editedStart = max(0, prefix - alignmentContextTokenCount)
+        let originalEnd = min(originalTokens.count, originalSuffix + alignmentContextTokenCount)
+        let editedEnd = min(editedTokens.count, editedSuffix + alignmentContextTokenCount)
+        let originalWindowCount = originalEnd - originalStart
+        let editedWindowCount = editedEnd - editedStart
+
+        guard originalWindowCount > 0,
+              editedWindowCount > 0,
+              originalWindowCount <= maxAlignmentWindowTokens,
+              editedWindowCount <= maxAlignmentWindowTokens,
+              (originalWindowCount + 1) * (editedWindowCount + 1) <= maxAlignmentCellCount
+        else { return nil }
+
+        return (
+            Array(originalTokens[originalStart..<originalEnd]),
+            Array(editedTokens[editedStart..<editedEnd])
+        )
     }
 
     private struct TokenChangeRun {
@@ -695,7 +739,7 @@ struct DictionaryCorrectionDetector {
         let initials = observedTokens.compactMap { $0.first?.lowercased() }.joined()
         let replacementLetters = replacement.lowercased().filter(\.isLetter)
         guard !initials.isEmpty, !replacementLetters.isEmpty else { return false }
-        return replacementLetters.hasPrefix(initials)
+        return replacementLetters == initials
     }
 
     private static func isCommonWordTruncation(observed: String, replacement: String) -> Bool {
@@ -714,7 +758,7 @@ struct DictionaryCorrectionDetector {
     private static func isRecognizedEnglishWord(_ value: String) -> Bool {
         spellCheckerLock.lock()
         defer { spellCheckerLock.unlock() }
-        let range = NSSpellChecker().checkSpelling(
+        let range = spellChecker.checkSpelling(
             of: value,
             startingAt: 0,
             language: "en",

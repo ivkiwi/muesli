@@ -34,13 +34,16 @@ struct DictionaryView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(MuesliTheme.backgroundBase)
+        .onAppear {
+            controller.reconcilePendingDictionaryCorrectionAccessibilityEnable()
+        }
         .alert("Enable Accessibility?", isPresented: $isShowingAccessibilityPrompt) {
             Button("Cancel", role: .cancel) {}
             Button("Enable") {
                 controller.requestDictionaryCorrectionAccessibilityEnable()
             }
         } message: {
-            Text("Dictionary suggestions briefly read focused app text via Accessibility after dictation. Grant access, restart Muesli, then turn suggestions on.")
+            Text("Dictionary suggestions briefly read focused app text via Accessibility after dictation. Grant access, then relaunch Muesli to turn suggestions on.")
         }
     }
 
