@@ -819,6 +819,8 @@ struct DictationCorrectionSnapshotStabilizer {
                   let changedAt = snapshotChangedAt[snapshot],
                   now.timeIntervalSince(changedAt) >= quietWindow
             else { continue }
+            // Content-addressed stabilization intentionally evaluates each exact
+            // snapshot once; later edits must produce a different snapshot to run.
             evaluatedSnapshots.insert(snapshot)
             stableSnapshots.append(snapshot)
         }
@@ -839,8 +841,12 @@ final class DictationCorrectionMonitor {
     nonisolated private static let maxSuggestionsPerSession = 3
     nonisolated private static let maxAccessibilityNodes = 140
     nonisolated private static let maxCandidateCharacters = 2_000
+    nonisolated private static let maxEnglishWordRecognitionCacheEntries = 5_000
 
+    // MainActor-isolated by the enclosing type; NSSpellChecker is only touched
+    // while filling this cache before detached detector work starts.
     private static var englishWordRecognitionCache: [String: Bool] = [:]
+    private static var englishWordRecognitionCacheOrder: [String] = []
 
     private var task: Task<Void, Never>?
 
@@ -976,13 +982,25 @@ final class DictationCorrectionMonitor {
                     wordCount: nil
                 )
                 isRecognized = range.location == NSNotFound
-                englishWordRecognitionCache[candidate] = isRecognized
+                cacheEnglishWordRecognition(candidate, isRecognized: isRecognized)
             }
             if isRecognized {
                 recognizedWords.insert(candidate)
             }
         }
         return recognizedWords
+    }
+
+    private static func cacheEnglishWordRecognition(_ candidate: String, isRecognized: Bool) {
+        if englishWordRecognitionCache[candidate] == nil {
+            englishWordRecognitionCacheOrder.append(candidate)
+        }
+        englishWordRecognitionCache[candidate] = isRecognized
+
+        while englishWordRecognitionCacheOrder.count > maxEnglishWordRecognitionCacheEntries {
+            let evicted = englishWordRecognitionCacheOrder.removeFirst()
+            englishWordRecognitionCache.removeValue(forKey: evicted)
+        }
     }
 
     private static func englishWordCandidates(in texts: [String]) -> Set<String> {

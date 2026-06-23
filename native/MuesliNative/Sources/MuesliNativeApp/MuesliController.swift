@@ -2152,11 +2152,6 @@ final class MuesliController: NSObject {
         markPendingDictionaryCorrectionAccessibilityEnable()
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
         AXIsProcessTrustedWithOptions(options)
-        if AXIsProcessTrusted() {
-            clearPendingDictionaryCorrectionAccessibilityEnable()
-            setDictionaryCorrectionPromptsEnabled(true)
-            return true
-        }
         return false
     }
 
