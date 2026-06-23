@@ -23,11 +23,8 @@ struct DictationCorrectionTargetApp: Sendable {
 struct DictionaryCorrectionDetector {
     private static let minimumCorrectionSimilarity = 0.64
     private static let maxObservedTokensPerDictionaryWord = 2
-    private static let alignmentContextTokenCount = 4
-    private static let alignmentAnchorTokenCount = 4
-    private static let maxAlignmentWindowTokens = 96
-    private static let maxAlignmentCellCount = 12_000
-    private static let maxAlignmentSegmentationDepth = 12
+    private static let maxAlignmentTokens = 320
+    private static let maxAlignmentCellCount = 120_000
     private static let spellChecker = NSSpellChecker()
 
     private struct CorrectionCandidate {
@@ -202,6 +199,10 @@ struct DictionaryCorrectionDetector {
         let originalTokens = wordTokens(in: originalText)
         let editedTokens = wordTokens(in: editedText)
         guard !originalTokens.isEmpty, !editedTokens.isEmpty else { return [] }
+        guard isAlignmentInputWithinBounds(
+            originalCount: originalTokens.count,
+            editedCount: editedTokens.count
+        ) else { return [] }
 
         var candidates: [CorrectionCandidate] = []
         var seenKeys = Set<String>()
@@ -214,240 +215,27 @@ struct DictionaryCorrectionDetector {
             candidates.append(candidate)
         }
 
-        for tokenWindow in alignmentTokenWindows(from: originalTokens, to: editedTokens) {
-            let operations = alignmentOperations(from: tokenWindow.original, to: tokenWindow.edited)
-            for run in tokenChangeRuns(in: operations) {
-                for candidate in candidatesFromTokenRun(
-                    fromTokenRun: run,
-                    originalText: originalText,
-                    maxCandidates: maxCandidates - candidates.count
-                ) {
-                    append(candidate)
-                }
-                if candidates.count >= maxCandidates { break }
+        let operations = alignmentOperations(from: originalTokens, to: editedTokens)
+        for run in tokenChangeRuns(in: operations) {
+            for candidate in candidatesFromTokenRun(
+                fromTokenRun: run,
+                originalText: originalText,
+                maxCandidates: maxCandidates - candidates.count
+            ) {
+                append(candidate)
             }
             if candidates.count >= maxCandidates { break }
         }
         return candidates
     }
 
-    private struct AlignmentTokenWindow {
-        let original: [WordToken]
-        let edited: [WordToken]
-    }
-
-    private struct TokenChangeRange {
-        let originalStart: Int
-        let originalEnd: Int
-        let editedStart: Int
-        let editedEnd: Int
-    }
-
-    private struct TokenAnchor {
-        let originalStart: Int
-        let editedStart: Int
-        let length: Int
-    }
-
-    private static func alignmentTokenWindows(
-        from originalTokens: [WordToken],
-        to editedTokens: [WordToken]
-    ) -> [AlignmentTokenWindow] {
-        let ranges = changedTokenRanges(
-            originalTokens: originalTokens,
-            editedTokens: editedTokens,
-            originalStart: 0,
-            originalEnd: originalTokens.count,
-            editedStart: 0,
-            editedEnd: editedTokens.count,
-            depth: 0
-        )
-
-        return ranges.compactMap { range in
-            let originalStart = max(0, range.originalStart - alignmentContextTokenCount)
-            let editedStart = max(0, range.editedStart - alignmentContextTokenCount)
-            let originalEnd = min(originalTokens.count, range.originalEnd + alignmentContextTokenCount)
-            let editedEnd = min(editedTokens.count, range.editedEnd + alignmentContextTokenCount)
-            guard isAlignmentWindowWithinBounds(
-                originalCount: originalEnd - originalStart,
-                editedCount: editedEnd - editedStart
-            ) else { return nil }
-            return AlignmentTokenWindow(
-                original: Array(originalTokens[originalStart..<originalEnd]),
-                edited: Array(editedTokens[editedStart..<editedEnd])
-            )
-        }
-    }
-
-    // Split large AX snapshots into local edit islands so distant edits do not suppress each other.
-    private static func changedTokenRanges(
-        originalTokens: [WordToken],
-        editedTokens: [WordToken],
-        originalStart: Int,
-        originalEnd: Int,
-        editedStart: Int,
-        editedEnd: Int,
-        depth: Int
-    ) -> [TokenChangeRange] {
-        var originalStart = originalStart
-        var editedStart = editedStart
-        var originalEnd = originalEnd
-        var editedEnd = editedEnd
-
-        while originalStart < originalEnd,
-              editedStart < editedEnd,
-              originalTokens[originalStart].text == editedTokens[editedStart].text {
-            originalStart += 1
-            editedStart += 1
-        }
-
-        while originalEnd > originalStart,
-              editedEnd > editedStart,
-              originalTokens[originalEnd - 1].text == editedTokens[editedEnd - 1].text {
-            originalEnd -= 1
-            editedEnd -= 1
-        }
-
-        guard originalStart < originalEnd || editedStart < editedEnd else { return [] }
-
-        if isAlignmentWindowWithinBounds(
-            originalCount: originalEnd - originalStart + alignmentContextTokenCount * 2,
-            editedCount: editedEnd - editedStart + alignmentContextTokenCount * 2
-        ) {
-            return [
-                TokenChangeRange(
-                    originalStart: originalStart,
-                    originalEnd: originalEnd,
-                    editedStart: editedStart,
-                    editedEnd: editedEnd
-                ),
-            ]
-        }
-
-        guard depth < maxAlignmentSegmentationDepth,
-              let anchor = bestCommonTokenAnchor(
-                originalTokens: originalTokens,
-                editedTokens: editedTokens,
-                originalStart: originalStart,
-                originalEnd: originalEnd,
-                editedStart: editedStart,
-                editedEnd: editedEnd
-              )
-        else { return [] }
-
-        let left = changedTokenRanges(
-            originalTokens: originalTokens,
-            editedTokens: editedTokens,
-            originalStart: originalStart,
-            originalEnd: anchor.originalStart,
-            editedStart: editedStart,
-            editedEnd: anchor.editedStart,
-            depth: depth + 1
-        )
-        let right = changedTokenRanges(
-            originalTokens: originalTokens,
-            editedTokens: editedTokens,
-            originalStart: anchor.originalStart + anchor.length,
-            originalEnd: originalEnd,
-            editedStart: anchor.editedStart + anchor.length,
-            editedEnd: editedEnd,
-            depth: depth + 1
-        )
-        return left + right
-    }
-
-    private static func isAlignmentWindowWithinBounds(originalCount: Int, editedCount: Int) -> Bool {
+    private static func isAlignmentInputWithinBounds(originalCount: Int, editedCount: Int) -> Bool {
         guard originalCount > 0,
               editedCount > 0,
-              originalCount <= maxAlignmentWindowTokens,
-              editedCount <= maxAlignmentWindowTokens
+              originalCount <= maxAlignmentTokens,
+              editedCount <= maxAlignmentTokens
         else { return false }
         return (originalCount + 1) * (editedCount + 1) <= maxAlignmentCellCount
-    }
-
-    private static func bestCommonTokenAnchor(
-        originalTokens: [WordToken],
-        editedTokens: [WordToken],
-        originalStart: Int,
-        originalEnd: Int,
-        editedStart: Int,
-        editedEnd: Int
-    ) -> TokenAnchor? {
-        let maxLength = min(alignmentAnchorTokenCount, originalEnd - originalStart, editedEnd - editedStart)
-        guard maxLength >= 2 else { return nil }
-
-        for length in stride(from: maxLength, through: 2, by: -1) {
-            var originalPositionsByKey: [String: [Int]] = [:]
-            var editedPositionsByKey: [String: [Int]] = [:]
-
-            if originalEnd - originalStart >= length {
-                for index in originalStart...(originalEnd - length) {
-                    originalPositionsByKey[tokenWindowKey(originalTokens, start: index, length: length), default: []].append(index)
-                }
-            }
-            if editedEnd - editedStart >= length {
-                for index in editedStart...(editedEnd - length) {
-                    editedPositionsByKey[tokenWindowKey(editedTokens, start: index, length: length), default: []].append(index)
-                }
-            }
-
-            var bestAnchor: TokenAnchor?
-            var bestScore = Int.max
-            let originalMidpoint = (originalStart + originalEnd) / 2
-            let editedMidpoint = (editedStart + editedEnd) / 2
-
-            for key in originalPositionsByKey.keys.sorted() {
-                guard let originalPositions = originalPositionsByKey[key] else { continue }
-                guard originalPositions.count == 1,
-                      let editedPositions = editedPositionsByKey[key],
-                      editedPositions.count == 1,
-                      let originalPosition = originalPositions.first,
-                      let editedPosition = editedPositions.first
-                else { continue }
-
-                let anchor = TokenAnchor(
-                    originalStart: originalPosition,
-                    editedStart: editedPosition,
-                    length: length
-                )
-                guard splitsChangedRange(
-                    anchor: anchor,
-                    originalStart: originalStart,
-                    originalEnd: originalEnd,
-                    editedStart: editedStart,
-                    editedEnd: editedEnd
-                ) else { continue }
-
-                let originalCenter = originalPosition + length / 2
-                let editedCenter = editedPosition + length / 2
-                let score = abs(originalCenter - originalMidpoint) + abs(editedCenter - editedMidpoint)
-                if score < bestScore {
-                    bestScore = score
-                    bestAnchor = anchor
-                }
-            }
-
-            if let bestAnchor {
-                return bestAnchor
-            }
-        }
-        return nil
-    }
-
-    private static func splitsChangedRange(
-        anchor: TokenAnchor,
-        originalStart: Int,
-        originalEnd: Int,
-        editedStart: Int,
-        editedEnd: Int
-    ) -> Bool {
-        let hasLeftSide = anchor.originalStart > originalStart || anchor.editedStart > editedStart
-        let hasRightSide = anchor.originalStart + anchor.length < originalEnd || anchor.editedStart + anchor.length < editedEnd
-        return hasLeftSide && hasRightSide
-    }
-
-    private static func tokenWindowKey(_ tokens: [WordToken], start: Int, length: Int) -> String {
-        tokens[start..<(start + length)].map(\.text).joined(separator: "\u{1f}")
     }
 
     private struct TokenChangeRun {

@@ -265,6 +265,22 @@ struct DictionaryCorrectionDetectorTests {
         #expect(suggestions.map(\.replacement) == ["muesli", "muesli"])
     }
 
+    @Test("detects far-apart corrections across repeated separator text")
+    func detectsFarApartCorrectionsAcrossRepeatedSeparatorText() {
+        let middle = Array(repeating: "and then", count: 100).joined(separator: " ")
+        let original = "I like museli today \(middle) I mentioned newsly again"
+        let edited = "I like muesli today \(middle) I mentioned muesli again"
+
+        let suggestions = DictionaryCorrectionDetector.suggestions(
+            originalText: original,
+            editedText: edited,
+            maxSuggestions: 3
+        )
+
+        #expect(suggestions.map(\.observed) == ["museli", "newsly"])
+        #expect(suggestions.map(\.replacement) == ["muesli", "muesli"])
+    }
+
     @Test("detects a word correction next to an inserted word")
     func detectsCorrectionNextToInsertedWord() {
         let suggestions = DictionaryCorrectionDetector.suggestions(
