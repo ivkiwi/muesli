@@ -3181,6 +3181,7 @@ final class MuesliController: NSObject {
         for folder in folders where !visited.contains(folder.id) {
             if let pid = folder.parentID, byID[pid] == nil {
                 result.append(folder)
+                visit(folder.id)
             }
         }
         return result

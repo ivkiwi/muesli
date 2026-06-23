@@ -2197,15 +2197,22 @@ struct DictationStoreTests {
         #expect(ids == [1, 3, 5, 4, 2])
     }
 
-    @Test("treeOrderedFolders handles orphaned folders")
+    @Test("treeOrderedFolders handles orphaned folders and their children")
     func treeOrderedFoldersHandlesOrphans() {
         let folders = [
             MeetingFolder(id: 1, name: "Root", parentID: nil, createdAt: ""),
             MeetingFolder(id: 2, name: "Orphan", parentID: 999, createdAt: ""),
+            MeetingFolder(id: 3, name: "OrphanChild", parentID: 2, createdAt: ""),
         ]
-        let ordered = MuesliController.treeOrderedFolders(folders, order: [1, 2])
-        #expect(ordered.count == 2)
-        #expect(ordered.map(\.id).contains(2))
+        let ordered = MuesliController.treeOrderedFolders(folders, order: [1, 2, 3])
+        #expect(ordered.count == 3)
+        let ids = ordered.map(\.id)
+        #expect(ids.contains(2))
+        #expect(ids.contains(3))
+        // Orphan child should appear after its parent.
+        let orphanIdx = ids.firstIndex(of: 2)!
+        let childIdx = ids.firstIndex(of: 3)!
+        #expect(childIdx > orphanIdx)
     }
 
     // MARK: - Search Tests
