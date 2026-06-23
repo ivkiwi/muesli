@@ -2181,6 +2181,8 @@ struct DictationStoreTests {
         #expect(counts.total == 3)
         #expect(counts.byFolder[child] == 2)
         #expect(counts.byFolder[parent] == 3) // 1 direct + 2 from child
+        #expect(counts.directByFolder[parent] == 1)
+        #expect(counts.directByFolder[child] == 2)
     }
 
     @Test("treeOrderedFolders produces depth-first order")

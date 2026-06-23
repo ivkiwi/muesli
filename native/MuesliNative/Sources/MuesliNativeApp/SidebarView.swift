@@ -142,13 +142,13 @@ struct SidebarView: View {
                 folderToDelete = nil
             }
         } message: {
-            let count = folderToDelete.map { folder in
-                appState.meetingCountsByFolder[folder.id] ?? 0
+            let directCount = folderToDelete.map { folder in
+                appState.directMeetingCountsByFolder[folder.id] ?? 0
             } ?? 0
-            if count > 0 {
-                Text("\(count) meeting\(count == 1 ? "" : "s") in this folder will be moved to Unfiled.")
+            if directCount > 0 {
+                Text("\(directCount) meeting\(directCount == 1 ? "" : "s") in this folder will be moved to Unfiled. Subfolders will be kept.")
             } else {
-                Text("This folder will be permanently removed.")
+                Text("This folder will be permanently removed. Subfolders will be kept.")
             }
         }
     }

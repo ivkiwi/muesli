@@ -189,7 +189,10 @@ public final class DictationStore {
             _ = sqlite3_exec(db, sql, nil, nil, nil)
         }
         if sqlite3_exec(db, "ALTER TABLE meeting_folders ADD COLUMN parent_id INTEGER REFERENCES meeting_folders(id)", nil, nil, nil) != SQLITE_OK {
-            // Column may already exist.
+            let msg = String(cString: sqlite3_errmsg(db))
+            if !msg.localizedCaseInsensitiveContains("duplicate column") {
+                fputs("[muesli-store] migration warning: ALTER TABLE meeting_folders ADD parent_id failed: \(msg)\n", stderr)
+            }
         }
         let _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_meeting_folders_parent ON meeting_folders(parent_id)", nil, nil, nil)
         let _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_meetings_folder ON meetings(folder_id)", nil, nil, nil)
@@ -314,7 +317,7 @@ public final class DictationStore {
         return makeDictationRecord(statement)
     }
 
-    public func meetingCounts() throws -> (total: Int, byFolder: [Int64: Int]) {
+    public func meetingCounts() throws -> (total: Int, byFolder: [Int64: Int], directByFolder: [Int64: Int]) {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
 
@@ -350,7 +353,12 @@ public final class DictationStore {
 
         // Compute recursive counts bottom-up via post-order traversal.
         var byFolder: [Int64: Int] = [:]
+        var visiting: Set<Int64> = []
         func recursiveCount(for id: Int64) -> Int {
+            if let cached = byFolder[id] { return cached }
+            guard visiting.insert(id).inserted else { return 0 }
+            defer { visiting.remove(id) }
+
             var count = directByFolder[id] ?? 0
             for childID in childrenMap[id] ?? [] {
                 count += recursiveCount(for: childID)
@@ -364,7 +372,7 @@ public final class DictationStore {
             }
         }
 
-        return (total, byFolder)
+        return (total, byFolder, directByFolder)
     }
 
     private func listFoldersInternal(db: OpaquePointer?) throws -> [MeetingFolder] {
@@ -393,13 +401,20 @@ public final class DictationStore {
         defer { sqlite3_close(db) }
 
         var sql: String
-        var folderIDs: Set<Int64> = []
-        if let folderID {
-            // Include the selected folder and all its descendants.
-            folderIDs = try descendantFolderIDs(of: folderID, db: db)
-            folderIDs.insert(folderID)
-            let placeholders = folderIDs.map { _ in "?" }.joined(separator: ",")
-            sql = "SELECT \(Self.meetingColumns) FROM meetings WHERE folder_id IN (\(placeholders)) AND deleted_at IS NULL ORDER BY id DESC"
+        if folderID != nil {
+            // Recursive CTE collects the selected folder and all descendants
+            // without needing one placeholder per folder.
+            sql = """
+                WITH RECURSIVE folder_tree(id) AS (
+                    SELECT id FROM meeting_folders WHERE id = ?
+                    UNION ALL
+                    SELECT mf.id FROM meeting_folders mf
+                    JOIN folder_tree ft ON mf.parent_id = ft.id
+                )
+                SELECT \(Self.meetingColumns) FROM meetings
+                WHERE folder_id IN (SELECT id FROM folder_tree) AND deleted_at IS NULL
+                ORDER BY id DESC
+                """
         } else {
             sql = "SELECT \(Self.meetingColumns) FROM meetings WHERE deleted_at IS NULL ORDER BY id DESC"
         }
@@ -411,11 +426,9 @@ public final class DictationStore {
         }
         defer { sqlite3_finalize(statement) }
         var bindIndex: Int32 = 1
-        if !folderIDs.isEmpty {
-            for fid in folderIDs.sorted() {
-                sqlite3_bind_int64(statement, bindIndex, fid)
-                bindIndex += 1
-            }
+        if folderID != nil {
+            sqlite3_bind_int64(statement, bindIndex, folderID!)
+            bindIndex += 1
         }
         if let limit {
             sqlite3_bind_int(statement, bindIndex, Int32(limit))
