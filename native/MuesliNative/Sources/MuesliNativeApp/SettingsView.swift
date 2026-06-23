@@ -230,7 +230,9 @@ struct SettingsView: View {
             "Enable Accessibility?",
             isPresented: $isShowingDictionaryAccessibilityPrompt
         ) {
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) {
+                controller.cancelDictionaryCorrectionAccessibilityEnableRequest()
+            }
             Button("Enable") {
                 controller.requestDictionaryCorrectionAccessibilityEnable()
             }

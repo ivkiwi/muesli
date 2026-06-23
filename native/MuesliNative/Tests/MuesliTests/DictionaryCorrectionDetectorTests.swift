@@ -93,6 +93,18 @@ struct DictionaryCorrectionDetectorTests {
         #expect(suggestion == nil)
     }
 
+    @Test("detects single-token acronym casing corrections")
+    func detectsSingleTokenAcronymCasingCorrection() {
+        let suggestions = DictionaryCorrectionDetector.suggestions(
+            originalText: "we use api and hsr routing today",
+            editedText: "we use API and HSR routing today",
+            maxSuggestions: 3
+        )
+
+        #expect(suggestions.map(\.observed) == ["api", "hsr"])
+        #expect(suggestions.map(\.replacement) == ["API", "HSR"])
+    }
+
     @Test("does not accept prefix-only acronym corrections")
     func skipsPrefixOnlyAcronymCorrection() {
         let suggestion = DictionaryCorrectionDetector.suggestion(
@@ -268,6 +280,22 @@ struct DictionaryCorrectionDetectorTests {
     @Test("detects far-apart corrections across repeated separator text")
     func detectsFarApartCorrectionsAcrossRepeatedSeparatorText() {
         let middle = Array(repeating: "and then", count: 100).joined(separator: " ")
+        let original = "I like museli today \(middle) I mentioned newsly again"
+        let edited = "I like muesli today \(middle) I mentioned muesli again"
+
+        let suggestions = DictionaryCorrectionDetector.suggestions(
+            originalText: original,
+            editedText: edited,
+            maxSuggestions: 3
+        )
+
+        #expect(suggestions.map(\.observed) == ["museli", "newsly"])
+        #expect(suggestions.map(\.replacement) == ["muesli", "muesli"])
+    }
+
+    @Test("detects repeated-separator corrections beyond the old token cap")
+    func detectsRepeatedSeparatorCorrectionsBeyondOldTokenCap() {
+        let middle = Array(repeating: "and then", count: 160).joined(separator: " ")
         let original = "I like museli today \(middle) I mentioned newsly again"
         let edited = "I like muesli today \(middle) I mentioned muesli again"
 

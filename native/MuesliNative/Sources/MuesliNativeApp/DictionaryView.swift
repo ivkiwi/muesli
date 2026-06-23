@@ -38,7 +38,9 @@ struct DictionaryView: View {
             controller.reconcilePendingDictionaryCorrectionAccessibilityEnable()
         }
         .alert("Enable Accessibility?", isPresented: $isShowingAccessibilityPrompt) {
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) {
+                controller.cancelDictionaryCorrectionAccessibilityEnableRequest()
+            }
             Button("Enable") {
                 controller.requestDictionaryCorrectionAccessibilityEnable()
             }

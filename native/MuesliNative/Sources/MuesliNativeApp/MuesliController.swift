@@ -187,6 +187,7 @@ final class MuesliController: NSObject {
     private static let dictionarySuggestionLogger = Logger(subsystem: "com.muesli.native", category: "DictionarySuggestion")
     private static let pendingDictionaryCorrectionAccessibilityEnableKey = "dictionaryCorrectionPrompts.pendingAccessibilityEnable"
     private static let pendingDictionaryCorrectionAccessibilityRequestedAtKey = "dictionaryCorrectionPrompts.pendingAccessibilityRequestedAt"
+    private static let pendingDictionaryCorrectionAccessibilityRequestProcessIDKey = "dictionaryCorrectionPrompts.pendingAccessibilityRequestProcessID"
     private static let dictionaryCorrectionAccessibilityIntentTimeout: TimeInterval = 24 * 60 * 60
 
     private let runtime: RuntimePaths
@@ -2157,6 +2158,10 @@ final class MuesliController: NSObject {
         return false
     }
 
+    func cancelDictionaryCorrectionAccessibilityEnableRequest() {
+        clearPendingDictionaryCorrectionAccessibilityEnable()
+    }
+
     @discardableResult
     func reconcilePendingDictionaryCorrectionAccessibilityEnable(now: Date = Date()) -> Bool {
         guard isPendingDictionaryCorrectionAccessibilityEnable else { return false }
@@ -2164,6 +2169,11 @@ final class MuesliController: NSObject {
             clearPendingDictionaryCorrectionAccessibilityEnable()
             return false
         }
+        guard let isPendingFromPreviousProcess = isPendingDictionaryCorrectionAccessibilityEnableFromPreviousProcess else {
+            clearPendingDictionaryCorrectionAccessibilityEnable()
+            return false
+        }
+        guard isPendingFromPreviousProcess else { return false }
         guard AXIsProcessTrusted() else { return false }
         clearPendingDictionaryCorrectionAccessibilityEnable()
         setDictionaryCorrectionPromptsEnabled(true)
@@ -2178,18 +2188,32 @@ final class MuesliController: NSObject {
         let defaults = UserDefaults.standard
         defaults.set(true, forKey: Self.pendingDictionaryCorrectionAccessibilityEnableKey)
         defaults.set(now.timeIntervalSince1970, forKey: Self.pendingDictionaryCorrectionAccessibilityRequestedAtKey)
+        defaults.set(
+            Int(ProcessInfo.processInfo.processIdentifier),
+            forKey: Self.pendingDictionaryCorrectionAccessibilityRequestProcessIDKey
+        )
     }
 
     private func clearPendingDictionaryCorrectionAccessibilityEnable() {
         let defaults = UserDefaults.standard
         defaults.removeObject(forKey: Self.pendingDictionaryCorrectionAccessibilityEnableKey)
         defaults.removeObject(forKey: Self.pendingDictionaryCorrectionAccessibilityRequestedAtKey)
+        defaults.removeObject(forKey: Self.pendingDictionaryCorrectionAccessibilityRequestProcessIDKey)
     }
 
     private func isPendingDictionaryCorrectionAccessibilityEnableExpired(now: Date) -> Bool {
         let requestedAt = UserDefaults.standard.double(forKey: Self.pendingDictionaryCorrectionAccessibilityRequestedAtKey)
         guard requestedAt > 0 else { return true }
         return now.timeIntervalSince1970 - requestedAt > Self.dictionaryCorrectionAccessibilityIntentTimeout
+    }
+
+    private var isPendingDictionaryCorrectionAccessibilityEnableFromPreviousProcess: Bool? {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: Self.pendingDictionaryCorrectionAccessibilityRequestProcessIDKey) != nil else {
+            return nil
+        }
+        return defaults.integer(forKey: Self.pendingDictionaryCorrectionAccessibilityRequestProcessIDKey)
+            != Int(ProcessInfo.processInfo.processIdentifier)
     }
 
     @discardableResult

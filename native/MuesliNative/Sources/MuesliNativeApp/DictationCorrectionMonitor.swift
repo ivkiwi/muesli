@@ -23,8 +23,8 @@ struct DictationCorrectionTargetApp: Sendable {
 struct DictionaryCorrectionDetector {
     private static let minimumCorrectionSimilarity = 0.64
     private static let maxObservedTokensPerDictionaryWord = 2
-    private static let maxAlignmentTokens = 320
-    private static let maxAlignmentCellCount = 120_000
+    private static let maxAlignmentTokens = 512
+    private static let maxAlignmentCellCount = 300_000
     private static let spellChecker = NSSpellChecker()
 
     private struct CorrectionCandidate {
@@ -553,8 +553,8 @@ struct DictionaryCorrectionDetector {
             return false
         }
         if observedTokens.count == 1 {
-            if isAcronymLike(replacement), observed.lowercased() != replacement.lowercased() {
-                return false
+            if isAcronymLike(replacement) {
+                return observed.lowercased() == replacement.lowercased()
             }
             if replacement.contains("-"), !observed.contains("-") {
                 return CustomWordMatcher.jaroWinklerSimilarity(
