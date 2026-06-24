@@ -2,6 +2,20 @@ import AppKit
 import Foundation
 import MuesliCore
 
+final class CalendarMenuMeetingPayload: NSObject {
+    let title: String
+    let calendarEventID: String
+    let endDate: Date
+    let autoStopSource: MeetingAutoStopSource?
+
+    init(event: UnifiedCalendarEvent) {
+        self.title = event.title
+        self.calendarEventID = event.id
+        self.endDate = event.endDate
+        self.autoStopSource = event.meetingURL.flatMap { MeetingAutoStopSource(meetingURL: $0) }
+    }
+}
+
 @MainActor
 final class StatusBarController: NSObject, NSMenuDelegate {
     private let controller: MuesliController
@@ -222,7 +236,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 keyEquivalent: ""
             )
             item.target = controller
-            item.representedObject = event.title
+            item.representedObject = CalendarMenuMeetingPayload(event: event)
 
             let titleAttrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(ofSize: 13, weight: .medium),

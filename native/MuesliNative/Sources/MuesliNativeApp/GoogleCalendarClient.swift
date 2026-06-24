@@ -214,7 +214,8 @@ final class GoogleCalendarClient {
                 break
             }
 
-            var bucket = cachedEventsByCalendar[calendarID] ?? [:]
+            let isFullWindowFetch = pageToken == nil && syncTokens[calendarID] == nil
+            var bucket = isFullWindowFetch ? [:] : cachedEventsByCalendar[calendarID] ?? [:]
             if let items = json["items"] as? [[String: Any]] {
                 for item in items {
                     guard let id = item["id"] as? String else { continue }
@@ -337,7 +338,6 @@ final class GoogleCalendarClient {
         guard cachedEventWindowDayCount != resolvedDayCount ||
             cachedEventWindowStartOfDay != windowStartOfDay else { return false }
         syncTokens.removeAll()
-        cachedEventsByCalendar.removeAll()
         cachedEventWindowDayCount = resolvedDayCount
         cachedEventWindowStartOfDay = windowStartOfDay
         return true

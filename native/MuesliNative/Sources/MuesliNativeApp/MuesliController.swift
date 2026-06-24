@@ -3856,6 +3856,16 @@ final class MuesliController: NSObject {
     }
 
     @objc func startMeetingFromCalendarMenuItem(_ sender: NSMenuItem) {
+        if let payload = sender.representedObject as? CalendarMenuMeetingPayload {
+            startForegroundMeetingRecording(
+                title: payload.title,
+                calendarEventID: payload.calendarEventID,
+                endDate: payload.endDate,
+                autoStopSource: payload.autoStopSource
+            )
+            return
+        }
+
         guard let title = sender.representedObject as? String else { return }
         startForegroundMeetingRecording(title: title)
     }
