@@ -7,7 +7,6 @@ struct SidebarView: View {
     private let sidebarRowHorizontalPadding: CGFloat = 16
     private let sidebarRowOuterPadding: CGFloat = 8
     private let folderDepthIndent: CGFloat = 8
-    private let folderDisclosureColumnWidth: CGFloat = 12
 
     let appState: AppState
     let controller: MuesliController
@@ -302,7 +301,7 @@ struct SidebarView: View {
                         let hasChildren = folderTree.hasChildren(folder.id)
                         let isCollapsed = collapsedFolderIDs.contains(folder.id)
                         if renamingFolderID == folder.id {
-                            folderRenameField(folder: folder, reservesDisclosureColumn: true)
+                            folderRenameField(folder: folder)
                                 .padding(.leading, CGFloat(depth) * folderDepthIndent)
                         } else {
                             meetingFilterRow(
@@ -311,8 +310,7 @@ struct SidebarView: View {
                                 count: appState.meetingCountsByFolder[folder.id] ?? 0,
                                 isSelected: appState.selectedTab == .meetings && appState.selectedFolderID == folder.id,
                                 disclosureIcon: hasChildren ? (isCollapsed ? "chevron.right" : "chevron.down") : nil,
-                                disclosureAction: hasChildren ? { toggleFolderCollapse(folder.id) } : nil,
-                                reservesDisclosureColumn: true
+                                disclosureAction: hasChildren ? { toggleFolderCollapse(folder.id) } : nil
                             ) {
                                 controller.showMeetingsHome(folderID: folder.id)
                             }
@@ -512,13 +510,9 @@ struct SidebarView: View {
         isSelected: Bool,
         disclosureIcon: String? = nil,
         disclosureAction: (() -> Void)? = nil,
-        reservesDisclosureColumn: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
-        HStack(spacing: reservesDisclosureColumn ? 5 : MuesliTheme.spacing8) {
-            if reservesDisclosureColumn {
-                disclosureColumn(icon: disclosureIcon, action: disclosureAction)
-            }
+        HStack(spacing: MuesliTheme.spacing8) {
             Image(systemName: icon)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(isSelected ? MuesliTheme.accent : MuesliTheme.textTertiary)
@@ -543,30 +537,24 @@ struct SidebarView: View {
         )
         .contentShape(Rectangle())
         .onTapGesture(perform: action)
-    }
-
-    @ViewBuilder
-    private func disclosureColumn(icon: String?, action: (() -> Void)?) -> some View {
-        if let icon, let action {
-            Button(action: action) {
-                Image(systemName: icon)
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(MuesliTheme.textTertiary)
-                    .frame(width: folderDisclosureColumnWidth, height: 22)
-                    .contentShape(Rectangle())
+        .overlay(alignment: .leading) {
+            if let disclosureIcon, let disclosureAction {
+                Button(action: disclosureAction) {
+                    Image(systemName: disclosureIcon)
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .frame(width: 16, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .offset(x: 4)
             }
-            .buttonStyle(.plain)
-        } else {
-            Spacer().frame(width: folderDisclosureColumnWidth)
         }
     }
 
     @ViewBuilder
-    private func folderRenameField(folder: MeetingFolder, reservesDisclosureColumn: Bool = false) -> some View {
-        HStack(spacing: reservesDisclosureColumn ? 5 : MuesliTheme.spacing8) {
-            if reservesDisclosureColumn {
-                Spacer().frame(width: folderDisclosureColumnWidth)
-            }
+    private func folderRenameField(folder: MeetingFolder) -> some View {
+        HStack(spacing: MuesliTheme.spacing8) {
             Image(systemName: "folder")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(MuesliTheme.accent)
