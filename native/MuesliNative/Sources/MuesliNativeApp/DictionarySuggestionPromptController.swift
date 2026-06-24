@@ -114,6 +114,10 @@ final class DictionarySuggestionPromptController: NSObject {
         dismiss(notify: true)
     }
 
+    func dismissWithoutNotification() {
+        dismiss(notify: false)
+    }
+
     private func dismiss(notify: Bool) {
         let dismissHandler = onDismiss
         onDismiss = nil

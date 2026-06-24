@@ -917,7 +917,7 @@ final class MuesliController: NSObject {
             dictionarySuggestionPromptAdvanceTask?.cancel()
             dictionarySuggestionPromptAdvanceTask = nil
             activeDictionarySuggestionPromptKey = nil
-            dictionarySuggestionPrompt.dismiss()
+            dictionarySuggestionPrompt.dismissWithoutNotification()
         }
         config.hotkeyTriggerThresholdMS = HotkeyTriggerTiming.clampedMilliseconds(config.hotkeyTriggerThresholdMS)
         config.computerUseHotkeyTriggerThresholdMS = HotkeyTriggerTiming.clampedMilliseconds(config.computerUseHotkeyTriggerThresholdMS)
