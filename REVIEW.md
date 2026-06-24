@@ -92,6 +92,8 @@ Be precise about permission type:
 - Microphone permission is for audio recording.
 - Accessibility permission is for AX text/control and some focused-app context.
 - Screen Recording permission is for screenshots or screen pixels.
+- System audio capture through the CoreAudio tap path uses audio-capture TCC
+  (`kTCCServiceAudioCapture`) and does not require Screen Recording.
 - Calendar permission is for EventKit calendar data.
 - Apple Events or ScriptingBridge access can control or query other apps and must
   not launch apps unexpectedly.
