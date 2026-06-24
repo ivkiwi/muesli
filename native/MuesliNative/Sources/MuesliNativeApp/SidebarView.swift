@@ -300,36 +300,19 @@ struct SidebarView: View {
                         let hasChildren = folderTree.hasChildren(folder.id)
                         let isCollapsed = collapsedFolderIDs.contains(folder.id)
                         if renamingFolderID == folder.id {
-                            HStack(spacing: 0) {
-                                Spacer().frame(width: sidebarIconColumnWidth)
-                                folderRenameField(folder: folder)
-                            }
+                            folderRenameField(folder: folder, reservesDisclosureColumn: true)
                                 .padding(.leading, CGFloat(depth) * 16)
                         } else {
-                            HStack(spacing: 0) {
-                                if hasChildren {
-                                    Button {
-                                        toggleFolderCollapse(folder.id)
-                                    } label: {
-                                        Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                                            .font(.system(size: 9, weight: .semibold))
-                                            .foregroundStyle(MuesliTheme.textTertiary)
-                                            .frame(width: sidebarIconColumnWidth, height: 22)
-                                            .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-                                } else {
-                                    Spacer().frame(width: sidebarIconColumnWidth)
-                                }
-
-                                meetingFilterRow(
-                                    icon: hasChildren ? "folder.fill" : "folder",
-                                    label: folder.name,
-                                    count: appState.meetingCountsByFolder[folder.id] ?? 0,
-                                    isSelected: appState.selectedTab == .meetings && appState.selectedFolderID == folder.id
-                                ) {
-                                    controller.showMeetingsHome(folderID: folder.id)
-                                }
+                            meetingFilterRow(
+                                icon: hasChildren ? "folder.fill" : "folder",
+                                label: folder.name,
+                                count: appState.meetingCountsByFolder[folder.id] ?? 0,
+                                isSelected: appState.selectedTab == .meetings && appState.selectedFolderID == folder.id,
+                                disclosureIcon: hasChildren ? (isCollapsed ? "chevron.right" : "chevron.down") : nil,
+                                disclosureAction: hasChildren ? { toggleFolderCollapse(folder.id) } : nil,
+                                reservesDisclosureColumn: true
+                            ) {
+                                controller.showMeetingsHome(folderID: folder.id)
                             }
                             .padding(.leading, CGFloat(depth) * 16)
                             .opacity(draggingFolderID == folder.id ? 0.1 : 1)
@@ -525,9 +508,15 @@ struct SidebarView: View {
         label: String,
         count: Int,
         isSelected: Bool,
+        disclosureIcon: String? = nil,
+        disclosureAction: (() -> Void)? = nil,
+        reservesDisclosureColumn: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         HStack(spacing: MuesliTheme.spacing8) {
+            if reservesDisclosureColumn {
+                disclosureColumn(icon: disclosureIcon, action: disclosureAction)
+            }
             Image(systemName: icon)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(isSelected ? MuesliTheme.accent : MuesliTheme.textTertiary)
@@ -555,8 +544,27 @@ struct SidebarView: View {
     }
 
     @ViewBuilder
-    private func folderRenameField(folder: MeetingFolder) -> some View {
+    private func disclosureColumn(icon: String?, action: (() -> Void)?) -> some View {
+        if let icon, let action {
+            Button(action: action) {
+                Image(systemName: icon)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                    .frame(width: sidebarIconColumnWidth, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        } else {
+            Spacer().frame(width: sidebarIconColumnWidth)
+        }
+    }
+
+    @ViewBuilder
+    private func folderRenameField(folder: MeetingFolder, reservesDisclosureColumn: Bool = false) -> some View {
         HStack(spacing: MuesliTheme.spacing8) {
+            if reservesDisclosureColumn {
+                Spacer().frame(width: sidebarIconColumnWidth)
+            }
             Image(systemName: "folder")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(MuesliTheme.accent)
