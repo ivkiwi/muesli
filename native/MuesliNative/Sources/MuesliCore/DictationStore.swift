@@ -1595,14 +1595,16 @@ public final class DictationStore {
         // BFS traversal to collect all descendant folder IDs.
         var result: Set<Int64> = []
         var queue: [Int64] = [folderID]
+        let sql = "SELECT id FROM meeting_folders WHERE parent_id = ?"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
         while !queue.isEmpty {
             let current = queue.removeFirst()
-            let sql = "SELECT id FROM meeting_folders WHERE parent_id = ?"
-            var statement: OpaquePointer?
-            guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
-                throw lastError(db)
-            }
-            defer { sqlite3_finalize(statement) }
+            sqlite3_reset(statement)
+            sqlite3_clear_bindings(statement)
             sqlite3_bind_int64(statement, 1, current)
             while sqlite3_step(statement) == SQLITE_ROW {
                 let childID = sqlite3_column_int64(statement, 0)
