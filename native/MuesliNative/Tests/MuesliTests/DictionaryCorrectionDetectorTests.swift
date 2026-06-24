@@ -85,6 +85,9 @@ struct DictionaryCorrectionDetectorTests {
 
     @Test("does not suggest acronym phrase replacements")
     func skipsAcronymPhraseReplacement() {
+        // Phrase-to-acronym learning is intentionally outside prompt scope.
+        // `New York` initials are `ny`, so it is not an exact acronym correction
+        // for `NYC`.
         let suggestion = DictionaryCorrectionDetector.suggestion(
             originalText: "I moved to New York last year and I like it",
             editedText: "I moved to NYC last year and I like it"
@@ -331,6 +334,16 @@ struct DictionaryCorrectionDetectorTests {
         #expect(!DictionaryCorrectionDetector.hasSufficientSharedContext(
             originalText: "please look up spelling correction",
             editedText: "please look file_00000000f4ac61f4841155122554864c-sanitized spelling correction"
+        ))
+
+        #expect(!DictionaryCorrectionDetector.hasSufficientSharedContext(
+            originalText: "hello muesli today",
+            editedText: "unrelated editor content"
+        ))
+
+        #expect(DictionaryCorrectionDetector.hasSufficientSharedContext(
+            originalText: "Alvar Pet",
+            editedText: "Alwarpet"
         ))
     }
 

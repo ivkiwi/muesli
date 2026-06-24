@@ -25,6 +25,10 @@ final class DictionarySuggestionPromptController: NSObject {
         !isPausedAtCompletion
     }
 
+    static func resumedAutoDismissDurationAfterPausedFade(totalDuration: TimeInterval) -> TimeInterval {
+        max(0.1, totalDuration / 3)
+    }
+
     var isShowing: Bool {
         panel != nil
     }
@@ -227,6 +231,7 @@ final class DictionarySuggestionPromptController: NSObject {
     private func restoreAfterPausedAutoDismissFade() {
         guard let panel else { return }
         panel.alphaValue = 1
+        startDismissCountdown(duration: Self.resumedAutoDismissDurationAfterPausedFade(totalDuration: Self.dismissDuration))
     }
 
     private static func frame(for size: NSSize, anchorFrame: NSRect?) -> NSRect {

@@ -189,6 +189,7 @@ private final class DictationLatencyLogWriter: @unchecked Sendable {
 final class MuesliController: NSObject {
     private static let maxDismissedDictionarySuggestionKeys = 200
     private static let maxDictionarySuggestions = 50
+    private static let maxDictionarySuggestionPromptQueue = 10
     private static let dictionarySuggestionLogger = Logger(subsystem: "com.muesli.native", category: "DictionarySuggestion")
     private static let pendingDictionaryCorrectionAccessibilityEnableKey = "dictionaryCorrectionPrompts.pendingAccessibilityEnable"
     private static let pendingDictionaryCorrectionAccessibilityRequestedAtKey = "dictionaryCorrectionPrompts.pendingAccessibilityRequestedAt"
@@ -2060,6 +2061,9 @@ final class MuesliController: NSObject {
         // Showing or timing out a prompt is not a final answer. Only Add or
         // Ignore suppresses future prompts for this correction pair.
         queuedDictionarySuggestionPromptKeys.append(key)
+        if queuedDictionarySuggestionPromptKeys.count > Self.maxDictionarySuggestionPromptQueue {
+            queuedDictionarySuggestionPromptKeys.removeFirst(queuedDictionarySuggestionPromptKeys.count - Self.maxDictionarySuggestionPromptQueue)
+        }
         logDictionarySuggestion("queue depth=\(queuedDictionarySuggestionPromptKeys.count) \(dictionarySuggestionLogMetadata(suggestion))")
         presentNextDictionarySuggestionPromptIfPossible()
     }

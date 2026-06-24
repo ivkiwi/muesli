@@ -434,7 +434,17 @@ struct DictionaryCorrectionDetector {
         guard !originalTokens.isEmpty, !editedTokens.isEmpty else { return false }
 
         if originalTokens.count <= 3 {
-            return true
+            let editedTokenSet = Set(editedTokens)
+            let anchorTokens = originalTokens.filter { token in
+                token.count >= 3 && !commonWords.contains(token)
+            }
+            if anchorTokens.contains(where: editedTokenSet.contains) {
+                return true
+            }
+
+            let compactOriginal = originalTokens.joined()
+            let compactEdited = editedTokens.joined()
+            return CustomWordMatcher.jaroWinklerSimilarity(compactOriginal, compactEdited) >= minimumCorrectionSimilarity
         }
 
         let anchorLength = originalTokens.count == 4 ? 2 : min(4, originalTokens.count - 2)
@@ -463,6 +473,9 @@ struct DictionaryCorrectionDetector {
             current = ""
         }
 
+        // Keep dictionary-significant separators inside tokens; boundary
+        // normalization later trims surrounding punctuation without discarding
+        // product/domain forms like sc-domain, API_v2, or foo/bar.
         for character in text {
             if character.isLetter || character.isNumber || character == "-" || character == "_" || character == "/" || character == "+" {
                 current.append(character)
@@ -835,6 +848,56 @@ struct DictationCorrectionSnapshotStabilizer {
     }
 }
 
+private actor EnglishWordRecognizer {
+    private let maxEntries: Int
+    private let spellChecker = NSSpellChecker()
+    private var cache: [String: Bool] = [:]
+    private var cacheOrder: [String] = []
+
+    init(maxEntries: Int) {
+        self.maxEntries = maxEntries
+    }
+
+    func recognizedWords(from candidates: Set<String>) -> Set<String> {
+        guard !candidates.isEmpty else { return [] }
+
+        var recognizedWords = Set<String>()
+        for candidate in candidates.sorted() {
+            let isRecognized: Bool
+            if let cached = cache[candidate] {
+                isRecognized = cached
+            } else {
+                let range = spellChecker.checkSpelling(
+                    of: candidate,
+                    startingAt: 0,
+                    language: "en",
+                    wrap: false,
+                    inSpellDocumentWithTag: 0,
+                    wordCount: nil
+                )
+                isRecognized = range.location == NSNotFound
+                store(candidate, isRecognized: isRecognized)
+            }
+            if isRecognized {
+                recognizedWords.insert(candidate)
+            }
+        }
+        return recognizedWords
+    }
+
+    private func store(_ candidate: String, isRecognized: Bool) {
+        if cache[candidate] == nil {
+            cacheOrder.append(candidate)
+        }
+        cache[candidate] = isRecognized
+
+        while cacheOrder.count > maxEntries {
+            let evicted = cacheOrder.removeFirst()
+            cache.removeValue(forKey: evicted)
+        }
+    }
+}
+
 @MainActor
 final class DictationCorrectionMonitor {
     nonisolated private static let logger = Logger(subsystem: "com.muesli.native", category: "DictionaryCorrection")
@@ -849,11 +912,7 @@ final class DictationCorrectionMonitor {
     nonisolated private static let maxAccessibilityNodes = 140
     nonisolated private static let maxCandidateCharacters = 2_000
     nonisolated private static let maxEnglishWordRecognitionCacheEntries = 5_000
-
-    // MainActor-isolated by the enclosing type; NSSpellChecker is only touched
-    // while filling this cache before detached detector work starts.
-    private static var englishWordRecognitionCache: [String: Bool] = [:]
-    private static var englishWordRecognitionCacheOrder: [String] = []
+    private static let englishWordRecognizer = EnglishWordRecognizer(maxEntries: maxEnglishWordRecognitionCacheEntries)
 
     private var task: Task<Void, Never>?
 
@@ -909,7 +968,10 @@ final class DictationCorrectionMonitor {
                     Self.log("poll=\(pollCount) stableSnapshots=\(stableSnapshots.count)")
                 }
                 for stableSnapshot in stableSnapshots {
-                    let recognizedEnglishWords = Self.recognizedEnglishWords(in: [originalText, stableSnapshot])
+                    let recognizedEnglishWords = await Self.englishWordRecognizer.recognizedWords(
+                        from: Self.englishWordCandidates(in: [originalText, stableSnapshot])
+                    )
+                    if Task.isCancelled { return }
                     let suggestions = await Task.detached(priority: .utility) {
                         Self.suggestions(
                             originalText: originalText,
@@ -969,48 +1031,7 @@ final class DictationCorrectionMonitor {
         )
     }
 
-    private static func recognizedEnglishWords(in texts: [String]) -> Set<String> {
-        let candidates = englishWordCandidates(in: texts)
-        guard !candidates.isEmpty else { return [] }
-
-        var recognizedWords = Set<String>()
-        let spellChecker = NSSpellChecker.shared
-        for candidate in candidates {
-            let isRecognized: Bool
-            if let cached = englishWordRecognitionCache[candidate] {
-                isRecognized = cached
-            } else {
-                let range = spellChecker.checkSpelling(
-                    of: candidate,
-                    startingAt: 0,
-                    language: "en",
-                    wrap: false,
-                    inSpellDocumentWithTag: 0,
-                    wordCount: nil
-                )
-                isRecognized = range.location == NSNotFound
-                cacheEnglishWordRecognition(candidate, isRecognized: isRecognized)
-            }
-            if isRecognized {
-                recognizedWords.insert(candidate)
-            }
-        }
-        return recognizedWords
-    }
-
-    private static func cacheEnglishWordRecognition(_ candidate: String, isRecognized: Bool) {
-        if englishWordRecognitionCache[candidate] == nil {
-            englishWordRecognitionCacheOrder.append(candidate)
-        }
-        englishWordRecognitionCache[candidate] = isRecognized
-
-        while englishWordRecognitionCacheOrder.count > maxEnglishWordRecognitionCacheEntries {
-            let evicted = englishWordRecognitionCacheOrder.removeFirst()
-            englishWordRecognitionCache.removeValue(forKey: evicted)
-        }
-    }
-
-    private static func englishWordCandidates(in texts: [String]) -> Set<String> {
+    nonisolated private static func englishWordCandidates(in texts: [String]) -> Set<String> {
         var candidates = Set<String>()
         for text in texts {
             for token in text.lowercased().split(whereSeparator: { !$0.isLetter }) {
@@ -1128,12 +1149,16 @@ final class DictationCorrectionMonitor {
             add(valueRef as? String)
         }
 
-        for childAttribute in [
-            kAXVisibleChildrenAttribute,
-            kAXChildrenAttribute,
-            kAXContentsAttribute,
-        ] {
-            for child in axElementArrayAttribute(childAttribute, from: element) {
+        let visibleChildren = axElementArrayAttribute(kAXVisibleChildrenAttribute, from: element)
+        let fallbackAttributes = visibleChildren.isEmpty
+            ? [kAXChildrenAttribute, kAXContentsAttribute]
+            : []
+        let childGroups = [visibleChildren] + fallbackAttributes.map {
+            axElementArrayAttribute($0, from: element)
+        }
+
+        for childGroup in childGroups {
+            for child in childGroup {
                 collectTextSnapshots(
                     from: child,
                     depth: depth + 1,
