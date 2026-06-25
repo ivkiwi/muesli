@@ -141,6 +141,17 @@ struct MeetingListItemView: View {
         return depth
     }
 
+    private func folderBreadcrumb(_ folder: MeetingFolder) -> String {
+        var parts: [String] = [folder.name]
+        var current = folder.parentID
+        var seen: Set<Int64> = [folder.id]
+        while let pid = current, let parent = folderByID[pid], seen.insert(pid).inserted {
+            parts.insert(parent.name, at: 0)
+            current = parent.parentID
+        }
+        return parts.joined(separator: " / ")
+    }
+
     @ViewBuilder
     private var folderMenuButton: some View {
         Button {
@@ -170,7 +181,7 @@ struct MeetingListItemView: View {
                     let hasChildren = folderIDsWithChildren.contains(folder.id)
                     folderPopoverRow(
                         icon: hasChildren ? "folder.fill" : "folder",
-                        label: folder.name,
+                        label: folderBreadcrumb(folder),
                         isActive: record.folderID == folder.id
                     ) {
                         onMove(folder.id)
