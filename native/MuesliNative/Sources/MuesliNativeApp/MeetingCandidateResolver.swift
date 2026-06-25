@@ -257,6 +257,7 @@ final class MeetingCandidateResolver {
 
     private static let calendarFullDuplexAudioRequiredBundleIDs: Set<String> = [
         "com.tinyspeck.slackmacgap",
+        "net.whatsapp.WhatsApp",
     ]
 
     static let browserApps: [String: String] = [

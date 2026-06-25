@@ -848,6 +848,51 @@ struct MeetingCandidateResolverTests {
         #expect(candidate?.sourceBundleID == nil)
     }
 
+    @Test("calendar fallback does not label WhatsApp without attributed audio")
+    func calendarFallbackDoesNotLabelWhatsAppWithoutAudio() {
+        let candidate = resolver().resolve(snapshot(
+            micActive: true,
+            cameraActive: false,
+            calendarEvent: CalendarEventContext(id: "evt-whatsapp", title: "Team sync"),
+            runningApps: [
+                RunningAppInfo(bundleID: "net.whatsapp.WhatsApp", isActive: true),
+            ],
+            foregroundBundleID: "net.whatsapp.WhatsApp"
+        ))
+
+        #expect(candidate?.id == "cal:evt-whatsapp")
+        #expect(candidate?.platform == .unknown)
+        #expect(candidate?.appName == "Meeting")
+        #expect(candidate?.meetingTitle == "Team sync")
+        #expect(candidate?.sourceBundleID == nil)
+    }
+
+    @Test("calendar audio rejects WhatsApp input-only attribution")
+    func calendarAudioRejectsWhatsAppInputOnlyAttribution() {
+        let candidate = resolver().resolve(snapshot(
+            micActive: false,
+            cameraActive: false,
+            calendarEvent: CalendarEventContext(id: "evt-whatsapp", title: "Team sync"),
+            audioInputProcesses: [
+                AudioProcessActivity(
+                    pid: 2468,
+                    bundleID: "net.whatsapp.WhatsApp",
+                    appName: "WhatsApp",
+                    isRunningInput: true,
+                    isRunningOutput: false
+                ),
+            ],
+            foregroundBundleID: "net.whatsapp.WhatsApp"
+        ))
+
+        #expect(candidate?.id == "cal:evt-whatsapp")
+        #expect(candidate?.platform == .unknown)
+        #expect(candidate?.appName == "Meeting")
+        #expect(candidate?.meetingTitle == "Team sync")
+        #expect(candidate?.sourceBundleID == nil)
+        #expect(candidate?.sourcePID == nil)
+    }
+
     @Test("calendar fallback preserves Zoom app attribution without full-duplex audio")
     func calendarFallbackPreservesZoomAppAttributionWithoutFullDuplexAudio() {
         let candidate = resolver().resolve(snapshot(
