@@ -247,12 +247,29 @@ if [[ "$SKIP_SIGN" != "1" ]]; then
   if [[ -n "$PROVISIONING_PROFILE" ]]; then
     PROFILE_PLIST="$(mktemp "${TMPDIR:-/tmp}/muesli-profile.XXXXXX")"
     SIGN_TEMP_FILES+=("$PROFILE_PLIST")
-    if security cms -D -i "$PROVISIONING_PROFILE" > "$PROFILE_PLIST" 2>/dev/null; then
+    if ! security cms -D -i "$PROVISIONING_PROFILE" > "$PROFILE_PLIST" 2>/dev/null; then
+      echo "ERROR: could not decode provisioning profile: $PROVISIONING_PROFILE" >&2
+      exit 1
+    fi
+
+    PROFILE_APP_IDENTIFIER="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.application-identifier' "$PROFILE_PLIST" 2>/dev/null || true)"
+    if [[ -z "$PROFILE_APP_IDENTIFIER" ]]; then
+      PROFILE_APP_IDENTIFIER="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$PROFILE_PLIST" 2>/dev/null || true)"
+    fi
+    if [[ -n "$PROFILE_APP_IDENTIFIER" ]]; then
+      PROFILE_BUNDLE_ID="${PROFILE_APP_IDENTIFIER#*.}"
+      # shellcheck disable=SC2053 # Intentionally glob-match wildcard App IDs such as com.muesli.*.
+      if [[ "$BUNDLE_ID" != $PROFILE_BUNDLE_ID ]]; then
+        echo "ERROR: provisioning profile app identifier '$PROFILE_APP_IDENTIFIER' does not match bundle ID '$BUNDLE_ID'." >&2
+        exit 1
+      fi
+      echo "Using provisioning profile app identifier: $PROFILE_APP_IDENTIFIER"
+    fi
+
+    if [[ -z "$APS_ENVIRONMENT" ]]; then
+      APS_ENVIRONMENT="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.developer.aps-environment' "$PROFILE_PLIST" 2>/dev/null || true)"
       if [[ -z "$APS_ENVIRONMENT" ]]; then
-        APS_ENVIRONMENT="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.developer.aps-environment' "$PROFILE_PLIST" 2>/dev/null || true)"
-        if [[ -z "$APS_ENVIRONMENT" ]]; then
-          APS_ENVIRONMENT="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:aps-environment' "$PROFILE_PLIST" 2>/dev/null || true)"
-        fi
+        APS_ENVIRONMENT="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:aps-environment' "$PROFILE_PLIST" 2>/dev/null || true)"
       fi
     fi
   fi
@@ -274,6 +291,7 @@ if [[ "$SKIP_SIGN" != "1" ]]; then
     copy_profile_string_entitlement "com.apple.application-identifier"
     copy_profile_string_entitlement "application-identifier"
     copy_profile_string_entitlement "com.apple.developer.team-identifier"
+    copy_profile_string_entitlement "com.apple.developer.icloud-container-environment"
     if [[ -n "$APS_ENVIRONMENT" ]]; then
       if ! /usr/libexec/PlistBuddy -c "Set :com.apple.developer.aps-environment $APS_ENVIRONMENT" "$TEMP_ENTITLEMENTS" 2>/dev/null; then
         /usr/libexec/PlistBuddy -c "Add :com.apple.developer.aps-environment string $APS_ENVIRONMENT" "$TEMP_ENTITLEMENTS"
