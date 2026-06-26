@@ -463,6 +463,7 @@ struct AppConfigTests {
         #expect(config.contributionPromptNextMeetingCount == nil)
         #expect(config.contributionGitHubStarClicked == false)
         #expect(config.contributionBuyMeCoffeeClicked == false)
+        #expect(config.upcomingMeetingsDayCount == UpcomingMeetingsWindow.defaultDayCount)
         #expect(config.hiddenCalendarEventSourceHints.isEmpty)
     }
 
@@ -509,6 +510,7 @@ struct AppConfigTests {
         config.contributionPromptNextMeetingCount = 75
         config.contributionGitHubStarClicked = true
         config.contributionBuyMeCoffeeClicked = false
+        config.upcomingMeetingsDayCount = UpcomingMeetingsWindow.today.dayCount
         config.hiddenCalendarEventSourceHints = [
             "ek-event-1": UnifiedCalendarEvent.CalendarSource.eventKit.rawValue,
             "google-event-1": UnifiedCalendarEvent.CalendarSource.googleCalendar.rawValue,
@@ -554,6 +556,7 @@ struct AppConfigTests {
         #expect(decoded.contributionPromptNextMeetingCount == 75)
         #expect(decoded.contributionGitHubStarClicked == true)
         #expect(decoded.contributionBuyMeCoffeeClicked == false)
+        #expect(decoded.upcomingMeetingsDayCount == UpcomingMeetingsWindow.today.dayCount)
         #expect(decoded.hiddenCalendarEventSourceHints == config.hiddenCalendarEventSourceHints)
     }
 
@@ -616,6 +619,7 @@ struct AppConfigTests {
         #expect(config.hasCompletedOnboarding == false)
         #expect(config.resolvedOnboardingUseCase == .dictation)
         #expect(config.defaultMeetingTemplateID == MeetingTemplates.autoID)
+        #expect(config.upcomingMeetingsDayCount == UpcomingMeetingsWindow.defaultDayCount)
         #expect(config.hiddenCalendarEventSourceHints.isEmpty)
         #expect(config.meetingRecordingSavePolicy == .never)
         #expect(config.showScheduledMeetingNotifications == true)

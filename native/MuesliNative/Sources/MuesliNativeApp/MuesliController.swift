@@ -3617,12 +3617,6 @@ final class MuesliController: NSObject {
         syncAppState()
     }
 
-    func hideCalendarEvent(_ eventID: String) {
-        appState.hiddenCalendarEventIDs.insert(eventID)
-        updateConfig { $0.hiddenCalendarEventIDs = self.appState.hiddenCalendarEventIDs.sorted() }
-        statusBarController?.refresh()
-    }
-
     func hideCalendarEvent(_ event: UnifiedCalendarEvent) {
         appState.hiddenCalendarEventIDs.insert(event.id)
         updateConfig {
