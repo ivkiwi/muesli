@@ -1888,7 +1888,7 @@ final class MuesliController: NSObject {
                 case .some(.googleCalendar):
                     return canConfirmMissingGoogleEvents
                 case .none:
-                    return canConfirmMissingEventKitEvents && canConfirmMissingGoogleEvents
+                    return false
                 }
             }
         )

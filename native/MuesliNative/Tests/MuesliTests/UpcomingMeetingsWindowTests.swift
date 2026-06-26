@@ -83,6 +83,19 @@ struct UpcomingMeetingsWindowTests {
         #expect(staleIDs.isEmpty)
     }
 
+    @Test("legacy hidden events without source hints are preserved")
+    func legacyHiddenEventsWithoutSourceHintsArePreserved() {
+        let staleIDs = UpcomingMeetingsWindow.staleHiddenEventIDs(
+            hiddenIDs: ["legacy-hidden"],
+            visibleEventIDs: [],
+            dayCount: UpcomingMeetingsWindow.defaultDayCount,
+            canConfirmMissingEvents: true,
+            canConfirmMissingEventID: { _ in false }
+        )
+
+        #expect(staleIDs.isEmpty)
+    }
+
     private var calendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
