@@ -118,7 +118,7 @@ private enum IndicASRConfig {
     }
 }
 
-private enum IndicASRLogging {
+enum IndicASRLogging {
     private static let verboseEnv = "MUESLI_DEBUG_INDIC_ASR_LOGS"
 
     static var isVerboseEnabled: Bool {
@@ -784,7 +784,10 @@ private struct IndicASRRNNTGreedyDecoder {
         var tokenIds: [Int] = []
 
         for frameIndex in 0..<encodedFrameCount {
-            if frameIndex > 0 && frameIndex % 10 == 0 { await Task.yield() }
+            if frameIndex > 0 && frameIndex % 10 == 0 {
+                try Task.checkCancellation()
+                await Task.yield()
+            }
             if frameIndex > 0 && frameIndex % 100 == 0 {
                 IndicASRLogging.logVerbose("decoded frame \(frameIndex)/\(encodedFrameCount), tokens=\(tokenIds.count)")
             }

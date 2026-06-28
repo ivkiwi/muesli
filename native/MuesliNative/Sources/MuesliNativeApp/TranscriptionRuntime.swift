@@ -595,9 +595,9 @@ actor TranscriptionCoordinator {
         language: IndicASRLanguage
     ) async throws -> SpeechTranscriptionResult {
         if #available(macOS 15, *) {
-            fputs("[muesli-native] transcribing with Indic ASR (\(language.rawValue)): \(url.lastPathComponent)\n", stderr)
+            IndicASRLogging.logVerbose("transcribing with Indic ASR (\(language.rawValue)): \(url.lastPathComponent)")
             let result = try await indicASRTranscriber.transcribe(wavURL: url, language: language)
-            fputs("[muesli-native] Indic ASR result: \(result.text.prefix(80)) (took \(String(format: "%.3f", result.processingTime))s)\n", stderr)
+            IndicASRLogging.logVerbose("Indic ASR result chars=\(result.text.count), processingTime=\(String(format: "%.3f", result.processingTime))s")
             let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             return SpeechTranscriptionResult(
                 text: text,

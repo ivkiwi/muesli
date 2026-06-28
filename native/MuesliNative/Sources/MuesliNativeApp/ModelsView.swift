@@ -1034,7 +1034,9 @@ struct ModelsView: View {
         case "cohere":
             try? fm.removeItem(at: CohereTranscribeModelStore.cacheDirectory())
         case "indicasr":
-            try? fm.removeItem(at: IndicASRModelStore.cacheDirectory())
+            if IndicASRModelStore.localOverrideDirectory() == nil {
+                try? fm.removeItem(at: IndicASRModelStore.cacheDirectory())
+            }
         case "sensevoice":
             SenseVoiceTranscriber.deleteModelFiles(fileManager: fm)
         case "fluidaudio":
