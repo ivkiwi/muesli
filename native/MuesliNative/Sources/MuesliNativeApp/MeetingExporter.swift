@@ -2,10 +2,22 @@ import AppKit
 import UniformTypeIdentifiers
 import MuesliCore
 
-enum MeetingExportContent {
+enum MeetingExportContent: String, CaseIterable {
     case notes
     case transcript
-    case fullMeeting
+    case fullMeeting = "full_meeting"
+
+    var displayName: String {
+        switch self {
+        case .notes: return "Notes"
+        case .transcript: return "Transcript"
+        case .fullMeeting: return "Full Meeting"
+        }
+    }
+
+    static func resolved(_ rawValue: String) -> MeetingExportContent {
+        MeetingExportContent(rawValue: rawValue) ?? .notes
+    }
 }
 
 struct MeetingExporter {
@@ -314,7 +326,11 @@ struct MeetingExporter {
 
     // MARK: - Helpers
 
-    static func suggestedFilename(meeting: MeetingRecord, content: MeetingExportContent) -> String {
+    static func suggestedFilename(
+        meeting: MeetingRecord,
+        content: MeetingExportContent,
+        fileExtension: String = "pdf"
+    ) -> String {
         let sanitized = String(
             meeting.title
                 .components(separatedBy: CharacterSet.alphanumerics.inverted)
@@ -330,7 +346,7 @@ struct MeetingExporter {
         case .transcript: suffix = "-transcript"
         case .fullMeeting: suffix = ""
         }
-        return "\(stem)\(suffix).pdf"
+        return "\(stem)\(suffix).\(fileExtension)"
     }
 
     private static func formatExportDate(_ raw: String) -> String {
