@@ -190,6 +190,7 @@ final class GoogleCalendarClient {
             } catch GoogleCalendarClientError.staleRequest {
                 throw GoogleCalendarClientError.staleRequest
             } catch {
+                try ensureCurrentFetch(fetchGeneration)
                 fputs("[google-cal] events fetch failed for \(calendar.id), keeping cached events: \(error)\n", stderr)
                 failedCalendarIDs.insert(calendar.id)
                 completedAllFetches = false
