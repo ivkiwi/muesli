@@ -267,13 +267,21 @@ actor GigaAMV3Transcriber {
                     NSLocalizedDescriptionKey: "GigaAM v3 load was cancelled.",
                 ])
             }
-            recognizer = try GigaAMRecognizer(configuration: .init(modelDirectory: directory))
+            let loadedRecognizer = try GigaAMRecognizer(configuration: .init(modelDirectory: directory))
+            guard generation == loadGeneration else {
+                throw NSError(domain: "GigaAMV3Transcriber", code: 3, userInfo: [
+                    NSLocalizedDescriptionKey: "GigaAM v3 load was cancelled.",
+                ])
+            }
+            recognizer = loadedRecognizer
             isLoading = false
             completeLoadWaiters()
             progress?(1.0, nil)
         } catch {
-            isLoading = false
-            completeLoadWaiters(throwing: error)
+            if generation == loadGeneration {
+                isLoading = false
+                completeLoadWaiters(throwing: error)
+            }
             throw error
         }
     }

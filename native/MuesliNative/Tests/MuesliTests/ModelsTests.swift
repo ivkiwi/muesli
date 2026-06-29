@@ -79,6 +79,15 @@ struct BackendOptionTests {
             let url = root.appendingPathComponent(file.path)
             _ = fm.createFile(atPath: url.path, contents: nil)
             let handle = try FileHandle(forWritingTo: url)
+            try handle.truncate(atOffset: UInt64(max(file.minimumBytes - 1, 0)))
+            try handle.close()
+        }
+
+        #expect(!GigaAMV3ModelStore.isCompleteModelDirectory(root, fileManager: fm))
+
+        for file in gigaAMV3RequiredFiles {
+            let url = root.appendingPathComponent(file.path)
+            let handle = try FileHandle(forWritingTo: url)
             try handle.truncate(atOffset: UInt64(file.minimumBytes))
             try handle.close()
         }

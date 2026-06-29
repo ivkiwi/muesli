@@ -52,6 +52,32 @@ struct PendingMeetingJoinRecordingPolicyTests {
         ))
     }
 
+    @Test("starts when unknown candidate URL matches request platform")
+    func startsWhenUnknownCandidateURLMatchesRequestPlatform() throws {
+        #expect(PendingMeetingJoinRecordingPolicy.shouldStartRecording(
+            request: try request(),
+            candidate: candidate(
+                id: "browser:com.google.Chrome:session:1",
+                platform: .unknown,
+                url: "https://meet.google.com/aaa-bbbb-ccc?authuser=0",
+                evidence: [.audioInputProcess]
+            )
+        ))
+    }
+
+    @Test("ignores URL from another platform")
+    func ignoresURLFromAnotherPlatform() throws {
+        #expect(!PendingMeetingJoinRecordingPolicy.shouldStartRecording(
+            request: try request("https://zoom.us/j/123456789"),
+            candidate: candidate(
+                id: "browser:com.google.Chrome:session:1",
+                platform: .unknown,
+                url: "https://meet.google.com/aaa-bbbb-ccc",
+                evidence: [.audioInputProcess]
+            )
+        ))
+    }
+
     @Test("ignores non-matching candidate ID")
     func ignoresNonMatchingCandidateID() throws {
         #expect(!PendingMeetingJoinRecordingPolicy.shouldStartRecording(

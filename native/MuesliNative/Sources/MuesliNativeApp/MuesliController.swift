@@ -4427,9 +4427,17 @@ final class MuesliController: NSObject {
             return
         }
 
+        guard let request = PendingMeetingJoinRecordingPolicy.Request(meetingURL: meetingURL) else {
+            presentErrorAlert(
+                title: "Meeting link not recognized",
+                message: "Muesli could not recognize this meeting link. Open the meeting, then use Record Only."
+            )
+            return
+        }
+
         let pendingID = beginPendingMeetingJoinRecording(
             title: title,
-            meetingURL: meetingURL,
+            request: request,
             calendarEventID: calendarEventID,
             endDate: endDate
         )
@@ -4461,7 +4469,7 @@ final class MuesliController: NSObject {
     @discardableResult
     private func beginPendingMeetingJoinRecording(
         title: String,
-        meetingURL: URL,
+        request: PendingMeetingJoinRecordingPolicy.Request,
         calendarEventID: String?,
         endDate: Date?
     ) -> UUID {
@@ -4469,7 +4477,7 @@ final class MuesliController: NSObject {
         let pending = PendingMeetingJoinRecording(
             id: UUID(),
             title: title,
-            request: PendingMeetingJoinRecordingPolicy.Request(meetingURL: meetingURL),
+            request: request,
             endDate: endDate,
             calendarEventID: calendarEventID
         )

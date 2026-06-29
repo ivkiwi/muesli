@@ -28,7 +28,9 @@ struct PendingMeetingJoinRecordingPolicy {
             return true
         }
         if let url = candidate.url,
-           MeetingURLNormalizer.normalize(url)?.id == request.normalizedID {
+           let normalized = MeetingURLNormalizer.normalize(url),
+           normalized.platform == request.platform,
+           normalized.id == request.normalizedID {
             return true
         }
         return false
