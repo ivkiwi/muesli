@@ -66,6 +66,26 @@ struct BackendOptionTests {
         #expect(BackendOption.onboarding.first == .gigaAMV3Russian)
     }
 
+    @Test("GigaAM v3 detector requires complete model files")
+    func gigaAMV3ModelDirectoryDetection() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("gigaam-v3-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: root) }
+
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        #expect(!GigaAMV3ModelStore.isCompleteModelDirectory(root, fileManager: fm))
+
+        for file in gigaAMV3RequiredFiles {
+            let url = root.appendingPathComponent(file.path)
+            _ = fm.createFile(atPath: url.path, contents: nil)
+            let handle = try FileHandle(forWritingTo: url)
+            try handle.truncate(atOffset: UInt64(file.minimumBytes))
+            try handle.close()
+        }
+
+        #expect(GigaAMV3ModelStore.isCompleteModelDirectory(root, fileManager: fm))
+    }
+
     @Test("whisper alias points to parakeetMultilingual")
     func whisperAlias() {
         #expect(BackendOption.whisper == BackendOption.parakeetMultilingual)
@@ -127,6 +147,17 @@ struct BackendOptionTests {
         #expect(BackendOption.whisperSmall.model == "small.en")
         #expect(BackendOption.whisperMedium.model == "medium.en")
         #expect(BackendOption.whisperLargeTurbo.model.contains("large"))
+    }
+
+    private var gigaAMV3RequiredFiles: [(path: String, minimumBytes: Int64)] {
+        [
+            ("manifest.json", 1_269),
+            ("hann_window.f32.bin", 1_280),
+            ("mel_filterbank_mel_freq.f32.bin", 41_216),
+            ("tokenizer.model", 255_336),
+            ("tokenizer_vocab.json", 16_691),
+            ("weights.fp16.safetensors", 445_105_914),
+        ]
     }
 
     @Test("resolveDownloaded keeps selected downloaded meeting model")

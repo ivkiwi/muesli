@@ -23,6 +23,7 @@ SPARKLE_FEED_URL="${MUESLI_SPARKLE_FEED_URL-https://muesli-hq.github.io/muesli/a
 SPARKLE_EDKEY="${MUESLI_SPARKLE_EDKEY-ok9CQBJ3f0MJ2GXuGBubc6VyeWyb5exmqP2b9DceqH4=}"
 STAGED_APP_DIR="$DIST_DIR/$APP_BUNDLE_NAME"
 APP_DIR="$INSTALL_DIR/$APP_BUNDLE_NAME"
+MLX_SWIFT_METALLIB_REVISION="e23ae6b2cf96737bbd31a34ed304123162f8c409"
 DEFAULT_SIGN_IDENTITY="Developer ID Application: Pranav Hari Guruvayurappan (58W55QJ567)"
 SIGN_IDENTITY="${MUESLI_SIGN_IDENTITY:-$DEFAULT_SIGN_IDENTITY}"
 SKIP_SIGN="${MUESLI_SKIP_SIGN:-0}"
@@ -65,6 +66,44 @@ resolve_mlx_swift_dir() {
   done
 
   return 1
+}
+
+package_resolved_revision() {
+  local identity="$1"
+  awk -v identity="$identity" '
+    $0 ~ "\"identity\" : \"" identity "\"" { in_pin = 1; next }
+    in_pin && $0 ~ "\"identity\" : " { exit }
+    in_pin && $0 ~ "\"revision\" : " {
+      line = $0
+      sub(/^.*"revision" : "/, "", line)
+      sub(/".*$/, "", line)
+      print line
+      exit
+    }
+  ' "$PACKAGE_DIR/Package.resolved"
+}
+
+verify_mlx_swift_revision() {
+  local mlx_swift_dir="$1"
+  local resolved_revision
+  local checkout_revision
+  resolved_revision="$(package_resolved_revision "mlx-swift")"
+
+  if [[ -z "$resolved_revision" ]]; then
+    echo "ERROR: mlx-swift revision is missing from $PACKAGE_DIR/Package.resolved." >&2
+    exit 1
+  fi
+  if [[ "$resolved_revision" != "$MLX_SWIFT_METALLIB_REVISION" ]]; then
+    echo "ERROR: mlx-swift resolved at $resolved_revision, expected $MLX_SWIFT_METALLIB_REVISION." >&2
+    echo "ERROR: Update the MLX metallib compatibility guard before changing mlx-swift." >&2
+    exit 1
+  fi
+
+  checkout_revision="$(git -C "$mlx_swift_dir" rev-parse HEAD 2>/dev/null || true)"
+  if [[ -n "$checkout_revision" && "$checkout_revision" != "$resolved_revision" ]]; then
+    echo "ERROR: mlx-swift checkout is $checkout_revision, but Package.resolved pins $resolved_revision." >&2
+    exit 1
+  fi
 }
 
 resolve_metal_tool() {
@@ -116,6 +155,7 @@ bundle_mlx_metallib() {
     echo "ERROR: mlx-swift checkout not found; cannot bundle mlx.metallib." >&2
     exit 1
   fi
+  verify_mlx_swift_revision "$mlx_swift_dir"
   metal_dir="$mlx_swift_dir/Source/Cmlx/mlx-generated/metal"
 
   if ! metal_bin="$(resolve_metal_tool MUESLI_METAL_BIN metal)"; then
@@ -131,7 +171,7 @@ bundle_mlx_metallib() {
   while IFS= read -r source; do
     target="$(basename "$source" .metal)"
     air="$tmp_dir/$target.air"
-    "$metal_bin" \
+    if ! "$metal_bin" \
       -x metal \
       -Wall \
       -Wextra \
@@ -141,7 +181,11 @@ bundle_mlx_metallib() {
       -mmacosx-version-min=14.2 \
       -I"$metal_dir" \
       -c "$source" \
-      -o "$air"
+      -o "$air"; then
+      echo "ERROR: Metal compile failed for $source" >&2
+      rm -rf "$tmp_dir"
+      exit 1
+    fi
     air_files+=("$air")
   done < <(find "$metal_dir" -maxdepth 1 -type f -name "*.metal" | sort)
 
@@ -151,7 +195,11 @@ bundle_mlx_metallib() {
     exit 1
   fi
 
-  "$metallib_bin" "${air_files[@]}" -o "$STAGED_APP_DIR/Contents/MacOS/mlx.metallib"
+  if ! "$metallib_bin" "${air_files[@]}" -o "$STAGED_APP_DIR/Contents/MacOS/mlx.metallib"; then
+    echo "ERROR: Metal library link failed for $STAGED_APP_DIR/Contents/MacOS/mlx.metallib" >&2
+    rm -rf "$tmp_dir"
+    exit 1
+  fi
   rm -rf "$tmp_dir"
   echo "Bundled mlx.metallib from $metal_dir"
 }

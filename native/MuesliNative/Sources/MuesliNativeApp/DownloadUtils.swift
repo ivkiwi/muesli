@@ -67,7 +67,7 @@ private func downloadTemporaryFile(
     }
 
     let delegate = ProgressDownloadDelegate(onProgress: progressHandler)
-    let progressSession = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+    let progressSession = URLSession(configuration: session.configuration, delegate: delegate, delegateQueue: nil)
     let invalidator = DownloadSessionInvalidator()
     do {
         let result = try await withTaskCancellationHandler {

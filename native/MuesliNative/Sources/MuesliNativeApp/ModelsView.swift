@@ -1046,11 +1046,16 @@ struct ModelsView: View {
     }
 
     private func deleteModel(_ option: BackendOption) {
+        let fallback = downloadedModels
+            .compactMap { model in BackendOption.all.first(where: { $0.model == model && $0 != option }) }
+            .first ?? .parakeetMultilingual
+        let fallbackIsDownloaded = downloadedModels.contains(fallback.model)
+
         if appState.selectedBackend == option {
-            let fallback = downloadedModels
-                .compactMap { model in BackendOption.all.first(where: { $0.model == model && $0 != option }) }
-                .first ?? .parakeetMultilingual
             controller.selectBackend(fallback)
+        }
+        if appState.selectedMeetingTranscriptionBackend == option {
+            controller.selectMeetingTranscriptionBackend(fallback, requireDownloaded: fallbackIsDownloaded)
         }
         // Remove cached model files
         Task {

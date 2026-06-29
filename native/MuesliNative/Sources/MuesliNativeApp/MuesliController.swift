@@ -213,7 +213,7 @@ final class MuesliController: NSObject {
     private struct PendingMeetingJoinRecording {
         let id: UUID
         let title: String
-        let normalizedMeetingID: String?
+        let request: PendingMeetingJoinRecordingPolicy.Request?
         let endDate: Date?
         let calendarEventID: String?
     }
@@ -4469,7 +4469,7 @@ final class MuesliController: NSObject {
         let pending = PendingMeetingJoinRecording(
             id: UUID(),
             title: title,
-            normalizedMeetingID: MeetingURLNormalizer.normalize(meetingURL.absoluteString)?.id,
+            request: PendingMeetingJoinRecordingPolicy.Request(meetingURL: meetingURL),
             endDate: endDate,
             calendarEventID: calendarEventID
         )
@@ -4502,8 +4502,10 @@ final class MuesliController: NSObject {
     private func startPendingMeetingJoinRecordingIfReady(candidate: MeetingCandidate?) {
         guard let pending = pendingMeetingJoinRecording,
               let candidate,
-              pendingJoinRecording(pending, matches: candidate),
-              candidateHasJoinedMeetingEvidence(candidate) else { return }
+              PendingMeetingJoinRecordingPolicy.shouldStartRecording(
+                  request: pending.request,
+                  candidate: candidate
+              ) else { return }
 
         pendingMeetingJoinRecording = nil
         pendingMeetingJoinRecordingTimeoutTask?.cancel()
@@ -4522,29 +4524,6 @@ final class MuesliController: NSObject {
             meetingMonitor.refreshState()
         }
         syncMeetingDetectionMonitor()
-    }
-
-    private func pendingJoinRecording(
-        _ pending: PendingMeetingJoinRecording,
-        matches candidate: MeetingCandidate
-    ) -> Bool {
-        guard let normalizedMeetingID = pending.normalizedMeetingID else {
-            return candidate.platform == .googleMeet
-        }
-        if candidate.id == normalizedMeetingID || candidate.id.hasSuffix(":\(normalizedMeetingID)") {
-            return true
-        }
-        if let url = candidate.url,
-           MeetingURLNormalizer.normalize(url)?.id == normalizedMeetingID {
-            return true
-        }
-        return false
-    }
-
-    private func candidateHasJoinedMeetingEvidence(_ candidate: MeetingCandidate) -> Bool {
-        candidate.evidence.contains(.micActive)
-            || candidate.evidence.contains(.cameraActive)
-            || candidate.evidence.contains(.audioInputProcess)
     }
 
     private func openMeetingURL(_ meetingURL: URL, completion: (@MainActor (Bool) -> Void)? = nil) {

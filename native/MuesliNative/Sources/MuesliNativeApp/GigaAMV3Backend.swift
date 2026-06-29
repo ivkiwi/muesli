@@ -89,18 +89,19 @@ enum GigaAMV3ModelStore {
         for spec in requiredFileSpecs {
             try Task.checkCancellation()
             let localFile = directory.appendingPathComponent(spec.path)
-            if !isCompleteLocalFile(at: localFile, spec: spec) {
-                try? FileManager.default.removeItem(at: localFile)
-                guard let remoteURL = URL(string: "https://huggingface.co/\(repoID)/resolve/main/\(spec.path)") else {
-                    throw NSError(domain: "GigaAMV3ModelStore", code: 2, userInfo: [
-                        NSLocalizedDescriptionKey: "Invalid GigaAM v3 download URL for \(spec.path)",
-                    ])
-                }
-                fputs("[muesli-native] GigaAM v3 downloading \(spec.path)...\n", stderr)
-                try await downloadWithRetry(from: remoteURL, to: localFile) { fileProgress in
-                    let weightedProgress = (completedWeight + spec.progressWeight * fileProgress) / totalWeight
-                    reportDownloadProgress(weightedProgress, progress: progress)
-                }
+            guard !isCompleteLocalFile(at: localFile, spec: spec) else {
+                continue
+            }
+            try? FileManager.default.removeItem(at: localFile)
+            guard let remoteURL = URL(string: "https://huggingface.co/\(repoID)/resolve/main/\(spec.path)") else {
+                throw NSError(domain: "GigaAMV3ModelStore", code: 2, userInfo: [
+                    NSLocalizedDescriptionKey: "Invalid GigaAM v3 download URL for \(spec.path)",
+                ])
+            }
+            fputs("[muesli-native] GigaAM v3 downloading \(spec.path)...\n", stderr)
+            try await downloadWithRetry(from: remoteURL, to: localFile) { fileProgress in
+                let weightedProgress = (completedWeight + spec.progressWeight * fileProgress) / totalWeight
+                reportDownloadProgress(weightedProgress, progress: progress)
             }
             completedWeight += spec.progressWeight
             reportDownloadProgress(completedWeight / totalWeight, progress: progress)
@@ -222,17 +223,65 @@ enum GigaAMV3ModelStore {
 
 actor GigaAMV3Transcriber {
     private var recognizer: GigaAMRecognizer?
+    private var isLoading = false
+    private var loadWaiters: [CheckedContinuation<Void, Error>] = []
+    private var loadGeneration = 0
 
     func loadModels(progress: ((Double, String?) -> Void)? = nil) async throws {
-        let directory = try await GigaAMV3ModelStore.downloadIfNeeded(progress: progress)
-        if recognizer == nil {
-            recognizer = try GigaAMRecognizer(configuration: .init(modelDirectory: directory))
+        try await loadModels(progress: progress, allowDownload: true)
+    }
+
+    private func loadModels(
+        progress: ((Double, String?) -> Void)? = nil,
+        allowDownload: Bool
+    ) async throws {
+        if recognizer != nil {
+            progress?(1.0, nil)
+            return
         }
-        progress?(1.0, nil)
+        if isLoading {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                loadWaiters.append(continuation)
+            }
+            progress?(1.0, nil)
+            return
+        }
+
+        isLoading = true
+        let generation = loadGeneration
+        do {
+            let directory: URL
+            if allowDownload {
+                directory = try await GigaAMV3ModelStore.downloadIfNeeded(progress: progress)
+            } else {
+                guard GigaAMV3ModelStore.isAvailableLocally() else {
+                    throw NSError(domain: "GigaAMV3Transcriber", code: 2, userInfo: [
+                        NSLocalizedDescriptionKey: "GigaAM v3 models are not downloaded. Download them before transcribing.",
+                    ])
+                }
+                progress?(0.95, "Loading GigaAM v3...")
+                directory = GigaAMV3ModelStore.cacheDirectory()
+            }
+            guard generation == loadGeneration else {
+                throw NSError(domain: "GigaAMV3Transcriber", code: 3, userInfo: [
+                    NSLocalizedDescriptionKey: "GigaAM v3 load was cancelled.",
+                ])
+            }
+            recognizer = try GigaAMRecognizer(configuration: .init(modelDirectory: directory))
+            isLoading = false
+            completeLoadWaiters()
+            progress?(1.0, nil)
+        } catch {
+            isLoading = false
+            completeLoadWaiters(throwing: error)
+            throw error
+        }
     }
 
     func transcribe(wavURL: URL) async throws -> GigaAMV3TranscriptionResult {
-        try await loadModels()
+        if recognizer == nil {
+            try await loadModels(allowDownload: false)
+        }
         guard let recognizer else {
             throw NSError(domain: "GigaAMV3Transcriber", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "GigaAM v3 recognizer is not loaded.",
@@ -249,6 +298,23 @@ actor GigaAMV3Transcriber {
     }
 
     func shutdown() {
+        loadGeneration += 1
         recognizer = nil
+        isLoading = false
+        completeLoadWaiters(throwing: NSError(domain: "GigaAMV3Transcriber", code: 1, userInfo: [
+            NSLocalizedDescriptionKey: "GigaAM v3 recognizer is not loaded.",
+        ]))
+    }
+
+    private func completeLoadWaiters(throwing error: Error? = nil) {
+        let waiters = loadWaiters
+        loadWaiters.removeAll()
+        for waiter in waiters {
+            if let error {
+                waiter.resume(throwing: error)
+            } else {
+                waiter.resume()
+            }
+        }
     }
 }
