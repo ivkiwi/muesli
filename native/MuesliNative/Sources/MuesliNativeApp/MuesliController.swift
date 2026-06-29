@@ -297,8 +297,8 @@ final class MuesliController: NSObject {
     private var computerUseTranscriptVisible = false
     private let computerUseFloatingStatusMinimumDwell: TimeInterval = 0.85
     private var _streamingDictationController: Any?  // StreamingDictationController (macOS 15+)
-    private var isNemotronStreaming = false
-    private var nemotronStreamingSessionID: UUID?
+    private var isNemotron35Streaming = false
+    private var nemotron35StreamingSessionID: UUID?
     private var previousStreamText = ""
     private var openWindowCount = 0
     private var lastExternalApp: NSRunningApplication?
@@ -602,6 +602,9 @@ final class MuesliController: NSObject {
                             systemPrompt: self.config.postProcessorSystemPrompt
                         )
                     }
+                    await self.transcriptionCoordinator.setNemotron35PromptId(
+                        self.config.resolvedNemotron35Language.promptId
+                    )
                 }
                 await self.transcriptionCoordinator.preload(
                     backend: self.selectedBackend,
@@ -1537,6 +1540,9 @@ final class MuesliController: NSObject {
         }
         Task { [weak self] in
             guard let self else { return }
+            // Push the selected Nemotron 3.5 language before preload so the loaded
+            // transcriber is conditioned on the right prompt_id.
+            await self.transcriptionCoordinator.setNemotron35PromptId(self.config.resolvedNemotron35Language.promptId)
             let needsWarmup = option.backend == "whisper"
             if needsWarmup {
                 await MainActor.run {
@@ -1565,6 +1571,12 @@ final class MuesliController: NSObject {
                 self.historyWindowController?.updateBackendLabel()
             }
         }
+    }
+
+    /// Update the Nemotron 3.5 dictation language and push the prompt_id to the runtime.
+    func setNemotron35Language(_ language: Nemotron35Language) async {
+        updateConfig { $0.nemotron35Language = language.rawValue }
+        await transcriptionCoordinator.setNemotron35PromptId(language.promptId)
     }
 
     func selectMeetingTranscriptionBackend(_ option: BackendOption, requireDownloaded: Bool = true) {
@@ -5276,7 +5288,7 @@ final class MuesliController: NSObject {
     }
 
     private var isDictationActivityInProgress: Bool {
-        dictationState != .idle || dictationStartedAt != nil || computerUseCommandStartedAt != nil || isNemotronStreaming
+        dictationState != .idle || dictationStartedAt != nil || computerUseCommandStartedAt != nil || isNemotron35Streaming
     }
 
     private func configureComputerUseHotkeyMonitor() {
@@ -5764,7 +5776,7 @@ final class MuesliController: NSObject {
             && !isDictationTestMode
             && dictationStartedAt == nil
             && computerUseCommandStartedAt == nil
-            && !isNemotronStreaming
+            && !isNemotron35Streaming
             && dictationState == .idle
     }
 
@@ -5773,7 +5785,7 @@ final class MuesliController: NSObject {
             && !isDictationTestMode
             && dictationStartedAt == nil
             && computerUseCommandStartedAt == nil
-            && !isNemotronStreaming
+            && !isNemotron35Streaming
             && (dictationState == .idle || dictationState == .preparing)
     }
 
@@ -5997,6 +6009,11 @@ final class MuesliController: NSObject {
         indicator.showWarning(floatingMessage, icon: icon, duration: 3.0)
     }
 
+    /// Streaming RNNT dictation backend (handsfree live text at cursor).
+    private var isStreamingDictationBackend: Bool {
+        selectedBackend.isStreamingDictationBackend
+    }
+
     private func handlePrepare() {
         if isMeetingRecording() { return }
         if blockDictationForMeetingActivityIfNeeded() { return }
@@ -6005,7 +6022,7 @@ final class MuesliController: NSObject {
             beginDictationLatencyTrace(reason: "prepare")
         }
         markDictationLatency("prepare_requested")
-        guard selectedBackend.backend != "nemotron" else {
+        guard !isStreamingDictationBackend else {
             return
         }
         if !dictationAudioSessionManager.hasActiveSession {
@@ -6022,7 +6039,7 @@ final class MuesliController: NSObject {
         if dictationLatencyTraceID == nil {
             beginDictationLatencyTrace(reason: "hotkey")
         }
-        if selectedBackend.backend != "nemotron" {
+        if !isStreamingDictationBackend {
             setState(.preparing)
             meetingMonitor.suppressWhileActive()
             meetingMonitor.refreshState()
@@ -6066,7 +6083,7 @@ final class MuesliController: NSObject {
         dictationAudioSessionManager.refreshRoute(
             intent: intent,
             delay: delay,
-            canWarmUp: canPrimeDictationRecorder && selectedBackend.backend != "nemotron"
+            canWarmUp: canPrimeDictationRecorder && !isStreamingDictationBackend
         )
     }
 
@@ -6279,18 +6296,12 @@ final class MuesliController: NSObject {
         if isMeetingRecording() { return }
         if blockDictationForMeetingActivityIfNeeded() { return }
 
-        // Nemotron is handsfree-only — block hold-to-talk and show a hint
-        if selectedBackend.backend == "nemotron" {
-            dictationAudioSessionManager.cancel(reason: "nemotron-hold-blocked")
-            fputs("[muesli-native] hold-to-talk blocked for Nemotron, showing warning\n", stderr)
-            indicator.showWarning("Double-tap for Nemotron handsfree mode", icon: "⚡")
-            setState(.idle)
-            meetingMonitor.resumeAfterCooldown()
-            meetingMonitor.refreshState()
-            finishDictationLatencyTrace("nemotron_hold_blocked")
-            return
-        }
-
+        // Nemotron backends support hold-to-talk (record → transcribe on release) in
+        // addition to double-tap handsfree streaming. The hold path uses the normal
+        // record-then-transcribe pipeline below; double-tap streaming is handled in
+        // handleToggleStart. Prepare/arm pre-warm is intentionally skipped for these
+        // backends (see isStreamingDictationBackend) so the double-tap detection window
+        // stays clean; beginRecording cold-starts here just like the toggle path.
         fputs("[muesli-native] recording start\n", stderr)
         meetingMonitor.suppressWhileActive()
         beginDictationOutput()
@@ -6310,24 +6321,38 @@ final class MuesliController: NSObject {
         sessionID: UUID
     ) {
         Task {
-            let transcriber = await transcriptionCoordinator.getNemotronTranscriber()
-            fputs("[muesli-native] got Nemotron transcriber\n", stderr)
+            let transcriber: Nemotron35StreamingTranscriber
+            do {
+                await transcriptionCoordinator.setNemotron35PromptId(config.resolvedNemotron35Language.promptId)
+                transcriber = try await transcriptionCoordinator.getLoadedNemotron35Transcriber()
+            } catch {
+                await MainActor.run {
+                    self.handleNemotronStreamingRuntimeFailure(error: error, sessionID: sessionID)
+                }
+                return
+            }
+            fputs("[muesli-native] got Nemotron 3.5 transcriber\n", stderr)
+            let chunkSamples = transcriber.chunkSamples
+            let makeController: @MainActor (AudioObjectID?) -> StreamingDictationController = { preferredID in
+                StreamingDictationController(
+                    transcriber: transcriber,
+                    preferredInputDeviceID: preferredID,
+                    chunkSamples: chunkSamples
+                )
+            }
 
             await MainActor.run {
-                guard self.isNemotronStreaming, self.nemotronStreamingSessionID == sessionID else {
+                guard self.isNemotron35Streaming, self.nemotron35StreamingSessionID == sessionID else {
                     fputs("[muesli-native] Nemotron session cancelled before transcriber ready\n", stderr)
                     return
                 }
                 let currentPreferredInputDeviceID =
                     self.dictationAudioRoutingController.cachedPreferredInputDeviceIDForDictation()
-                let controller = StreamingDictationController(
-                    transcriber: transcriber,
-                    preferredInputDeviceID: currentPreferredInputDeviceID
-                )
+                let controller = makeController(currentPreferredInputDeviceID)
                 controller.onPartialText = { [weak self] fullText in
                     guard let self else { return }
                     DispatchQueue.main.async {
-                        guard self.isNemotronStreaming, self.nemotronStreamingSessionID == sessionID else { return }
+                        guard self.isNemotron35Streaming, self.nemotron35StreamingSessionID == sessionID else { return }
                         let delta = String(fullText.dropFirst(self.previousStreamText.count))
                         fputs("[muesli-native] streaming partial: +\"\(delta)\" (total \(fullText.count) chars)\n", stderr)
                         if !delta.isEmpty {
@@ -6348,6 +6373,10 @@ final class MuesliController: NSObject {
                     self.handleNemotronStreamingStartFailure()
                     return
                 }
+                self.activateDictationRecordingIndicator()
+                self.indicator.powerProvider = { [weak controller] in
+                    controller?.currentPower() ?? -160
+                }
                 fputs("[muesli-native] Nemotron streaming controller started\n", stderr)
             }
         }
@@ -6356,9 +6385,9 @@ final class MuesliController: NSObject {
     @MainActor
     private func handleNemotronStreamingStartFailure() {
         fputs("[muesli-native] Nemotron streaming controller failed to start\n", stderr)
-        isNemotronStreaming = false
+        isNemotron35Streaming = false
         _streamingDictationController = nil
-        nemotronStreamingSessionID = nil
+        nemotron35StreamingSessionID = nil
         previousStreamText = ""
         dictationStartedAt = nil
         clearCapturedDictationSessionContext()
@@ -6374,11 +6403,11 @@ final class MuesliController: NSObject {
 
     @MainActor
     private func handleNemotronStreamingRuntimeFailure(error: Error, sessionID: UUID) {
-        guard isNemotronStreaming, nemotronStreamingSessionID == sessionID else { return }
-        fputs("[muesli-native] Nemotron streaming failed after mic start: \(error)\n", stderr)
-        isNemotronStreaming = false
+        guard isNemotron35Streaming, nemotron35StreamingSessionID == sessionID else { return }
+        fputs("[muesli-native] Nemotron streaming failed: \(error)\n", stderr)
+        isNemotron35Streaming = false
         _streamingDictationController = nil
-        nemotronStreamingSessionID = nil
+        nemotron35StreamingSessionID = nil
         previousStreamText = ""
         dictationStartedAt = nil
         clearCapturedDictationSessionContext()
@@ -6397,13 +6426,13 @@ final class MuesliController: NSObject {
         fputs("[muesli-native] cancel\n", stderr)
         resetDictationOutputMode()
 
-        if isNemotronStreaming {
-            isNemotronStreaming = false
+        if isNemotron35Streaming {
+            isNemotron35Streaming = false
             if #available(macOS 15, *), let sdc = _streamingDictationController as? StreamingDictationController {
                 sdc.cancel()
             }
             _streamingDictationController = nil
-            nemotronStreamingSessionID = nil
+            nemotron35StreamingSessionID = nil
             previousStreamText = ""
         }
 
@@ -6436,17 +6465,15 @@ final class MuesliController: NSObject {
         setState(.preparing)
 
         // Nemotron streaming: live text at cursor in handsfree mode too
-        if selectedBackend.backend == "nemotron" {
+        if isStreamingDictationBackend {
             if #available(macOS 15, *) {
                 let sessionID = UUID()
-                isNemotronStreaming = true
-                nemotronStreamingSessionID = sessionID
+                isNemotron35Streaming = true
+                nemotron35StreamingSessionID = sessionID
                 previousStreamText = ""
                 dictationStartedAt = Date()
                 markDictationLatency("sound_start_requested:nemotron-toggle")
                 SoundController.playDictationStart(enabled: shouldPlayDictationLifecycleSounds && !isDictationTestMode)
-                setState(.recording)
-                indicator.setToggleDictation(true, config: config)
                 dictationAudioSessionManager.beginExternalSession(
                     source: "nemotron-toggle",
                     duckingEnabled: config.muteSystemAudioDuringDictation,
@@ -6475,7 +6502,7 @@ final class MuesliController: NSObject {
     }
 
     func toggleVoiceNoteRecording() {
-        if dictationStartedAt != nil || dictationAudioSessionManager.hasActiveSession || isNemotronStreaming {
+        if dictationStartedAt != nil || dictationAudioSessionManager.hasActiveSession || isNemotron35Streaming {
             handleToggleStop()
         } else if dictationState == .idle {
             handleToggleStart(outputMode: .voiceNote)
@@ -6492,8 +6519,8 @@ final class MuesliController: NSObject {
         dictationStartedAt = nil
 
         // Nemotron streaming: text already typed — just finalize and store
-        if isNemotronStreaming {
-            let sessionID = nemotronStreamingSessionID
+        if isNemotron35Streaming {
+            let sessionID = nemotron35StreamingSessionID
             if #available(macOS 15, *), let controller = _streamingDictationController as? StreamingDictationController {
                 controller.stop { [weak self] finalText in
                     DispatchQueue.main.async {
@@ -6527,16 +6554,16 @@ final class MuesliController: NSObject {
     }
 
     private func cancelDictationAudioSessionForMeetingRecordingIfNeeded() {
-        guard dictationAudioSessionManager.hasActiveSession || isNemotronStreaming else { return }
+        guard dictationAudioSessionManager.hasActiveSession || isNemotron35Streaming else { return }
         fputs("[muesli-native] cancelling dictation audio session because meeting is active\n", stderr)
 
-        if isNemotronStreaming {
-            isNemotronStreaming = false
+        if isNemotron35Streaming {
+            isNemotron35Streaming = false
             if #available(macOS 15, *), let controller = _streamingDictationController as? StreamingDictationController {
                 controller.cancel()
             }
             _streamingDictationController = nil
-            nemotronStreamingSessionID = nil
+            nemotron35StreamingSessionID = nil
             previousStreamText = ""
             indicator.setToggleDictation(false, config: config)
             dictationAudioSessionManager.endExternalSession(reason: "meeting-active")
@@ -6566,13 +6593,13 @@ final class MuesliController: NSObject {
         startedAt: Date,
         sessionID: UUID?
     ) {
-        guard isNemotronStreaming, nemotronStreamingSessionID == sessionID else {
+        guard isNemotron35Streaming, nemotron35StreamingSessionID == sessionID else {
             fputs("[muesli-native] ignoring stale Nemotron stop completion\n", stderr)
             return
         }
-        isNemotronStreaming = false
+        isNemotron35Streaming = false
         _streamingDictationController = nil
-        nemotronStreamingSessionID = nil
+        nemotron35StreamingSessionID = nil
         previousStreamText = ""
         let duration = max(Date().timeIntervalSince(startedAt), 0)
         fputs("[muesli-native] Nemotron streaming stop, got \(finalText.count) chars\n", stderr)

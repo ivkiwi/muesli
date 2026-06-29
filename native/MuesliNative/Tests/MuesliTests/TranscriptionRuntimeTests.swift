@@ -92,8 +92,7 @@ struct TranscriptionCoordinatorTests {
     @Test("backend routing covers all known backends")
     func allBackendsCovered() {
         let backends = Set(BackendOption.all.map(\.backend))
-        let expected: Set<String> = ["fluidaudio", "whisper", "qwen", "nemotron", "canary", "cohere", "sensevoice"]
-        #expect(backends == expected, "BackendOption.all backends should match expected set")
+        #expect(backends == TranscriptionCoordinator.explicitlyRoutedBackendIdentifiers.union(["fluidaudio"]))
     }
 }
 

@@ -5,6 +5,7 @@ struct ModelsView: View {
     let appState: AppState
     let controller: MuesliController
 
+    @State private var nemotron35UpdateAvailable = false
     @State private var downloadingModels: Set<String> = []
     @State private var downloadProgress: [String: Double] = [:]
     @State private var downloadedModels: Set<String> = []
@@ -65,6 +66,8 @@ struct ModelsView: View {
 
                 modelCard(option: .cohereTranscribe, logo: "cohere-logo")
 
+                modelCard(option: .nemotron35Multilingual, logo: "nvidia-logo")
+
                 experimentalSection
 
                 postProcessorSection
@@ -94,6 +97,7 @@ struct ModelsView: View {
             checkDownloadedModels()
             checkDownloadedPostProcModels()
             syncSelectionsFromActiveBackend()
+            checkNemotron35Update()
         }
         .onChange(of: appState.selectedBackend.model) { _, _ in
             syncSelectionsFromActiveBackend()
@@ -153,7 +157,7 @@ struct ModelsView: View {
                                 .foregroundStyle(MuesliTheme.textSecondary)
                         }
 
-                        Text("SenseVoice, Qwen, and streaming backends. Hidden by default because these are still slower and less polished.")
+                        Text("SenseVoice, Qwen, Canary, and legacy streaming backends. Hidden by default because these are still slower and less polished.")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(MuesliTheme.textPrimary)
                             .opacity(0.8)
@@ -194,6 +198,15 @@ struct ModelsView: View {
         Binding(
             get: { appState.config.resolvedCohereLanguage },
             set: { controller.selectCohereLanguage($0) }
+        )
+    }
+
+    private var nemotron35LanguageSelection: Binding<Nemotron35Language> {
+        Binding(
+            get: { appState.config.resolvedNemotron35Language },
+            set: { language in
+                Task { await controller.setNemotron35Language(language) }
+            }
         )
     }
 
@@ -560,7 +573,7 @@ struct ModelsView: View {
         case "whisper": return "openai-logo"
         case "cohere": return "cohere-logo"
         case "qwen": return "qwen-logo"
-        case "nemotron": return "nvidia-logo"
+        case "nemotron35": return "nvidia-logo"
         case "canary": return "qwen-logo"
         case "sensevoice": return "qwen-logo"
         default: return nil
@@ -691,6 +704,39 @@ struct ModelsView: View {
                     .labelsHidden()
                     .pickerStyle(.menu)
                     .frame(maxWidth: 220, alignment: .leading)
+                }
+            }
+
+            if option.backend == BackendOption.nemotron35Multilingual.backend {
+                HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
+                    Text("Language")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .frame(width: 64, alignment: .leading)
+
+                    Picker("", selection: nemotron35LanguageSelection) {
+                        ForEach(Nemotron35Language.allCases, id: \.self) { language in
+                            Text(language.label).tag(language)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 220, alignment: .leading)
+                }
+
+                if isDownloaded && nemotron35UpdateAvailable && !isDownloading {
+                    HStack(spacing: MuesliTheme.spacing8) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 11))
+                            .foregroundStyle(MuesliTheme.accent)
+                        Text("A newer model build is available.")
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textSecondary)
+                        Button("Update") { updateNemotron35(option) }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(MuesliTheme.accent)
+                    }
                 }
             }
 
@@ -978,6 +1024,24 @@ struct ModelsView: View {
         }
     }
 
+    /// Re-download Nemotron 3.5 to pick up a newer upstream build: delete the cached
+    /// files (so the download isn't skipped), then start a fresh download.
+    private func updateNemotron35(_ option: BackendOption) {
+        Task {
+            do {
+                await controller.transcriptionCoordinator.unloadNemotron35Transcriber()
+                try await deleteModelFiles(option)
+                await MainActor.run {
+                    downloadedModels.remove(option.model)
+                    nemotron35UpdateAvailable = false
+                    startDownload(option)
+                }
+            } catch {
+                fputs("[muesli-native] model update cleanup failed for \(option.backend)/\(option.model): \(error)\n", stderr)
+            }
+        }
+    }
+
     private func deleteModel(_ option: BackendOption) {
         if appState.selectedBackend == option {
             let fallback = downloadedModels
@@ -987,26 +1051,30 @@ struct ModelsView: View {
         }
         // Remove cached model files
         Task {
-            await deleteModelFiles(option)
-            await MainActor.run {
-                _ = downloadedModels.remove(option.model)
+            do {
+                try await deleteModelFiles(option)
+                await MainActor.run {
+                    _ = downloadedModels.remove(option.model)
+                }
+            } catch {
+                fputs("[muesli-native] model delete failed for \(option.backend)/\(option.model): \(error)\n", stderr)
             }
         }
     }
 
-    private func deleteModelFiles(_ option: BackendOption) async {
+    private func deleteModelFiles(_ option: BackendOption) async throws {
         let fm = FileManager.default
         switch option.backend {
         case "whisper":
             WhisperKitTranscriber.deleteModel(option.model)
-        case "nemotron":
+        case "nemotron35":
             let path = fm.homeDirectoryForCurrentUser
-                .appendingPathComponent(".cache/muesli/models/nemotron-560ms")
-            try? fm.removeItem(at: path)
+                .appendingPathComponent(".cache/muesli/models/nemotron35-multilingual-2240ms")
+            try removeItemIfPresent(at: path, fileManager: fm)
         case "canary":
-            try? fm.removeItem(at: CanaryQwenModelStore.cacheDirectory())
+            try removeItemIfPresent(at: CanaryQwenModelStore.cacheDirectory(), fileManager: fm)
         case "cohere":
-            try? fm.removeItem(at: CohereTranscribeModelStore.cacheDirectory())
+            try removeItemIfPresent(at: CohereTranscribeModelStore.cacheDirectory(), fileManager: fm)
         case "sensevoice":
             SenseVoiceTranscriber.deleteModelFiles(fileManager: fm)
         case "fluidaudio":
@@ -1017,17 +1085,22 @@ struct ModelsView: View {
                 let version = option.model.contains("v2") ? "v2" : "v3"
                 if let contents = try? fm.contentsOfDirectory(at: supportDir, includingPropertiesForKeys: nil) {
                     for dir in contents where dir.lastPathComponent.contains("parakeet") && dir.lastPathComponent.contains(version) {
-                        try? fm.removeItem(at: dir)
+                        try removeItemIfPresent(at: dir, fileManager: fm)
                     }
                 }
             }
         case "qwen":
             let path = fm.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/Application Support/FluidAudio/Models/qwen3-asr-0.6b-coreml")
-            try? fm.removeItem(at: path)
+            try removeItemIfPresent(at: path, fileManager: fm)
         default:
             break
         }
+    }
+
+    private func removeItemIfPresent(at url: URL, fileManager: FileManager) throws {
+        guard fileManager.fileExists(atPath: url.path) else { return }
+        try fileManager.removeItem(at: url)
     }
 
     // MARK: - Check Downloaded Status
@@ -1038,6 +1111,17 @@ struct ModelsView: View {
             if isModelDownloaded(option, fm: fm) {
                 downloadedModels.insert(option.model)
             }
+        }
+    }
+
+    /// Background check: does FluidInference's repo have a newer commit than what's
+    /// installed for Nemotron 3.5? Never auto-downloads — just surfaces a badge.
+    private func checkNemotron35Update() {
+        guard #available(macOS 15, *),
+              isModelDownloaded(.nemotron35Multilingual, fm: FileManager.default) else { return }
+        Task {
+            let available = await Nemotron35StreamingTranscriber.updateAvailable()
+            await MainActor.run { nemotron35UpdateAvailable = available }
         }
     }
 
@@ -1058,9 +1142,9 @@ struct ModelsView: View {
         switch option.backend {
         case "whisper":
             return WhisperKitTranscriber.isModelDownloaded(option.model)
-        case "nemotron":
+        case "nemotron35":
             let path = fm.homeDirectoryForCurrentUser
-                .appendingPathComponent(".cache/muesli/models/nemotron-560ms/encoder/encoder_int8.mlmodelc")
+                .appendingPathComponent(".cache/muesli/models/nemotron35-multilingual-2240ms/encoder.mlmodelc/coremldata.bin")
             return fm.fileExists(atPath: path.path)
         case "fluidaudio":
             // Check FluidAudio's cache

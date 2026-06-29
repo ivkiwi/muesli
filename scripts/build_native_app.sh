@@ -340,7 +340,66 @@ if [[ "$SKIP_SIGN" != "1" ]]; then
   fi
   echo "  Deep signature valid."
 else
-  echo "Skipping codesign because MUESLI_SKIP_SIGN=1"
+  # No Developer ID certificate: ad-hoc sign for local dev instead of leaving the
+  # bundle with SwiftPM's incoherent per-binary signature. An ad-hoc *bundle* signature
+  # binds Info.plist and adopts the bundle's CFBundleIdentifier (com.muesli.*) as the
+  # signing identity, which macOS TCC needs to attribute Accessibility / Input-Monitoring
+  # grants to the running process. Without it, AXIsProcessTrusted()/CGPreflightListenEventAccess()
+  # keep returning false even after the user grants permission, so onboarding stalls.
+  #
+  # Note: ad-hoc signatures have no stable designated requirement, so the cdhash changes on
+  # every rebuild and macOS privacy grants must be re-approved after each dev build. For grants
+  # that persist across rebuilds, create a self-signed code-signing certificate and pass its name
+  # via MUESLI_SIGN_IDENTITY. No hardened runtime here: ad-hoc has no Team ID, so library
+  # validation would block dlopen of the bundled frameworks/dylibs.
+  LOCAL_SIGN_IDENTITY="-"
+  if [[ -n "${MUESLI_SIGN_IDENTITY:-}" ]]; then
+    LOCAL_SIGN_IDENTITY="$MUESLI_SIGN_IDENTITY"
+    if ! security find-identity -v -p codesigning | grep -Fq "$LOCAL_SIGN_IDENTITY"; then
+      echo "Signing identity not found: $LOCAL_SIGN_IDENTITY" >&2
+      exit 1
+    fi
+    echo "Local signing with MUESLI_SIGN_IDENTITY=$LOCAL_SIGN_IDENTITY (MUESLI_SKIP_SIGN=1)..."
+  else
+    echo "Ad-hoc signing for local dev (MUESLI_SKIP_SIGN=1; no Developer ID)..."
+  fi
+  ENTITLEMENTS="${MUESLI_ENTITLEMENTS:-$ROOT/scripts/Muesli.entitlements}"
+
+  find "$APP_DIR/Contents/MacOS" -maxdepth 1 -name "*.framework" -type d | while read -r framework; do
+    # Sign every nested standalone Mach-O (e.g. Sparkle's Versions/B/Autoupdate),
+    # then nested .xpc/.app bundles, then the framework itself — mirroring the
+    # Developer-ID path so `codesign --verify --deep --strict` cannot fail on a
+    # nested executable the framework-level sign doesn't reseal.
+    find "$framework" -type f -perm +111 | while read -r binary; do
+      if file "$binary" | grep -q "Mach-O"; then
+          codesign --force --sign "$LOCAL_SIGN_IDENTITY" "$binary"
+      fi
+    done
+    find "$framework" \( -name "*.xpc" -o -name "*.app" \) -type d | while read -r nested; do
+      codesign --force --sign "$LOCAL_SIGN_IDENTITY" "$nested"
+    done
+    codesign --force --sign "$LOCAL_SIGN_IDENTITY" "$framework"
+  done
+
+  find "$APP_DIR/Contents/MacOS" -maxdepth 1 \( -name "*.dylib" -o -name "*.so" \) -type f | while read -r library; do
+    if file "$library" | grep -q "Mach-O"; then
+      codesign --force --sign "$LOCAL_SIGN_IDENTITY" "$library"
+    fi
+  done
+
+  if [[ -f "$APP_DIR/Contents/MacOS/muesli-cli" ]]; then
+    codesign --force --sign "$LOCAL_SIGN_IDENTITY" "$APP_DIR/Contents/MacOS/muesli-cli"
+  fi
+
+  # Sign the bundle last so the Info.plist binding / identity stick.
+  codesign --force --sign "$LOCAL_SIGN_IDENTITY" --entitlements "$ENTITLEMENTS" "$APP_DIR"
+
+  echo "Verifying ad-hoc signature..."
+  if ! codesign --verify --deep --strict "$APP_DIR" 2>&1; then
+    echo "ERROR: ad-hoc signature verification failed" >&2
+    exit 1
+  fi
+  echo "  Local signature valid. Re-approve macOS privacy permissions if prompted after ad-hoc rebuilds."
 fi
 
 rm -rf "$STAGED_APP_DIR"

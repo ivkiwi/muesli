@@ -24,7 +24,7 @@ struct BackendOptionTests {
 
     @Test("backend field is one of the known backends")
     func knownBackends() {
-        let known: Set<String> = ["fluidaudio", "whisper", "qwen", "nemotron", "canary", "cohere", "sensevoice"]
+        let known: Set<String> = ["fluidaudio", "whisper", "qwen", "nemotron35", "canary", "cohere", "sensevoice"]
         for option in BackendOption.all {
             #expect(known.contains(option.backend), "Unknown backend: \(option.backend)")
         }
@@ -43,10 +43,14 @@ struct BackendOptionTests {
         #expect(BackendOption.whisperLargeTurbo.backend == "whisper")
     }
 
-    @Test("Nemotron uses nemotron backend")
-    func nemotronBackend() {
-        #expect(BackendOption.nemotronStreaming.backend == "nemotron")
-        #expect(BackendOption.nemotronStreaming.model.contains("nemotron"))
+    @Test("Nemotron 3.5 uses nemotron35 backend")
+    func nemotron35Backend() {
+        #expect(BackendOption.nemotron35Multilingual.backend == "nemotron35")
+        #expect(BackendOption.nemotron35Multilingual.model.contains("Nemotron-3.5"))
+        #expect(!BackendOption.nemotron35Multilingual.label.contains("Experimental"))
+        #expect(!BackendOption.nemotron35Multilingual.recommended)
+        #expect(!BackendOption.experimental.contains(.nemotron35Multilingual))
+        #expect(BackendOption.all.contains(.nemotron35Multilingual))
     }
 
     @Test("whisper alias points to parakeetMultilingual")
@@ -65,7 +69,7 @@ struct BackendOptionTests {
         #expect(BackendOption.all.contains(.canaryQwen))
         #expect(BackendOption.all.contains(.cohereTranscribe))
         #expect(BackendOption.all.contains(.senseVoiceSmall))
-        #expect(BackendOption.all.contains(.nemotronStreaming))
+        #expect(BackendOption.all.contains(.nemotron35Multilingual))
     }
 
     @Test("Cohere uses cohere backend")
@@ -86,12 +90,19 @@ struct BackendOptionTests {
         #expect(!BackendOption.experimental.contains(.cohereTranscribe))
     }
 
-    @Test("onboarding model choices exclude experimental models")
-    func onboardingModelsExcludeExperimentalOptions() {
-        #expect(BackendOption.onboarding == [.parakeetMultilingual, .whisperTinyEnglish, .whisperSmall, .cohereTranscribe])
+    @Test("onboarding offers the conservative models plus Nemotron 3.5")
+    func onboardingModelChoices() {
+        #expect(BackendOption.onboarding == [.parakeetMultilingual, .whisperTinyEnglish, .whisperSmall, .cohereTranscribe, .nemotron35Multilingual])
         for option in BackendOption.experimental {
             #expect(!BackendOption.onboarding.contains(option))
         }
+        #expect(BackendOption.onboarding.contains(.nemotron35Multilingual))
+    }
+
+    @Test("only Nemotron backends use streaming dictation")
+    func streamingDictationBackends() {
+        let streaming = BackendOption.all.filter(\.isStreamingDictationBackend)
+        #expect(streaming == [.nemotron35Multilingual])
     }
 
     @Test("Whisper models use WhisperKit CoreML identifiers")
