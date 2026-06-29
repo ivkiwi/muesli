@@ -56,7 +56,6 @@ private enum IndicASRConfig {
     static let jointPredPackage = "indic_conformer_joint_pred.mlpackage"
     static let jointPreNetPackage = "indic_conformer_joint_pre_net.mlpackage"
     static let vocabFile = "vocab.json"
-    static let languageMasksFile = "language_masks.json"
     static let preprocessorConstantsFile = "preprocessor_constants.bin"
 
     static let sampleRate = 16_000
@@ -85,9 +84,9 @@ private enum IndicASRConfig {
     static let requiredLanguagePackages = IndicASRLanguage.allCases.map(\.jointPostNetPackage)
     static let packagesWithExternalWeights = Set(requiredSharedPackages + requiredLanguagePackages).subtracting([jointPreNetPackage])
     static let packagesWithEmptyWeightsDirectory = Set([jointPreNetPackage])
-    // Keep language masks with the exported metadata for artifact completeness,
-    // even though the RNNT path currently uses language-specific post-nets.
-    static let requiredMetadataFiles = [vocabFile, languageMasksFile, preprocessorConstantsFile]
+    // Only require metadata consumed by the runtime. Optional export metadata
+    // must not block first-time installs when it is not needed for inference.
+    static let requiredMetadataFiles = [vocabFile, preprocessorConstantsFile]
 
     static func packageRelativeDirectory(_ packageName: String) -> String {
         if packageName == encoderPackage {
