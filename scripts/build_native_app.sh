@@ -46,6 +46,116 @@ fi
 
 mkdir -p "$DIST_DIR"
 
+resolve_mlx_swift_dir() {
+  local candidate
+  local candidates=()
+  if [[ -n "${SWIFTPM_SCRATCH_PATH:-}" ]]; then
+    candidates+=("$SWIFTPM_SCRATCH_PATH/checkouts/mlx-swift")
+  fi
+  candidates+=(
+    "$PACKAGE_DIR/.build/checkouts/mlx-swift"
+    "$ROOT/.build/checkouts/mlx-swift"
+  )
+
+  for candidate in "${candidates[@]}"; do
+    if [[ -d "$candidate/Source/Cmlx/mlx-generated/metal" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+resolve_metal_tool() {
+  local env_name="$1"
+  local tool_name="$2"
+  local env_value="${!env_name:-}"
+  local candidate
+
+  if [[ -n "$env_value" ]]; then
+    if [[ -x "$env_value" ]]; then
+      printf '%s\n' "$env_value"
+      return 0
+    fi
+    echo "ERROR: $env_name points to a non-executable path: $env_value" >&2
+    return 1
+  fi
+
+  candidate="/Volumes/MetalToolchainCryptex/Metal.xctoolchain/usr/bin/$tool_name"
+  if [[ -x "$candidate" ]]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+
+  candidate="$(xcrun -sdk macosx --find "$tool_name" 2>/dev/null || true)"
+  if [[ -n "$candidate" && -x "$candidate" ]]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+
+  return 1
+}
+
+bundle_mlx_metallib() {
+  local mlx_swift_dir
+  local metal_dir
+  local metal_bin
+  local metallib_bin
+  local tmp_dir
+  local source
+  local target
+  local air
+  local air_files=()
+
+  if ! grep -Fq '"mlx-swift"' "$PACKAGE_DIR/Package.resolved" 2>/dev/null; then
+    return 0
+  fi
+
+  if ! mlx_swift_dir="$(resolve_mlx_swift_dir)"; then
+    echo "ERROR: mlx-swift checkout not found; cannot bundle mlx.metallib." >&2
+    exit 1
+  fi
+  metal_dir="$mlx_swift_dir/Source/Cmlx/mlx-generated/metal"
+
+  if ! metal_bin="$(resolve_metal_tool MUESLI_METAL_BIN metal)"; then
+    echo "ERROR: Metal compiler not found. Run 'xcodebuild -downloadComponent MetalToolchain' or set MUESLI_METAL_BIN." >&2
+    exit 1
+  fi
+  if ! metallib_bin="$(resolve_metal_tool MUESLI_METALLIB_BIN metallib)"; then
+    echo "ERROR: Metal library linker not found. Run 'xcodebuild -downloadComponent MetalToolchain' or set MUESLI_METALLIB_BIN." >&2
+    exit 1
+  fi
+
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/muesli-mlx-metallib.XXXXXX")"
+  while IFS= read -r source; do
+    target="$(basename "$source" .metal)"
+    air="$tmp_dir/$target.air"
+    "$metal_bin" \
+      -x metal \
+      -Wall \
+      -Wextra \
+      -fno-fast-math \
+      -Wno-c++17-extensions \
+      -Wno-c++20-extensions \
+      -mmacosx-version-min=14.2 \
+      -I"$metal_dir" \
+      -c "$source" \
+      -o "$air"
+    air_files+=("$air")
+  done < <(find "$metal_dir" -maxdepth 1 -type f -name "*.metal" | sort)
+
+  if [[ ${#air_files[@]} -eq 0 ]]; then
+    echo "ERROR: mlx-swift checkout has no generated Metal sources at $metal_dir." >&2
+    rm -rf "$tmp_dir"
+    exit 1
+  fi
+
+  "$metallib_bin" "${air_files[@]}" -o "$STAGED_APP_DIR/Contents/MacOS/mlx.metallib"
+  rm -rf "$tmp_dir"
+  echo "Bundled mlx.metallib from $metal_dir"
+}
+
 set +e
 swift build "${SWIFT_BUILD_ARGS[@]}" --product "$APP_BINARY"
 status=$?
@@ -102,6 +212,8 @@ if [[ -f "$LOCALVQE_MODEL_PATH" ]]; then
   mkdir -p "$STAGED_APP_DIR/Contents/Resources/Models/localvqe"
   cp "$LOCALVQE_MODEL_PATH" "$STAGED_APP_DIR/Contents/Resources/Models/localvqe/localvqe-v1.2-1.3M-f32.gguf"
 fi
+
+bundle_mlx_metallib
 
 # Bundle assets
 cp "$ROOT/assets/menu_m_template.png" "$STAGED_APP_DIR/Contents/Resources/menu_m_template.png"
@@ -224,6 +336,12 @@ if [[ "$SKIP_SIGN" != "1" ]]; then
         --sign "$SIGN_IDENTITY" \
         "$library"
     fi
+  done
+
+  find "$APP_DIR/Contents/MacOS" -maxdepth 1 -name "*.metallib" -type f | while read -r library; do
+    codesign --force --options runtime "$CODESIGN_TIMESTAMP" \
+      --sign "$SIGN_IDENTITY" \
+      "$library"
   done
 
   codesign --force --options runtime "$CODESIGN_TIMESTAMP" \
@@ -363,7 +481,7 @@ else
   else
     echo "Ad-hoc signing for local dev (MUESLI_SKIP_SIGN=1; no Developer ID)..."
   fi
-  ENTITLEMENTS="${MUESLI_ENTITLEMENTS:-$ROOT/scripts/Muesli.entitlements}"
+  ENTITLEMENTS="${MUESLI_ENTITLEMENTS:-$ROOT/scripts/MuesliLocalOnly.entitlements}"
 
   find "$APP_DIR/Contents/MacOS" -maxdepth 1 -name "*.framework" -type d | while read -r framework; do
     # Sign every nested standalone Mach-O (e.g. Sparkle's Versions/B/Autoupdate),
@@ -385,6 +503,10 @@ else
     if file "$library" | grep -q "Mach-O"; then
       codesign --force --sign "$LOCAL_SIGN_IDENTITY" "$library"
     fi
+  done
+
+  find "$APP_DIR/Contents/MacOS" -maxdepth 1 -name "*.metallib" -type f | while read -r library; do
+    codesign --force --sign "$LOCAL_SIGN_IDENTITY" "$library"
   done
 
   if [[ -f "$APP_DIR/Contents/MacOS/muesli-cli" ]]; then

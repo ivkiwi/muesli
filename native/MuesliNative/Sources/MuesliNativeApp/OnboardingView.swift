@@ -74,8 +74,9 @@ struct OnboardingView: View {
     }
 
     private var onboardingAlternativeModels: [BackendOption] {
-        var options = BackendOption.onboarding.filter { $0 != .parakeetMultilingual }
+        var options = BackendOption.onboarding.filter { $0 != .gigaAMV3Russian && $0 != .parakeetMultilingual }
         if BackendOption.onboarding.contains(selectedBackend),
+           selectedBackend != .gigaAMV3Russian,
            selectedBackend != .parakeetMultilingual,
            !options.contains(selectedBackend) {
             options.insert(selectedBackend, at: 0)
@@ -622,6 +623,8 @@ struct OnboardingView: View {
 
             ScrollView {
                 VStack(spacing: MuesliTheme.spacing8) {
+                    modelCard(option: .gigaAMV3Russian)
+
                     modelCard(option: .parakeetMultilingual)
 
                     Button {
@@ -1618,13 +1621,14 @@ struct OnboardingView: View {
         let backend = selectedBackend
         let useCase = selectedUseCase
         let alreadyDownloaded = backend.isDownloaded
+        let shouldResetStaleProgress = backend.backend == "gigaam_v3" && !alreadyDownloaded
         modelDownloadBackend = backend
         isModelStillDownloading = true
-        modelDownloadProgress = alreadyDownloaded ? nil : (modelDownloadProgress ?? 0.02)
+        modelDownloadProgress = alreadyDownloaded ? nil : (shouldResetStaleProgress ? 0.02 : (modelDownloadProgress ?? 0.02))
         isModelPreparingAfterDownload = alreadyDownloaded
         modelDownloadStatus = alreadyDownloaded
             ? "Warming up \(backend.label)..."
-            : (modelDownloadStatus ?? initialDownloadStatus(for: backend))
+            : (shouldResetStaleProgress ? initialDownloadStatus(for: backend) : (modelDownloadStatus ?? initialDownloadStatus(for: backend)))
         modelDownloadError = nil
         publishModelPreparationStatus(
             title: "Preparing \(backend.label)",
@@ -1722,7 +1726,10 @@ struct OnboardingView: View {
         let isZeroReset = clampedProgress <= 0.001 && currentProgress > 0.03
 
         guard !isZeroReset else { return }
-        modelDownloadProgress = max(currentProgress, max(clampedProgress, 0.02))
+        let nextProgress = max(clampedProgress, 0.02)
+        modelDownloadProgress = backend.backend == "gigaam_v3"
+            ? nextProgress
+            : max(currentProgress, nextProgress)
         modelDownloadStatus = detail
         publishModelPreparationStatus(
             title: "Preparing \(backend.label)",

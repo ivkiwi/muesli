@@ -208,6 +208,15 @@ final class MuesliController: NSObject {
     private static let pendingDictionaryCorrectionAccessibilityRequestedAtKey = "dictionaryCorrectionPrompts.pendingAccessibilityRequestedAt"
     private static let pendingDictionaryCorrectionAccessibilityRequestProcessIDKey = "dictionaryCorrectionPrompts.pendingAccessibilityRequestProcessID"
     private static let dictionaryCorrectionAccessibilityIntentTimeout: TimeInterval = 24 * 60 * 60
+    private static let pendingMeetingJoinRecordingTimeout: TimeInterval = 5 * 60
+
+    private struct PendingMeetingJoinRecording {
+        let id: UUID
+        let title: String
+        let normalizedMeetingID: String?
+        let endDate: Date?
+        let calendarEventID: String?
+    }
 
     private let runtime: RuntimePaths
     private let configStore = ConfigStore()
@@ -312,6 +321,8 @@ final class MuesliController: NSObject {
     private var meetingStartStatus: String?
     private var isShowingCalendarNotification = false
     private var presentedMeetingCandidate: MeetingCandidate?
+    private var pendingMeetingJoinRecording: PendingMeetingJoinRecording?
+    private var pendingMeetingJoinRecordingTimeoutTask: Task<Void, Never>?
     private var meetingEndTimer: Timer?
     private var activeMeetingCalendarEndDate: Date?
     private var latestMeetingActivityCandidate: MeetingCandidate?
@@ -543,9 +554,11 @@ final class MuesliController: NSObject {
             guard let self else { return false }
             return self.config.showMeetingDetectionNotification
                 || self.activeMeetingAutoStop.isArmed
+                || self.pendingMeetingJoinRecording != nil
         }
         meetingMonitor.mutedDetectionBundleIDsProvider = { [weak self] in
-            Set(self?.config.mutedMeetingDetectionAppBundleIDs ?? [])
+            if self?.pendingMeetingJoinRecording != nil { return [] }
+            return Set(self?.config.mutedMeetingDetectionAppBundleIDs ?? [])
         }
         meetingMonitor.isRecordingProvider = { [weak self] in
             guard let self else { return false }
@@ -1946,7 +1959,7 @@ final class MuesliController: NSObject {
 
     private func syncMeetingDetectionMonitor() {
         let shouldRun = meetingFeatureMonitorsAllowed
-            && (config.showMeetingDetectionNotification || activeMeetingAutoStop.isArmed)
+            && (config.showMeetingDetectionNotification || activeMeetingAutoStop.isArmed || pendingMeetingJoinRecording != nil)
         if shouldRun && !meetingDetectionMonitorStarted {
             meetingMonitor.start()
             meetingDetectionMonitorStarted = true
@@ -4406,16 +4419,34 @@ final class MuesliController: NSObject {
         }
     }
 
-    /// Open meeting URL, start recording, schedule end notification, and suppress detection.
+    /// Open the meeting URL, then start recording once the matching meeting shows joined activity.
     /// Single entry point for "Join & Record" from both notification panel and Coming Up section.
     func joinAndRecord(title: String, meetingURL: URL, endDate: Date?, calendarEventID: String? = nil) {
-        NSWorkspace.shared.open(meetingURL)
-        startForegroundMeetingRecording(
+        guard !isMeetingRecording(), !isStartingMeetingRecording else {
+            presentHistoryWindow(tab: .meetings)
+            return
+        }
+
+        let pendingID = beginPendingMeetingJoinRecording(
             title: title,
+            meetingURL: meetingURL,
             calendarEventID: calendarEventID,
-            endDate: endDate,
-            autoStopSource: MeetingAutoStopSource(meetingURL: meetingURL)
+            endDate: endDate
         )
+        openMeetingURL(meetingURL) { [weak self] opened in
+            guard let self,
+                  self.pendingMeetingJoinRecording?.id == pendingID else { return }
+            if opened {
+                self.meetingMonitor.refreshState()
+                self.startPendingMeetingJoinRecordingIfReady(candidate: self.latestMeetingActivityCandidate)
+            } else {
+                self.cancelPendingMeetingJoinRecording(id: pendingID)
+                self.presentErrorAlert(
+                    title: "Meeting failed to open",
+                    message: "Muesli could not open the meeting link in the selected browser."
+                )
+            }
+        }
     }
 
     /// Open meeting URL and suppress detection for the event duration.
@@ -4424,7 +4455,125 @@ final class MuesliController: NSObject {
         let remaining = endDate.map { max($0.timeIntervalSinceNow, 120) } ?? 120
         meetingMonitor.suppress(for: remaining)
         meetingMonitor.refreshState()
-        NSWorkspace.shared.open(meetingURL)
+        openMeetingURL(meetingURL)
+    }
+
+    @discardableResult
+    private func beginPendingMeetingJoinRecording(
+        title: String,
+        meetingURL: URL,
+        calendarEventID: String?,
+        endDate: Date?
+    ) -> UUID {
+        pendingMeetingJoinRecordingTimeoutTask?.cancel()
+        let pending = PendingMeetingJoinRecording(
+            id: UUID(),
+            title: title,
+            normalizedMeetingID: MeetingURLNormalizer.normalize(meetingURL.absoluteString)?.id,
+            endDate: endDate,
+            calendarEventID: calendarEventID
+        )
+        pendingMeetingJoinRecording = pending
+        statusBarController?.setStatus("Waiting for meeting to start...")
+        statusBarController?.refresh()
+        syncMeetingDetectionMonitor()
+        meetingMonitor.refreshState()
+
+        pendingMeetingJoinRecordingTimeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.pendingMeetingJoinRecordingTimeout * 1_000_000_000))
+            guard let self,
+                  self.pendingMeetingJoinRecording?.id == pending.id else { return }
+            fputs("[muesli-native] Join & Record timed out waiting for meeting activity\n", stderr)
+            self.cancelPendingMeetingJoinRecording(id: pending.id)
+            self.statusBarController?.setStatus("Idle")
+            self.statusBarController?.refresh()
+        }
+        return pending.id
+    }
+
+    private func cancelPendingMeetingJoinRecording(id: UUID? = nil) {
+        if let id, pendingMeetingJoinRecording?.id != id { return }
+        pendingMeetingJoinRecording = nil
+        pendingMeetingJoinRecordingTimeoutTask?.cancel()
+        pendingMeetingJoinRecordingTimeoutTask = nil
+        syncMeetingDetectionMonitor()
+    }
+
+    private func startPendingMeetingJoinRecordingIfReady(candidate: MeetingCandidate?) {
+        guard let pending = pendingMeetingJoinRecording,
+              let candidate,
+              pendingJoinRecording(pending, matches: candidate),
+              candidateHasJoinedMeetingEvidence(candidate) else { return }
+
+        pendingMeetingJoinRecording = nil
+        pendingMeetingJoinRecordingTimeoutTask?.cancel()
+        pendingMeetingJoinRecordingTimeoutTask = nil
+        latestMeetingActivityCandidate = candidate
+        latestMeetingActivityCandidateObservedAt = Date()
+
+        if startForegroundMeetingRecording(
+            title: pending.title,
+            calendarEventID: pending.calendarEventID,
+            endDate: pending.endDate,
+            autoStopSource: MeetingAutoStopSource(candidate: candidate)
+        ) {
+            meetingMonitor.markRecordingStarted(candidate)
+        } else {
+            meetingMonitor.refreshState()
+        }
+        syncMeetingDetectionMonitor()
+    }
+
+    private func pendingJoinRecording(
+        _ pending: PendingMeetingJoinRecording,
+        matches candidate: MeetingCandidate
+    ) -> Bool {
+        guard let normalizedMeetingID = pending.normalizedMeetingID else {
+            return candidate.platform == .googleMeet
+        }
+        if candidate.id == normalizedMeetingID || candidate.id.hasSuffix(":\(normalizedMeetingID)") {
+            return true
+        }
+        if let url = candidate.url,
+           MeetingURLNormalizer.normalize(url)?.id == normalizedMeetingID {
+            return true
+        }
+        return false
+    }
+
+    private func candidateHasJoinedMeetingEvidence(_ candidate: MeetingCandidate) -> Bool {
+        candidate.evidence.contains(.micActive)
+            || candidate.evidence.contains(.cameraActive)
+            || candidate.evidence.contains(.audioInputProcess)
+    }
+
+    private func openMeetingURL(_ meetingURL: URL, completion: (@MainActor (Bool) -> Void)? = nil) {
+        let bundleID = config.preferredMeetingBrowserBundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !bundleID.isEmpty else {
+            completion?(NSWorkspace.shared.open(meetingURL))
+            return
+        }
+
+        guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
+            fputs("[muesli-native] preferred meeting browser not found: \(bundleID); using system default\n", stderr)
+            completion?(NSWorkspace.shared.open(meetingURL))
+            return
+        }
+
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.open([meetingURL], withApplicationAt: appURL, configuration: configuration) { _, error in
+            if let error {
+                fputs("[muesli-native] preferred meeting browser open failed for \(bundleID): \(error.localizedDescription); using system default\n", stderr)
+                Task { @MainActor in
+                    completion?(NSWorkspace.shared.open(meetingURL))
+                }
+            } else {
+                Task { @MainActor in
+                    completion?(true)
+                }
+            }
+        }
     }
 
     enum MeetingDiscardResolution: Equatable {
@@ -5426,6 +5575,8 @@ final class MuesliController: NSObject {
     }
 
     private func handleMeetingActivityCandidate(_ candidate: MeetingCandidate?) {
+        startPendingMeetingJoinRecordingIfReady(candidate: candidate)
+
         if !activeMeetingAutoStop.isArmed,
            !isMeetingRecording(),
            !isStartingMeetingRecording {
