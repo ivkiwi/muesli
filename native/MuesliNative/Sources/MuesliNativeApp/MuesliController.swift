@@ -213,7 +213,7 @@ final class MuesliController: NSObject {
     private struct PendingMeetingJoinRecording {
         let id: UUID
         let title: String
-        let request: PendingMeetingJoinRecordingPolicy.Request?
+        let request: PendingMeetingJoinRecordingPolicy.Request
         let endDate: Date?
         let calendarEventID: String?
     }

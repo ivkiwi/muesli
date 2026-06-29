@@ -318,8 +318,8 @@ actor GigaAMV3Transcriber {
         activeDownloadTask = nil
         recognizer = nil
         isLoading = false
-        completeLoadWaiters(throwing: NSError(domain: "GigaAMV3Transcriber", code: 1, userInfo: [
-            NSLocalizedDescriptionKey: "GigaAM v3 recognizer is not loaded.",
+        completeLoadWaiters(throwing: NSError(domain: "GigaAMV3Transcriber", code: 4, userInfo: [
+            NSLocalizedDescriptionKey: "GigaAM v3 load was shut down.",
         ]))
     }
 
