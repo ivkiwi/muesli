@@ -38,7 +38,7 @@ jobs:
           TAG_NAME="beta-${SAFE_VERSION}-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
           RELEASE_TITLE="Guesli Beta ${VERSION}"
           PRERELEASE="true"
-          RELEASE_NOTES=$'Russian-focused Guesli build: Muesli fork with telemetry removed and Google Meet speaker bridge included.\n\nThis build is ad-hoc signed and unnotarized. Testers should move the app to /Applications and may need to use System Settings > Privacy & Security > Open Anyway on first launch.'
+          RELEASE_NOTES=$'Russian-focused Guesli build: Muesli fork with telemetry removed and Google Meet speaker bridge included.\n\nThis build is ad-hoc signed with local-only entitlements and is unnotarized. Testers should move the app to /Applications and may need to use System Settings > Privacy & Security > Open Anyway on first launch.'
           ASSET_SUFFIX="-adhoc-unnotarized"
 
           APP_DIR="dist/Guesli.app"
@@ -85,9 +85,39 @@ jobs:
           MUESLI_SUPPORT_DIR_NAME: Guesli
           MUESLI_BUNDLE_ID: com.ivkiwi.guesli
           MUESLI_SPARKLE_FEED_URL: ""
+          MUESLI_ENTITLEMENTS: ${{ github.workspace }}/scripts/MuesliLocalOnly.entitlements
           MUESLI_SKIP_SIGN: "1"
           MUESLI_SWIFTPM_SCRATCH_PATH: ${{ runner.temp }}/muesli-spm
         run: ./scripts/build_native_app.sh release
+
+      - name: Verify packaged app
+        shell: bash
+        run: |
+          APP_DIR="${{ steps.meta.outputs.app_dir }}"
+          APP_EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_DIR/Contents/Info.plist")"
+          APP_BIN="$APP_DIR/Contents/MacOS/$APP_EXECUTABLE"
+          ENTITLEMENTS_PLIST="$RUNNER_TEMP/guesli-entitlements.plist"
+
+          test -d "$APP_DIR"
+          test -x "$APP_BIN"
+          test -x "$APP_DIR/Contents/MacOS/muesli-cli"
+
+          codesign --verify --deep --strict --verbose=2 "$APP_DIR"
+          codesign -d --entitlements :- "$APP_DIR" > "$ENTITLEMENTS_PLIST"
+
+          if /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.icloud-services' "$ENTITLEMENTS_PLIST" >/dev/null 2>&1; then
+            echo "ERROR: ad-hoc Guesli release must not include CloudKit entitlements." >&2
+            cat "$ENTITLEMENTS_PLIST" >&2
+            exit 1
+          fi
+
+          if /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.icloud-container-identifiers' "$ENTITLEMENTS_PLIST" >/dev/null 2>&1; then
+            echo "ERROR: ad-hoc Guesli release must not include iCloud container entitlements." >&2
+            cat "$ENTITLEMENTS_PLIST" >&2
+            exit 1
+          fi
+
+          "$APP_DIR/Contents/MacOS/muesli-cli" spec >/dev/null
 
       - name: Package app zip
         run: |
