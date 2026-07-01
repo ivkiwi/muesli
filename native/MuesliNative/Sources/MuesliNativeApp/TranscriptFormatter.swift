@@ -5,7 +5,13 @@ import MuesliCore
 enum TranscriptFormatter {
     /// Backward-compatible merge without diarization.
     static func merge(micSegments: [SpeechSegment], systemSegments: [SpeechSegment], meetingStart: Date) -> String {
-        merge(micSegments: micSegments, systemSegments: systemSegments, diarizationSegments: nil, meetingStart: meetingStart)
+        merge(
+            micSegments: micSegments,
+            systemSegments: systemSegments,
+            diarizationSegments: nil,
+            speakerNameMap: [:],
+            meetingStart: meetingStart
+        )
     }
 
     /// Merge with optional speaker diarization for system audio.
@@ -13,6 +19,7 @@ enum TranscriptFormatter {
         micSegments: [SpeechSegment],
         systemSegments: [SpeechSegment],
         diarizationSegments: [TimedSpeakerSegment]?,
+        speakerNameMap: [String: String] = [:],
         meetingStart: Date
     ) -> String {
         // The formatter is intentionally source-agnostic: upstream capture decides
@@ -27,7 +34,7 @@ enum TranscriptFormatter {
             var nextSpeakerNumber = 1
             for seg in diarizationSegments.sorted(by: { $0.startTimeSeconds < $1.startTimeSeconds }) {
                 if speakerLabelMap[seg.speakerId] == nil {
-                    speakerLabelMap[seg.speakerId] = "Speaker \(nextSpeakerNumber)"
+                    speakerLabelMap[seg.speakerId] = speakerNameMap[seg.speakerId] ?? "Speaker \(nextSpeakerNumber)"
                     nextSpeakerNumber += 1
                 }
             }

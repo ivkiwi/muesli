@@ -137,7 +137,8 @@ final class CalendarMonitor {
             guard let startDate = event.startDate, let endDate = event.endDate else { continue }
             let ctx = CalendarEventContext(
                 id: event.eventIdentifier ?? UUID().uuidString,
-                title: event.title ?? "Meeting"
+                title: event.title ?? "Meeting",
+                participants: Self.participants(from: event)
             )
             // Currently active — return immediately
             if startDate <= now && endDate > now {
@@ -178,7 +179,8 @@ final class CalendarMonitor {
                 isAllDay: false,
                 source: .eventKit,
                 calendarID: event.calendar?.calendarIdentifier,
-                meetingURL: Self.extractMeetingURL(from: event)
+                meetingURL: Self.extractMeetingURL(from: event),
+                participants: Self.participants(from: event)
             )
         }
         return UnifiedCalendarEvent
@@ -275,6 +277,37 @@ final class CalendarMonitor {
         guard let match = regex.firstMatch(in: text, range: range) else { return nil }
         guard let matchRange = Range(match.range, in: text) else { return nil }
         return URL(string: String(text[matchRange]))
+    }
+
+    private static func participants(from event: EKEvent) -> [MeetingParticipant] {
+        guard let attendees = event.attendees else { return [] }
+        var seen = Set<String>()
+        return attendees.compactMap { attendee in
+            let urlString = attendee.url.absoluteString.removingPercentEncoding ?? attendee.url.absoluteString
+            let rawEmail: String? = {
+                let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return nil }
+                let lowercased = trimmed.lowercased()
+                if lowercased.hasPrefix("mailto:") {
+                    let start = trimmed.index(trimmed.startIndex, offsetBy: "mailto:".count)
+                    let withoutScheme = String(trimmed[start...])
+                    return withoutScheme.split(separator: "?", maxSplits: 1).first.map(String.init)
+                }
+                return trimmed.contains("@") && !trimmed.contains("://") ? trimmed : nil
+            }()
+            let email = rawEmail?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = attendee.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+                ?? email?.split(separator: "@", maxSplits: 1).first.map(String.init)
+            guard let name, !name.isEmpty else { return nil }
+            let key = (email ?? name).lowercased()
+            guard seen.insert(key).inserted else { return nil }
+            return MeetingParticipant(
+                name: name,
+                email: email?.isEmpty == true ? nil : email,
+                isOrganizer: false,
+                isSelf: false
+            )
+        }
     }
 
 }

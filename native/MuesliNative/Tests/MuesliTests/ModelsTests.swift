@@ -387,7 +387,18 @@ struct SummaryModelPresetTests {
     @Test("OpenAI presets have valid model IDs")
     func openAIModels() {
         #expect(!SummaryModelPreset.openAIModels.isEmpty)
+        #expect(SummaryModelPreset.openAIModels.contains { $0.id == "gpt-5.5" })
         for preset in SummaryModelPreset.openAIModels {
+            #expect(!preset.id.isEmpty)
+            #expect(!preset.label.isEmpty)
+        }
+    }
+
+    @Test("ChatGPT summary presets include GPT-5.5")
+    func chatGPTModels() {
+        #expect(!SummaryModelPreset.chatGPTModels.isEmpty)
+        #expect(SummaryModelPreset.chatGPTModels.contains { $0.id == "gpt-5.5" })
+        for preset in SummaryModelPreset.chatGPTModels {
             #expect(!preset.id.isEmpty)
             #expect(!preset.label.isEmpty)
         }
