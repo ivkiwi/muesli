@@ -65,6 +65,28 @@ struct GoogleCalendarTests {
         #expect(event?.source == .googleCalendar)
     }
 
+    @Test("parses organizer and attendee participant candidates")
+    func parsesParticipants() {
+        let item: [String: Any] = [
+            "id": "event123",
+            "summary": "Sprint Planning",
+            "start": ["dateTime": "2026-04-10T14:00:00Z"],
+            "end": ["dateTime": "2026-04-10T15:00:00Z"],
+            "organizer": ["displayName": "Alice Owner", "email": "alice@example.com"],
+            "attendees": [
+                ["displayName": "Bob Reviewer", "email": "bob@example.com"],
+                ["displayName": "Declined User", "email": "declined@example.com", "responseStatus": "declined"],
+                ["displayName": "Conference Room", "email": "room@example.com", "resource": true],
+                ["displayName": "Alice Duplicate", "email": "alice@example.com"],
+            ],
+        ]
+
+        let event = GoogleCalendarClient().parseEvent(item, calendarID: "primary")
+        #expect(event?.participants.map(\.name) == ["Alice Owner", "Bob Reviewer"])
+        #expect(event?.participants.first?.isOrganizer == true)
+        #expect(event?.participants.last?.email == "bob@example.com")
+    }
+
     @Test("parses all-day event from Google Calendar API response")
     func parsesAllDayEvent() {
         let item: [String: Any] = [

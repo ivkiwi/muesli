@@ -112,6 +112,7 @@ final class MeetingSession {
 
     private let title: String
     private let calendarEventID: String?
+    private let participantCandidates: [MeetingParticipant]
     private let backendLock = OSAllocatedUnfairLock(initialState: BackendOption.whisper)
     private let runtime: RuntimePaths
     private let config: AppConfig
@@ -132,6 +133,7 @@ final class MeetingSession {
     private let micChunkHealthTracker = MeetingTranscriptChunkHealthTracker()
     private let systemChunkHealthTracker = MeetingTranscriptChunkHealthTracker()
     private let micHealthTracker = MeetingMicHealthTracker()
+    private let speakerObservationLock = OSAllocatedUnfairLock(initialState: [MeetSpeakerObservation]())
     private let chunkRotationQueue = DispatchQueue(label: "MuesliNative.MeetingSession.chunkRotation")
     private let pausedDisplayLock = OSAllocatedUnfairLock(initialState: false)
     private var chunkTimingTracker = MeetingChunkTimingTracker()
@@ -165,6 +167,7 @@ final class MeetingSession {
     init(
         title: String,
         calendarEventID: String?,
+        participantCandidates: [MeetingParticipant] = [],
         backend: BackendOption,
         runtime: RuntimePaths,
         config: AppConfig,
@@ -173,6 +176,7 @@ final class MeetingSession {
     ) {
         self.title = title
         self.calendarEventID = calendarEventID
+        self.participantCandidates = participantCandidates
         backendLock.withLock { $0 = backend }
         self.runtime = runtime
         self.config = config
@@ -187,6 +191,16 @@ final class MeetingSession {
 
     func updateBackend(_ backend: BackendOption) {
         backendLock.withLock { $0 = backend }
+    }
+
+    func recordSpeakerObservation(_ observation: MeetSpeakerObservation) {
+        guard isRecording else { return }
+        speakerObservationLock.withLock { observations in
+            observations.append(observation)
+            if observations.count > 2000 {
+                observations.removeFirst(observations.count - 2000)
+            }
+        }
     }
 
     private func currentBackend() -> BackendOption {
@@ -458,11 +472,23 @@ final class MeetingSession {
             diarizationSegments: diarizationSegments
         )
         let protectedTranscriptInputs = reconciledTranscriptInputs
+        let speakerObservations = speakerObservationLock.withLock { $0 }
+        let observedParticipants = Self.observedParticipants(from: speakerObservations)
+        let allParticipantCandidates = Self.mergedParticipants(
+            participantCandidates,
+            observedParticipants
+        )
+        let speakerNameMap = Self.speakerNameMap(
+            diarizationSegments: protectedTranscriptInputs.diarizationSegments,
+            observations: speakerObservations,
+            meetingStart: meetingStart
+        )
 
         let rawTranscript = TranscriptFormatter.merge(
             micSegments: protectedTranscriptInputs.micSegments,
             systemSegments: protectedTranscriptInputs.systemSegments,
             diarizationSegments: protectedTranscriptInputs.diarizationSegments,
+            speakerNameMap: speakerNameMap,
             meetingStart: meetingStart
         )
 
@@ -488,8 +514,12 @@ final class MeetingSession {
             customTemplates: config.customMeetingTemplates
         )
         let visualContext = await screenContextCollector.stopAndDrain()
-        Self.logger.info("visual context drained chars=\(visualContext.count) includedInPrompt=\(!visualContext.isEmpty) useOCR=\(self.config.useCoreAudioTap)")
-        fputs("[meeting] visual context drained chars=\(visualContext.count) includedInPrompt=\(!visualContext.isEmpty) useOCR=\(config.useCoreAudioTap)\n", stderr)
+        let summaryContext = Self.summaryContext(
+            participants: allParticipantCandidates,
+            visualContext: visualContext
+        )
+        Self.logger.info("visual context drained chars=\(visualContext.count) includedInPrompt=\(!summaryContext.isEmpty) useOCR=\(self.config.useCoreAudioTap)")
+        fputs("[meeting] visual context drained chars=\(visualContext.count) participants=\(allParticipantCandidates.count) observedParticipants=\(observedParticipants.count) includedInPrompt=\(!summaryContext.isEmpty) useOCR=\(config.useCoreAudioTap)\n", stderr)
         onProgress?(.summarizingNotes)
         let manualNotes = await manualNotesProvider?()
         let formattedNotes: String
@@ -501,7 +531,7 @@ final class MeetingSession {
                 template: templateSnapshot,
                 existingNotes: nil,
                 manualNotesToRetain: manualNotes,
-                visualContext: visualContext.isEmpty ? nil : visualContext
+                visualContext: summaryContext.isEmpty ? nil : summaryContext
             )
         } catch {
             fputs("[meeting] summary generation failed: \(error.localizedDescription)\n", stderr)
@@ -550,6 +580,121 @@ final class MeetingSession {
         guard calendarEventID != nil else { return nil }
         guard !originalTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return originalTitle
+    }
+
+    static func summaryContext(participants: [MeetingParticipant], visualContext: String) -> String {
+        var sections: [String] = []
+        let participantLabels = participants
+            .filter { !$0.isSelf }
+            .map(\.summaryLabel)
+        if !participantLabels.isEmpty {
+            sections.append("""
+            Meeting participant candidates:
+            \(participantLabels.map { "- \($0)" }.joined(separator: "\n"))
+            Use these names only as possible participant names. Do not assign a Speaker N label to a person unless the transcript or captured context supports it.
+            """)
+        }
+
+        let trimmedVisualContext = visualContext.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedVisualContext.isEmpty {
+            sections.append(trimmedVisualContext)
+        }
+        return sections.joined(separator: "\n\n---\n\n")
+    }
+
+    static func observedParticipants(from observations: [MeetSpeakerObservation]) -> [MeetingParticipant] {
+        mergedParticipants([], observations.flatMap(\.participants))
+    }
+
+    static func mergedParticipants(
+        _ calendarParticipants: [MeetingParticipant],
+        _ observedParticipants: [MeetingParticipant]
+    ) -> [MeetingParticipant] {
+        var seen = Set<String>()
+        var result: [MeetingParticipant] = []
+        for participant in calendarParticipants + observedParticipants {
+            let nameKey = "name:\(participant.name.lowercased())"
+            let emailKey = participant.email.map { "email:\($0.lowercased())" }
+            guard !seen.contains(nameKey),
+                  emailKey.map({ !seen.contains($0) }) ?? true else { continue }
+            seen.insert(nameKey)
+            if let emailKey {
+                seen.insert(emailKey)
+            }
+            result.append(participant)
+        }
+        return result
+    }
+
+    static func speakerNameMap(
+        diarizationSegments: [TimedSpeakerSegment]?,
+        observations: [MeetSpeakerObservation],
+        meetingStart: Date
+    ) -> [String: String] {
+        guard let diarizationSegments, !diarizationSegments.isEmpty, !observations.isEmpty else { return [:] }
+
+        var votes: [String: [String: Int]] = [:]
+        for observation in observations {
+            guard let speakerName = observation.speakerName else { continue }
+            let relativeTime = Float(observation.observedAt.timeIntervalSince(meetingStart))
+            guard relativeTime >= -2 else { continue }
+            guard let speakerID = nearestSpeakerID(
+                at: relativeTime,
+                in: diarizationSegments,
+                maxGapSeconds: 3.0
+            ) else { continue }
+            votes[speakerID, default: [:]][speakerName, default: 0] += 1
+        }
+
+        var bestBySpeaker: [(speakerID: String, name: String, count: Int)] = []
+        for (speakerID, nameVotes) in votes {
+            guard let best = nameVotes.max(by: { lhs, rhs in
+                if lhs.value == rhs.value {
+                    return lhs.key.localizedCaseInsensitiveCompare(rhs.key) == .orderedDescending
+                }
+                return lhs.value < rhs.value
+            }) else { continue }
+            bestBySpeaker.append((speakerID: speakerID, name: best.key, count: best.value))
+        }
+
+        var winnersByName: [String: (speakerID: String, count: Int)] = [:]
+        for candidate in bestBySpeaker {
+            let key = candidate.name.lowercased()
+            if let existing = winnersByName[key], existing.count >= candidate.count {
+                continue
+            }
+            winnersByName[key] = (speakerID: candidate.speakerID, count: candidate.count)
+        }
+
+        var result: [String: String] = [:]
+        for candidate in bestBySpeaker {
+            let key = candidate.name.lowercased()
+            guard winnersByName[key]?.speakerID == candidate.speakerID else { continue }
+            result[candidate.speakerID] = candidate.name
+        }
+        return result
+    }
+
+    private static func nearestSpeakerID(
+        at relativeTime: Float,
+        in diarizationSegments: [TimedSpeakerSegment],
+        maxGapSeconds: Float
+    ) -> String? {
+        let nearest = diarizationSegments.min { lhs, rhs in
+            temporalGap(from: relativeTime, to: lhs) < temporalGap(from: relativeTime, to: rhs)
+        }
+        guard let nearest else { return nil }
+        return temporalGap(from: relativeTime, to: nearest) <= maxGapSeconds ? nearest.speakerId : nil
+    }
+
+    private static func temporalGap(from relativeTime: Float, to segment: TimedSpeakerSegment) -> Float {
+        if relativeTime < segment.startTimeSeconds {
+            return segment.startTimeSeconds - relativeTime
+        }
+        if relativeTime > segment.endTimeSeconds {
+            return relativeTime - segment.endTimeSeconds
+        }
+        return 0
     }
 
     private func userEditedLiveTitle() async -> String? {

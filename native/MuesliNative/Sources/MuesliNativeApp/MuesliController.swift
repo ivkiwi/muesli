@@ -241,6 +241,7 @@ final class MuesliController: NSObject {
     private let meetingMonitor = MeetingMonitor()
     private let meetingNotification = MeetingNotificationController()
     private let meetingSourceWindowLocator = MeetingSourceWindowLocator()
+    private let meetSpeakerBridge = MeetSpeakerBridgeServer()
 
     private let chatGPTAuth = ChatGPTAuthManager.shared
     private let googleCalAuth = GoogleCalendarAuthManager.shared
@@ -397,6 +398,10 @@ final class MuesliController: NSObject {
         }
     }
 
+    deinit {
+        meetSpeakerBridge.stop()
+    }
+
     func start() {
         hasStarted = true
         do {
@@ -530,6 +535,12 @@ final class MuesliController: NSObject {
         statusBarController = StatusBarController(controller: self, runtime: runtime)
         preferencesWindowController = PreferencesWindowController(controller: self)
         historyWindowController = RecentHistoryWindowController(store: dictationStore, controller: self)
+        meetSpeakerBridge.onObservation = { [weak self] observation in
+            Task { @MainActor [weak self] in
+                self?.handleMeetSpeakerObservation(observation)
+            }
+        }
+        meetSpeakerBridge.start()
         refreshUI()
         if config.iCloudSyncEnabled {
             enableICloudPersistentSync()
@@ -1925,6 +1936,25 @@ final class MuesliController: NSObject {
 
     private func currentOrNearbyCachedCalendarEvent() -> CalendarEventContext? {
         selectCurrentOrNearbyCachedCalendarEvent(from: appState.upcomingCalendarEvents)
+    }
+
+    private func participantCandidates(forCalendarEventID calendarEventID: String?) -> [MeetingParticipant] {
+        guard let calendarEventID else { return [] }
+        let eventID = calendarEventID.split(separator: "|", maxSplits: 1).first.map(String.init) ?? calendarEventID
+        return appState.upcomingCalendarEvents.first(where: { $0.id == eventID })?.participants ?? []
+    }
+
+    private func handleMeetSpeakerObservation(_ observation: MeetSpeakerObservation) {
+        guard let activeMeetingSession else { return }
+        if let rawURL = observation.meetingURL,
+           let normalized = MeetingURLNormalizer.normalize(rawURL),
+           let source = activeMeetingAutoStop.source {
+            let matches = source.candidateID == normalized.id
+                || source.suppressionID == normalized.id
+                || source.normalizedURL == normalized.url
+            guard matches else { return }
+        }
+        activeMeetingSession.recordSpeakerObservation(observation)
     }
 
     private func startMeetingFeatureMonitors(includeMaraudersMap: Bool) {
@@ -3901,6 +3931,7 @@ final class MuesliController: NSObject {
     func startForegroundMeetingRecording(
         title: String = "Meeting",
         calendarEventID: String? = nil,
+        participantCandidates: [MeetingParticipant] = [],
         endDate: Date? = nil,
         autoStopSource: MeetingAutoStopSource? = nil
     ) -> Bool {
@@ -3913,6 +3944,7 @@ final class MuesliController: NSObject {
         let didStart = startMeetingRecording(
             title: title,
             calendarEventID: calendarEventID,
+            participantCandidates: participantCandidates,
             openDocument: true,
             endDate: endDate,
             autoStopSource: autoStopSource
@@ -3926,6 +3958,7 @@ final class MuesliController: NSObject {
     func startMeetingRecording(
         title: String = "Meeting",
         calendarEventID: String? = nil,
+        participantCandidates: [MeetingParticipant] = [],
         openDocument: Bool = false,
         endDate: Date? = nil,
         autoStopSource: MeetingAutoStopSource? = nil
@@ -3962,6 +3995,9 @@ final class MuesliController: NSObject {
             return false
         }
         armMeetingAutoStop(source: autoStopSource ?? recentMeetingAutoStopSource())
+        let resolvedParticipantCandidates = participantCandidates.isEmpty
+            ? self.participantCandidates(forCalendarEventID: calendarEventID)
+            : participantCandidates
         isStartingMeetingRecording = true
         // Keep this after backend normalization and live-meeting creation so
         // a failed meeting start does not silently cancel an active dictation.
@@ -3982,6 +4018,7 @@ final class MuesliController: NSObject {
                 try await self.startMeetingRecordingWithSystemAudioRecovery(
                     title: title,
                     calendarEventID: calendarEventID,
+                    participantCandidates: resolvedParticipantCandidates,
                     meetingID: meetingID,
                     backend: meetingBackend,
                     endDate: endDate
@@ -4253,6 +4290,7 @@ final class MuesliController: NSObject {
     private func startMeetingRecordingWithSystemAudioRecovery(
         title: String,
         calendarEventID: String?,
+        participantCandidates: [MeetingParticipant],
         meetingID: Int64,
         backend: BackendOption,
         endDate: Date?
@@ -4280,6 +4318,7 @@ final class MuesliController: NSObject {
             let meetingSession = MeetingSession(
                 title: title,
                 calendarEventID: calendarEventID,
+                participantCandidates: participantCandidates,
                 backend: backend,
                 runtime: runtime,
                 config: config,
@@ -6949,9 +6988,9 @@ func selectCurrentOrNearbyCachedCalendarEvent(
         .sorted { $0.startDate < $1.startDate }
 
     if let active = candidates.first(where: { $0.startDate <= now && $0.endDate > now }) {
-        return CalendarEventContext(id: active.id, title: active.title)
+        return CalendarEventContext(id: active.id, title: active.title, participants: active.participants)
     }
 
     return candidates.first(where: { $0.startDate > now })
-        .map { CalendarEventContext(id: $0.id, title: $0.title) }
+        .map { CalendarEventContext(id: $0.id, title: $0.title, participants: $0.participants) }
 }
