@@ -19,7 +19,7 @@ DEFAULT_APP_VERSION="0.7.1"
 APP_VERSION="${MUESLI_BUILD_VERSION:-$DEFAULT_APP_VERSION}"
 APP_BUNDLE_VERSION="${MUESLI_BUNDLE_VERSION:-$APP_VERSION}"
 APP_SHORT_VERSION="${MUESLI_SHORT_VERSION:-$APP_VERSION}"
-SPARKLE_FEED_URL="${MUESLI_SPARKLE_FEED_URL-https://muesli-hq.github.io/muesli/appcast.xml}"
+SPARKLE_FEED_URL="${MUESLI_SPARKLE_FEED_URL-}"
 SPARKLE_EDKEY="${MUESLI_SPARKLE_EDKEY-ok9CQBJ3f0MJ2GXuGBubc6VyeWyb5exmqP2b9DceqH4=}"
 STAGED_APP_DIR="$DIST_DIR/$APP_BUNDLE_NAME"
 APP_DIR="$INSTALL_DIR/$APP_BUNDLE_NAME"
@@ -318,12 +318,20 @@ cat > "$STAGED_APP_DIR/Contents/Info.plist" <<PLIST
   <string>$APP_DISPLAY_NAME captures screen content for meeting context.</string>
   <key>NSCalendarsFullAccessUsageDescription</key>
   <string>$APP_DISPLAY_NAME reads calendar events to help with meeting recordings.</string>
+PLIST
+
+if [[ -n "$SPARKLE_FEED_URL" ]]; then
+  cat >> "$STAGED_APP_DIR/Contents/Info.plist" <<PLIST
   <key>SUFeedURL</key>
   <string>$SPARKLE_FEED_URL</string>
   <key>SUPublicEDKey</key>
   <string>$SPARKLE_EDKEY</string>
   <key>SUEnableAutomaticChecks</key>
   <true/>
+PLIST
+fi
+
+cat >> "$STAGED_APP_DIR/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
