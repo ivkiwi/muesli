@@ -268,7 +268,7 @@ final class MeetingCandidateResolver {
         "com.apple.Safari": "Safari",
     ]
 
-    var selfBundleID: String = Bundle.main.bundleIdentifier ?? "com.muesli.app"
+    var selfBundleID: String = Bundle.main.bundleIdentifier ?? "com.guesli.app"
     /// App-audio candidates do not expose a room URL, so their
     /// prompt identity is scoped to a contiguous attributed-audio session.
     private let appAudioSessionIdleTimeout: TimeInterval

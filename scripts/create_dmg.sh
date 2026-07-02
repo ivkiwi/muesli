@@ -6,7 +6,7 @@ set -euo pipefail
 # Usage: ./scripts/create_dmg.sh [app_path] [output_dir]
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_PATH="${1:-/Applications/Muesli.app}"
+APP_PATH="${1:-/Applications/Guesli.app}"
 OUTPUT_DIR="${2:-$ROOT/dist-release}"
 SIGN_IDENTITY="${MUESLI_SIGN_IDENTITY:-Developer ID Application: Pranav Hari Guruvayurappan (58W55QJ567)}"
 BACKGROUND_DIR="$ROOT/scripts/assets"
@@ -24,7 +24,7 @@ fi
 
 # Extract version from Info.plist
 VERSION=$(defaults read "$APP_PATH/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo "0.0.0")
-APP_NAME=$(defaults read "$APP_PATH/Contents/Info" CFBundleDisplayName 2>/dev/null || echo "Muesli")
+APP_NAME=$(defaults read "$APP_PATH/Contents/Info" CFBundleDisplayName 2>/dev/null || echo "Guesli")
 export MUESLI_DMG_APP_NAME="$APP_NAME"
 APP_BUNDLE_NAME="$(basename "$APP_PATH")"
 DMG_NAME="${APP_NAME}-${VERSION}.dmg"

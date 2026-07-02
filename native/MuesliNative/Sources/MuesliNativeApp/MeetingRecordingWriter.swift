@@ -83,21 +83,12 @@ final class MeetingRecordingWriter {
         startedAt: Date,
         supportDirectory: URL
     ) throws -> URL {
-        let recordingsDirectory = supportDirectory
-            .appendingPathComponent("meeting-recordings", isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: recordingsDirectory,
-            withIntermediateDirectories: true
+        try MeetingRecordingStorage.persistTemporaryRecording(
+            from: tempURL,
+            meetingTitle: meetingTitle,
+            startedAt: startedAt,
+            destinationDirectory: MeetingRecordingStorage.defaultDirectory(supportDirectory: supportDirectory)
         )
-
-        let destinationURL = recordingsDirectory.appendingPathComponent(
-            "\(fileNamePrefix(for: startedAt, title: meetingTitle)).wav"
-        )
-        if FileManager.default.fileExists(atPath: destinationURL.path) {
-            try FileManager.default.removeItem(at: destinationURL)
-        }
-        try FileManager.default.moveItem(at: tempURL, to: destinationURL)
-        return destinationURL
     }
 
     private func append(_ samples: [Int16], toMic: Bool) {
@@ -128,24 +119,6 @@ final class MeetingRecordingWriter {
         let pcmData = mixedSamples.withUnsafeBufferPointer { Data(buffer: $0) }
         state.fileHandle?.write(pcmData)
         state.bytesWritten += pcmData.count
-    }
-
-    private static func fileNamePrefix(for date: Date, title: String) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        formatter.dateFormat = "yyyy-MM-dd-HH-mm-ss"
-        let timestamp = formatter.string(from: date)
-
-        let allowed = CharacterSet.alphanumerics.union(.whitespaces)
-        let normalized = title.unicodeScalars.map { allowed.contains($0) ? String($0) : " " }.joined()
-        let slug = normalized
-            .split(whereSeparator: \.isWhitespace)
-            .prefix(6)
-            .joined(separator: "-")
-            .lowercased()
-
-        return slug.isEmpty ? timestamp : "\(timestamp)-\(slug)"
     }
 
     private static func mix(mic: [Int16], system: [Int16]) -> [Int16] {

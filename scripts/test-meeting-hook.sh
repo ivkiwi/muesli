@@ -6,7 +6,7 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
-OUTPUT_DIR="${MUESLI_HOOK_TEST_DIR:-$HOME/Desktop/MuesliHookTest}"
+OUTPUT_DIR="${MUESLI_HOOK_TEST_DIR:-$HOME/Desktop/GuesliHookTest}"
 mkdir -p "$OUTPUT_DIR"
 
 PAYLOAD_FILE="$(mktemp "$OUTPUT_DIR/payload.XXXXXX.json")"
@@ -32,10 +32,10 @@ if [[ -z "$MEETING_ID" ]]; then
   exit 1
 fi
 
-if [[ -x "/Applications/MuesliDev.app/Contents/MacOS/muesli-cli" ]]; then
-  CLI_BIN="/Applications/MuesliDev.app/Contents/MacOS/muesli-cli"
-elif [[ -x "/Applications/Muesli.app/Contents/MacOS/muesli-cli" ]]; then
-  CLI_BIN="/Applications/Muesli.app/Contents/MacOS/muesli-cli"
+if [[ -x "/Applications/GuesliDev.app/Contents/MacOS/muesli-cli" ]]; then
+  CLI_BIN="/Applications/GuesliDev.app/Contents/MacOS/muesli-cli"
+elif [[ -x "/Applications/Guesli.app/Contents/MacOS/muesli-cli" ]]; then
+  CLI_BIN="/Applications/Guesli.app/Contents/MacOS/muesli-cli"
 elif command -v muesli-cli >/dev/null 2>&1; then
   CLI_BIN="$(command -v muesli-cli)"
 else

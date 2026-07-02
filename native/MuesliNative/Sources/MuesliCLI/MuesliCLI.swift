@@ -111,7 +111,7 @@ func appBundlePath() -> String? {
             return bundlePath
         }
     }
-    let defaultPath = "/Applications/Muesli.app"
+    let defaultPath = "/Applications/Guesli.app"
     return FileManager.default.fileExists(atPath: defaultPath) ? defaultPath : nil
 }
 
@@ -148,8 +148,8 @@ func emitJSON<T: Encodable>(_ value: T) {
 func ensureDatabaseAvailable(_ context: CLIContext, command: String) throws {
     guard context.store.databaseExists else {
         throw CLIError.databaseUnavailable(
-            "No Muesli database exists at the resolved path.",
-            fix: "Launch Muesli once or pass --db-path/--support-dir to point at the correct data directory."
+            "No Guesli database exists at the resolved path.",
+            fix: "Launch Guesli once or pass --db-path/--support-dir to point at the correct data directory."
         )
     }
 }
@@ -158,7 +158,7 @@ struct GlobalOptions: ParsableArguments {
     @Option(name: .long, help: "Override the absolute path to muesli.db.")
     var dbPath: String?
 
-    @Option(name: .long, help: "Override the Muesli support directory. The CLI will look for muesli.db inside it.")
+    @Option(name: .long, help: "Override the Guesli support directory. The CLI will look for muesli.db inside it.")
     var supportDir: String?
 }
 
@@ -286,7 +286,7 @@ struct CommandSpecPayload: Encodable {
 struct MuesliCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "muesli-cli",
-        abstract: "Agent-friendly CLI for local Muesli meetings and dictations.",
+        abstract: "Agent-friendly CLI for local Guesli meetings and dictations.",
         subcommands: [SpecCommand.self, InfoCommand.self, MeetingsCommand.self, DictationsCommand.self]
     )
 
@@ -326,7 +326,7 @@ struct MuesliCLI: AsyncParsableCommand {
     static func specPayload() -> CommandSpecPayload {
         CommandSpecPayload(commands: [
             .init(name: "spec", usage: "muesli-cli spec", summary: "Dump the command tree and CLI schema metadata.", examples: ["muesli-cli spec"]),
-            .init(name: "info", usage: "muesli-cli info [--db-path <path>] [--support-dir <dir>]", summary: "Show resolved support and database paths.", examples: ["muesli-cli info", "muesli-cli info --support-dir ~/Library/Application\\ Support/Muesli"]),
+            .init(name: "info", usage: "muesli-cli info [--db-path <path>] [--support-dir <dir>]", summary: "Show resolved support and database paths.", examples: ["muesli-cli info", "muesli-cli info --support-dir ~/Library/Application\\ Support/Guesli"]),
             .init(name: "meetings list", usage: "muesli-cli meetings list [--limit <n>] [--folder-id <id>]", summary: "List recent meetings.", examples: ["muesli-cli meetings list --limit 5", "muesli-cli meetings list --folder-id 2"]),
             .init(name: "meetings get", usage: "muesli-cli meetings get <id>", summary: "Return a full meeting record.", examples: ["muesli-cli meetings get 42"]),
             .init(name: "meetings update-notes", usage: "muesli-cli meetings update-notes <id> (--stdin | --file <path>)", summary: "Replace stored meeting notes only.", examples: ["muesli-cli meetings update-notes 42 --file notes.md", "cat notes.md | muesli-cli meetings update-notes 42 --stdin"]),
@@ -375,7 +375,7 @@ struct InfoCommand: ParsableCommand {
 }
 
 struct MeetingsCommand: ParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "meetings", abstract: "Inspect and update Muesli meetings.", subcommands: [MeetingsListCommand.self, MeetingsGetCommand.self, MeetingsUpdateNotesCommand.self])
+    static let configuration = CommandConfiguration(commandName: "meetings", abstract: "Inspect and update Guesli meetings.", subcommands: [MeetingsListCommand.self, MeetingsGetCommand.self, MeetingsUpdateNotesCommand.self])
 }
 
 struct MeetingsListCommand: ParsableCommand {
@@ -390,7 +390,7 @@ struct MeetingsListCommand: ParsableCommand {
             throw CLIError.invalidInput("--limit must be greater than zero.", fix: "Pass a positive integer such as --limit 10.")
         }
         if !context.store.databaseExists {
-            emitSuccess(command: "muesli-cli meetings list", data: [MeetingListRow](), dbPath: context.databaseURL, warnings: ["No Muesli database exists at the resolved path."])
+            emitSuccess(command: "muesli-cli meetings list", data: [MeetingListRow](), dbPath: context.databaseURL, warnings: ["No Guesli database exists at the resolved path."])
             return
         }
         let rows = try context.store.recentMeetings(limit: limit, folderID: folderID).map(MeetingListRow.init)
@@ -459,7 +459,7 @@ struct MeetingsUpdateNotesCommand: ParsableCommand {
 }
 
 struct DictationsCommand: ParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "dictations", abstract: "Inspect Muesli dictations.", subcommands: [DictationsListCommand.self, DictationsGetCommand.self])
+    static let configuration = CommandConfiguration(commandName: "dictations", abstract: "Inspect Guesli dictations.", subcommands: [DictationsListCommand.self, DictationsGetCommand.self])
 }
 
 struct DictationsListCommand: ParsableCommand {
@@ -473,7 +473,7 @@ struct DictationsListCommand: ParsableCommand {
             throw CLIError.invalidInput("--limit must be greater than zero.", fix: "Pass a positive integer such as --limit 10.")
         }
         if !context.store.databaseExists {
-            emitSuccess(command: "muesli-cli dictations list", data: [DictationListRow](), dbPath: context.databaseURL, warnings: ["No Muesli database exists at the resolved path."])
+            emitSuccess(command: "muesli-cli dictations list", data: [DictationListRow](), dbPath: context.databaseURL, warnings: ["No Guesli database exists at the resolved path."])
             return
         }
         let rows = try context.store.recentDictations(limit: limit).map(DictationListRow.init)

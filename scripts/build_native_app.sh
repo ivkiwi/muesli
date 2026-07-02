@@ -9,12 +9,12 @@ INSTALL_DIR="${MUESLI_INSTALL_DIR:-/Applications}"
 BUILD_CONFIG="${1:-release}"
 APP_BINARY="MuesliNativeApp"
 CLI_BINARY="muesli-cli"
-APP_NAME="${MUESLI_APP_NAME:-Muesli}"
+APP_NAME="${MUESLI_APP_NAME:-Guesli}"
 APP_DISPLAY_NAME="${MUESLI_DISPLAY_NAME:-$APP_NAME}"
 APP_BUNDLE_NAME="${MUESLI_APP_BUNDLE_NAME:-$APP_NAME.app}"
-APP_EXECUTABLE_NAME="${MUESLI_EXECUTABLE_NAME:-Muesli}"
+APP_EXECUTABLE_NAME="${MUESLI_EXECUTABLE_NAME:-Guesli}"
 APP_SUPPORT_DIR_NAME="${MUESLI_SUPPORT_DIR_NAME:-$APP_DISPLAY_NAME}"
-BUNDLE_ID="${MUESLI_BUNDLE_ID:-com.muesli.app}"
+BUNDLE_ID="${MUESLI_BUNDLE_ID:-com.guesli.app}"
 DEFAULT_APP_VERSION="0.7.1"
 APP_VERSION="${MUESLI_BUILD_VERSION:-$DEFAULT_APP_VERSION}"
 APP_BUNDLE_VERSION="${MUESLI_BUNDLE_VERSION:-$APP_VERSION}"
@@ -425,7 +425,7 @@ if [[ "$SKIP_SIGN" != "1" ]]; then
     fi
     if [[ -n "$PROFILE_APP_IDENTIFIER" ]]; then
       PROFILE_BUNDLE_ID="${PROFILE_APP_IDENTIFIER#*.}"
-      # shellcheck disable=SC2053 # Intentionally glob-match wildcard App IDs such as com.muesli.*.
+      # shellcheck disable=SC2053 # Intentionally glob-match wildcard App IDs such as com.guesli.*.
       if [[ "$BUNDLE_ID" != $PROFILE_BUNDLE_ID ]]; then
         echo "ERROR: provisioning profile app identifier '$PROFILE_APP_IDENTIFIER' does not match bundle ID '$BUNDLE_ID'." >&2
         exit 1
@@ -508,7 +508,7 @@ if [[ "$SKIP_SIGN" != "1" ]]; then
 else
   # No Developer ID certificate: ad-hoc sign for local dev instead of leaving the
   # bundle with SwiftPM's incoherent per-binary signature. An ad-hoc *bundle* signature
-  # binds Info.plist and adopts the bundle's CFBundleIdentifier (com.muesli.*) as the
+  # binds Info.plist and adopts the bundle's CFBundleIdentifier (com.guesli.*) as the
   # signing identity, which macOS TCC needs to attribute Accessibility / Input-Monitoring
   # grants to the running process. Without it, AXIsProcessTrusted()/CGPreflightListenEventAccess()
   # keep returning false even after the user grants permission, so onboarding stalls.

@@ -39,9 +39,9 @@ struct ContributionMilestonePrompt: Equatable, Identifiable {
     var message: String {
         switch kind {
         case .dictationWords:
-            return "That is a serious pile of words. If Muesli has been saving your fingers and your flow, a GitHub star or a coffee helps keep it moving."
+            return "That is a serious pile of words. If Guesli has been saving your fingers and your flow, a GitHub star or a coffee helps keep it moving."
         case .meetings:
-            return "That is a lot of conversations turned into something useful. If Muesli has been keeping your meetings in order, a GitHub star or a coffee helps keep it moving."
+            return "That is a lot of conversations turned into something useful. If Guesli has been keeping your meetings in order, a GitHub star or a coffee helps keep it moving."
         }
     }
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Builds and launches an isolated "MuesliCanary" app for Canary CoreML testing.
+# Builds and launches an isolated "GuesliCanary" app for Canary CoreML testing.
 #
 # - Separate bundle ID (com.muesli.canary)
-# - Separate support directory (~/Library/Application Support/MuesliCanary/)
+# - Separate support directory (~/Library/Application Support/GuesliCanary/)
 # - Optional onboarding reset / clean wipe
 # - Optional local model seeding from the sibling stt-quantize-coreml repo
 #
@@ -15,8 +15,8 @@ set -euo pipefail
 #   ./scripts/canary-test.sh --no-seed
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CANARY_SUPPORT_DIR="${MUESLI_CANARY_SUPPORT_DIR:-$HOME/Library/Application Support/MuesliCanary}"
-CANARY_APP="${MUESLI_CANARY_APP_PATH:-/Applications/MuesliCanary.app}"
+CANARY_SUPPORT_DIR="${MUESLI_CANARY_SUPPORT_DIR:-$HOME/Library/Application Support/GuesliCanary}"
+CANARY_APP="${MUESLI_CANARY_APP_PATH:-/Applications/GuesliCanary.app}"
 CANARY_MODEL_CACHE="${MUESLI_CANARY_CACHE_DIR:-$HOME/.cache/muesli/models/canary-qwen-2.5b-coreml-int8}"
 STT_ROOT_DEFAULT="$(cd "$ROOT/.." && pwd)/stt-quantize-coreml"
 STT_ROOT="${MUESLI_CANARY_STT_ROOT:-$STT_ROOT_DEFAULT}"
@@ -28,7 +28,7 @@ SEED=1
 
 usage() {
   cat <<'EOF'
-Build and launch an isolated MuesliCanary app.
+Build and launch an isolated GuesliCanary app.
 
 Options:
   --clean     Wipe Canary support data before launch.
@@ -130,7 +130,7 @@ configure_postproc_override() {
   fi
 }
 
-pkill -f "MuesliCanary.app" 2>/dev/null || true
+pkill -f "GuesliCanary.app" 2>/dev/null || true
 sleep 0.5
 
 if [[ "$CLEAN" -eq 1 ]]; then
@@ -156,16 +156,16 @@ fi
 
 configure_postproc_override
 
-log "Building MuesliCanary (debug, signed)..."
-MUESLI_APP_NAME=MuesliCanary \
+log "Building GuesliCanary (debug, signed)..."
+MUESLI_APP_NAME=GuesliCanary \
 MUESLI_BUNDLE_ID=com.muesli.canary \
-MUESLI_SUPPORT_DIR_NAME=MuesliCanary \
-MUESLI_DISPLAY_NAME="MuesliCanary" \
+MUESLI_SUPPORT_DIR_NAME=GuesliCanary \
+MUESLI_DISPLAY_NAME="GuesliCanary" \
 MUESLI_SPARKLE_FEED_URL="" \
 "$ROOT/scripts/build_native_app.sh" debug
 
 log ""
-log "Launching MuesliCanary..."
+log "Launching GuesliCanary..."
 open "$CANARY_APP"
 
 log ""

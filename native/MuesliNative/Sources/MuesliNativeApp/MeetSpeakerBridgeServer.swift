@@ -63,16 +63,41 @@ final class MeetSpeakerBridgeServer {
         guard request.hasPrefix("POST \(Self.path) ") else {
             return Self.http(status: "404 Not Found")
         }
-        guard let body = Self.bodyData(from: data),
-              let observation = Self.parseObservation(body) else {
+        guard let body = Self.bodyData(from: data) else {
             return Self.http(status: "400 Bad Request")
         }
-        onObservation?(observation)
+        let observations = Self.parseObservations(body)
+        guard !observations.isEmpty else {
+            return Self.http(status: "400 Bad Request")
+        }
+        for observation in observations {
+            onObservation?(observation)
+        }
         return Self.http(status: "204 No Content")
     }
 
     static func parseObservation(_ data: Data) -> MeetSpeakerObservation? {
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        parseObservations(data).first
+    }
+
+    static func parseObservations(_ data: Data, receivedAt: Date = Date()) -> [MeetSpeakerObservation] {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
+        if let rawObservations = json["observations"] as? [Any] {
+            return rawObservations.compactMap { rawObservation in
+                guard var observationJSON = rawObservation as? [String: Any] else { return nil }
+                if observationJSON["meetingURL"] == nil {
+                    observationJSON["meetingURL"] = json["meetingURL"] ?? json["meetingUrl"]
+                }
+                if observationJSON["source"] == nil {
+                    observationJSON["source"] = json["source"]
+                }
+                return parseObservationObject(observationJSON, receivedAt: receivedAt)
+            }
+        }
+        return parseObservationObject(json, receivedAt: receivedAt).map { [$0] } ?? []
+    }
+
+    private static func parseObservationObject(_ json: [String: Any], receivedAt: Date) -> MeetSpeakerObservation? {
         let rawName = json["speakerName"] as? String ?? json["speaker"] as? String
         let name = rawName?.trimmingCharacters(in: .whitespacesAndNewlines)
         let speakerName = (name?.count ?? 0) >= 2 && (name?.count ?? 0) <= 120 ? name : nil
@@ -85,9 +110,26 @@ final class MeetSpeakerBridgeServer {
             meetingURL: meetingURL?.isEmpty == true ? nil : meetingURL,
             speakerName: speakerName,
             participants: participants,
-            observedAt: Date(),
+            observedAt: parseObservedAt(json, fallback: receivedAt),
             source: source?.isEmpty == false ? source! : "meet-extension"
         )
+    }
+
+    private static func parseObservedAt(_ json: [String: Any], fallback: Date) -> Date {
+        if let milliseconds = json["observedAtMs"] as? Double {
+            return Date(timeIntervalSince1970: milliseconds / 1000.0)
+        }
+        if let milliseconds = json["observedAtMs"] as? Int {
+            return Date(timeIntervalSince1970: Double(milliseconds) / 1000.0)
+        }
+        if let seconds = json["observedAtSeconds"] as? Double {
+            return Date(timeIntervalSince1970: seconds)
+        }
+        if let isoString = json["observedAt"] as? String,
+           let date = ISO8601DateFormatter().date(from: isoString) {
+            return date
+        }
+        return fallback
     }
 
     private static func parseParticipants(_ raw: Any?) -> [MeetingParticipant] {
@@ -134,6 +176,7 @@ final class MeetSpeakerBridgeServer {
         Access-Control-Allow-Origin: *\r
         Access-Control-Allow-Methods: POST, OPTIONS\r
         Access-Control-Allow-Headers: content-type\r
+        Access-Control-Allow-Private-Network: true\r
         Content-Length: 0\r
         Connection: close\r
         \r

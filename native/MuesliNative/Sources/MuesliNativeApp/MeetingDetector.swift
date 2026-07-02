@@ -100,7 +100,7 @@ final class MeetingDetector {
     ]
 
     /// Bundle ID to exclude from detection (our own app).
-    var selfBundleID: String = Bundle.main.bundleIdentifier ?? "com.muesli.app"
+    var selfBundleID: String = Bundle.main.bundleIdentifier ?? "com.guesli.app"
 
     /// How many consecutive idle evaluations before resetting detection state.
     static let idleResetThreshold = 10

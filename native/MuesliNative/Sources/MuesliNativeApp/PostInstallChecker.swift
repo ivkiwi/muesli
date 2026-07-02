@@ -96,7 +96,7 @@ enum PostInstallChecker {
         if FileManager.default.fileExists(atPath: destinationURL.path, isDirectory: &isDir), isDir.boolValue {
             guard runAlert(
                 message: String(format: NSLocalizedString("Replace existing %@?",
-                    comment: "Alert title: an older Muesli.app is already in Applications"),
+                    comment: "Alert title: an older Guesli.app is already in Applications"),
                     appName),
                 info: String(format: NSLocalizedString("An older version of %@ is already in Applications. Replace it?",
                     comment: "Alert body: confirms replacing existing install"),
@@ -110,7 +110,7 @@ enum PostInstallChecker {
             // The existing app is moved to Trash by the background install task below.
         }
 
-        // Derive the DMG volume path from our bundle path (/Volumes/Muesli/Muesli.app → /Volumes/Muesli)
+        // Derive the DMG volume path from our bundle path (/Volumes/Guesli/Guesli.app -> /Volumes/Guesli)
         let volumePath = URL(fileURLWithPath: bundlePath).deletingLastPathComponent().path
         let progressWindow = showInstallProgress(appName: appName)
         let shouldReplaceExisting = isDir.boolValue

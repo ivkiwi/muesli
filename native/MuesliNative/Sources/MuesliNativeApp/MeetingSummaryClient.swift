@@ -143,7 +143,7 @@ enum MeetingSummaryClient {
         if !trimmedTitle.isEmpty {
             sections.append("Meeting: \(trimmedTitle)")
         }
-        sections.append("Muesli could not generate structured meeting notes.\n\n\(error.localizedDescription)")
+        sections.append("Guesli could not generate structured meeting notes.\n\n\(error.localizedDescription)")
         if !trimmedManualNotes.isEmpty {
             sections.append("### Written notes\n\n\(trimmedManualNotes)")
         }

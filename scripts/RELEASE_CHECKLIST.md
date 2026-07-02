@@ -1,4 +1,4 @@
-# Muesli Release Checklist
+# Guesli Release Checklist
 
 Run `./scripts/release.sh [version]` — it automates steps 1-9 and is the only official release path.
 
@@ -19,26 +19,26 @@ This checklist is for **verification** after the script runs, and for manual rec
 
 ## Signing Profiles
 
-Muesli's default entitlements include CloudKit (`iCloud.com.mueslihq.muesli`). Any cloud-entitled build must be signed with a provisioning profile whose app identifier matches the bundle ID and whose certificate matches the signing identity.
+Guesli's default entitlements include CloudKit (`iCloud.com.mueslihq.muesli`). Any cloud-entitled build must be signed with a provisioning profile whose app identifier matches the bundle ID and whose certificate matches the signing identity.
 
-- [ ] Dev lane `MuesliDev` / `com.muesli.dev`
-  - Use profile: `../muesli-ios/secrets/mueslimacosdevcloudkitcommueslidev.provisionprofile`
+- [ ] Dev lane `GuesliDev` / `com.guesli.dev`
+  - Use profile: `../muesli-ios/secrets/gueslimacosdevcloudkitcomgueslidev.provisionprofile`
   - Use identity: `Apple Development: Pranav Hari Guruvayurappan (59WTZW55XG)`
   - Use `MUESLI_CODESIGN_TIMESTAMP=none`
   - `scripts/dev-test.sh --cloud-entitlements` auto-selects these values when that local profile exists
 
-- [ ] Named dev lanes `com.muesli.dev.a/b/c`
+- [ ] Named dev lanes `com.guesli.dev.a/b/c`
   - Default to local-only entitlements and do not need a CloudKit profile
   - If running with `--cloud-entitlements`, provide a lane-specific profile and matching Apple Development identity
 
-- [ ] Preprod `MuesliPreprod` / `com.muesli.preprod`
-  - Export `MUESLI_PROVISIONING_PROFILE=/path/to/com.muesli.preprod.profile`
+- [ ] Preprod `GuesliPreprod` / `com.guesli.preprod`
+  - Export `MUESLI_PROVISIONING_PROFILE=/path/to/com.guesli.preprod.profile`
   - Maintainer local profile: `../muesli-ios/secrets/mueslimacospreproddeveloperidcloudkit.provisionprofile`
   - Use the Developer ID release identity unless intentionally overriding `MUESLI_SIGN_IDENTITY`
   - Verify the embedded profile carries `iCloud.com.mueslihq.muesli`
 
-- [ ] Stable `Muesli` / `com.muesli.app`
-  - Export `MUESLI_PROVISIONING_PROFILE=/path/to/com.muesli.app.profile`
+- [ ] Stable `Guesli` / `com.guesli.app`
+  - Export `MUESLI_PROVISIONING_PROFILE=/path/to/com.guesli.app.profile`
   - Maintainer local profile: `../muesli-ios/secrets/mueslimacosproductiondeveloperidcloudkit.provisionprofile`
   - Use `Developer ID Application: Pranav Hari Guruvayurappan (58W55QJ567)`
   - Final app and DMG must be notarized, stapled, and accepted by Gatekeeper
@@ -48,12 +48,12 @@ If launch fails with `No matching profile found`, the embedded profile, bundle I
 ## Build & Sign
 
 - [ ] `scripts/build_native_app.sh` completes without error
-- [ ] App installed to `/Applications/Muesli.app`
-- [ ] Verify signature: `codesign -dvvv /Applications/Muesli.app 2>&1 | grep "Authority"`
+- [ ] App installed to `/Applications/Guesli.app`
+- [ ] Verify signature: `codesign -dvvv /Applications/Guesli.app 2>&1 | grep "Authority"`
   - Must show `Developer ID Application: Pranav Hari Guruvayurappan (58W55QJ567)`
 - [ ] Verify effective entitlements:
   ```bash
-  codesign -d --entitlements :- /Applications/Muesli.app | plutil -p -
+  codesign -d --entitlements :- /Applications/Guesli.app | plutil -p -
   ```
   - Must show CloudKit container `iCloud.com.mueslihq.muesli`
   - Must show CloudKit environment `Production`
@@ -65,53 +65,53 @@ If launch fails with `No matching profile found`, the embedded profile, bundle I
 
 - [ ] **Step 1: Notarize the app bundle**
   ```bash
-  ditto -c -k --keepParent /Applications/Muesli.app Muesli-app.zip
-  xcrun notarytool submit Muesli-app.zip --keychain-profile MuesliNotary --wait
+  ditto -c -k --keepParent /Applications/Guesli.app Guesli-app.zip
+  xcrun notarytool submit Guesli-app.zip --keychain-profile MuesliNotary --wait
   ```
   - Must show `status: Accepted`
 
 - [ ] **Step 2: Staple the app bundle**
   ```bash
-  xcrun stapler staple /Applications/Muesli.app
+  xcrun stapler staple /Applications/Guesli.app
   ```
   - Must show `The staple and validate action worked!`
 
 - [ ] **Step 3: Create DMG from the STAPLED app**
   ```bash
-  ./scripts/create_dmg.sh /Applications/Muesli.app dist-release
+  ./scripts/create_dmg.sh /Applications/Guesli.app dist-release
   ```
 
 - [ ] **Step 4: Notarize the DMG**
   ```bash
-  xcrun notarytool submit dist-release/Muesli-X.Y.Z.dmg --keychain-profile MuesliNotary --wait
+  xcrun notarytool submit dist-release/Guesli-X.Y.Z.dmg --keychain-profile MuesliNotary --wait
   ```
   - Must show `status: Accepted`
 
 - [ ] **Step 5: Staple the DMG**
   ```bash
-  xcrun stapler staple dist-release/Muesli-X.Y.Z.dmg
+  xcrun stapler staple dist-release/Guesli-X.Y.Z.dmg
   ```
 
 ## Verify (DO NOT SKIP)
 
 - [ ] **Mount the DMG and test the app inside it:**
   ```bash
-  hdiutil attach dist-release/Muesli-X.Y.Z.dmg
-  spctl -a -vv "/Volumes/Muesli/Muesli.app"
+  hdiutil attach dist-release/Guesli-X.Y.Z.dmg
+  spctl -a -vv "/Volumes/Guesli/Guesli.app"
   ```
   - Must show `accepted` and `source=Notarized Developer ID`
   - If it shows `rejected` — the app wasn't stapled before DMG creation. Go back to step 2.
 
 - [ ] **Verify DMG has hardened runtime:**
   ```bash
-  codesign -dvvv dist-release/Muesli-X.Y.Z.dmg 2>&1 | grep "flags"
+  codesign -dvvv dist-release/Guesli-X.Y.Z.dmg 2>&1 | grep "flags"
   ```
   - Must show `flags=0x10000(runtime)` — if missing, `create_dmg.sh` is broken
 
 - [ ] **Install and launch:**
   ```bash
-  cp -R "/Volumes/Muesli/Muesli.app" /Applications/Muesli.app
-  open /Applications/Muesli.app
+  cp -R "/Volumes/Guesli/Guesli.app" /Applications/Guesli.app
+  open /Applications/Guesli.app
   ```
   - No Gatekeeper warnings
   - App launches normally
@@ -119,7 +119,7 @@ If launch fails with `No matching profile found`, the embedded profile, bundle I
 
 - [ ] **Verify version:**
   ```bash
-  defaults read /Applications/Muesli.app/Contents/Info.plist CFBundleShortVersionString
+  defaults read /Applications/Guesli.app/Contents/Info.plist CFBundleShortVersionString
   ```
 
 ## Release Staging
@@ -127,10 +127,10 @@ If launch fails with `No matching profile found`, the embedded profile, bundle I
 - [ ] **Create a draft GitHub Release and upload the DMG**
 - [ ] **Re-download the hosted draft DMG and verify it matches the local artifact**
   ```bash
-  gh release download vX.Y.Z -p "Muesli-X.Y.Z.dmg" -D /tmp/muesli-release-verify --clobber
-  shasum -a 256 dist-release/Muesli-X.Y.Z.dmg /tmp/muesli-release-verify/Muesli-X.Y.Z.dmg
-  spctl -a -vv -t open --context context:primary-signature /tmp/muesli-release-verify/Muesli-X.Y.Z.dmg
-  xcrun stapler validate /tmp/muesli-release-verify/Muesli-X.Y.Z.dmg
+  gh release download vX.Y.Z -p "Guesli-X.Y.Z.dmg" -D /tmp/muesli-release-verify --clobber
+  shasum -a 256 dist-release/Guesli-X.Y.Z.dmg /tmp/muesli-release-verify/Guesli-X.Y.Z.dmg
+  spctl -a -vv -t open --context context:primary-signature /tmp/muesli-release-verify/Guesli-X.Y.Z.dmg
+  xcrun stapler validate /tmp/muesli-release-verify/Guesli-X.Y.Z.dmg
   ```
   - The local and hosted SHA256 hashes must match exactly
   - Must show `accepted` and `The validate action worked!`
@@ -146,9 +146,9 @@ If launch fails with `No matching profile found`, the embedded profile, bundle I
 
 - [ ] **Fix appcast enclosure URLs to GitHub Releases** — `generate_appcast` writes GitHub Pages URLs. Replace with GitHub Releases URLs:
   ```
-  https://muesli-hq.github.io/muesli/Muesli-X.Y.Z.dmg
+  https://muesli-hq.github.io/muesli/Guesli-X.Y.Z.dmg
   →
-  https://github.com/Muesli-HQ/muesli/releases/download/vX.Y.Z/Muesli-X.Y.Z.dmg
+  https://github.com/Muesli-HQ/muesli/releases/download/vX.Y.Z/Guesli-X.Y.Z.dmg
   ```
 
 - [ ] **Remove delta entries** from appcast (deltas aren't hosted)
@@ -157,7 +157,7 @@ If launch fails with `No matching profile found`, the embedded profile, bundle I
 
 - [ ] **Verify Sparkle update flow metadata and artifact:**
   ```bash
-  scripts/verify_update_flow.sh --version X.Y.Z --dmg dist-release/Muesli-X.Y.Z.dmg --require-notarized
+  scripts/verify_update_flow.sh --version X.Y.Z --dmg dist-release/Guesli-X.Y.Z.dmg --require-notarized
   ```
 
 - [ ] **Push appcast + download link:**

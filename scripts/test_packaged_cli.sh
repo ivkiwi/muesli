@@ -4,9 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_CONFIG="${1:-debug}"
 INSTALL_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/muesli-packaging-test.XXXXXX")"
-APP_BUNDLE_NAME="MuesliPackagingTest.app"
+APP_BUNDLE_NAME="GuesliPackagingTest.app"
 APP_PATH="$INSTALL_ROOT/$APP_BUNDLE_NAME"
-APP_BIN="$APP_PATH/Contents/MacOS/Muesli"
+APP_BIN="$APP_PATH/Contents/MacOS/Guesli"
 CLI_BIN="$APP_PATH/Contents/MacOS/muesli-cli"
 SPEC_OUTPUT="$INSTALL_ROOT/muesli-cli-spec.json"
 

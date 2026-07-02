@@ -6,7 +6,7 @@ set -euo pipefail
 # the single binary source of truth and the appcast stays in sync with releases.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_PATH="${1:-/Applications/Muesli.app}"
+APP_PATH="${1:-/Applications/Guesli.app}"
 PROFILE_NAME="${MUESLI_NOTARY_PROFILE:-MuesliNotary}"
 ARTIFACT_DIR="${ROOT}/dist-notary"
 ZIP_PATH="${ARTIFACT_DIR}/$(basename "${APP_PATH%.app}")-notarize.zip"

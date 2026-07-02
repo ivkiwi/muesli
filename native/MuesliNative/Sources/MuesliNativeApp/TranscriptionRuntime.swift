@@ -90,6 +90,7 @@ actor TranscriptionCoordinator {
     private var postProcessorModelURL: URL = PostProcessorOption.defaultOption.modelURL
     private var postProcessorSystemPrompt: String = PostProcessorOption.defaultSystemPrompt
     private var postProcessorModelId: String = PostProcessorOption.defaultOption.id
+    private var transcriptCleanupSettings = TranscriptCleanupSettings()
 
     @available(macOS 15, *)
     private var qwen3PostProcessor: Qwen3PostProcessor {
@@ -112,6 +113,11 @@ actor TranscriptionCoordinator {
         }
     }
 
+    func setTranscriptCleanupSettings(_ settings: TranscriptCleanupSettings) async {
+        transcriptCleanupSettings = settings
+        postProcessorSystemPrompt = settings.systemPrompt
+    }
+
     private struct PostProcPairLogEntry: Encodable {
         let ts: String
         let raw: String
@@ -120,7 +126,7 @@ actor TranscriptionCoordinator {
         let asr: String
     }
 
-    private func logPostProcPair(raw: String, processed: String, asr: String) {
+    private func logPostProcPair(raw: String, processed: String, asr: String, model: String? = nil) {
         guard Qwen3PostProcessorLogging.isPairLoggingEnabled else { return }
         let logURL = AppIdentity.supportDirectoryURL.appendingPathComponent("postproc-pairs.jsonl")
         let iso8601 = ISO8601DateFormatter()
@@ -130,7 +136,7 @@ actor TranscriptionCoordinator {
             ts: ts,
             raw: raw,
             processed: processed,
-            model: postProcessorModelId,
+            model: model ?? postProcessorModelId,
             asr: asr
         )
         guard var data = try? JSONEncoder().encode(entry) else { return }
@@ -272,7 +278,8 @@ actor TranscriptionCoordinator {
     }
 
     func preloadPostProcessorIfNeeded(enabled: Bool) async {
-        if enabled, #available(macOS 15, *) {
+        guard enabled, transcriptCleanupSettings.provider == .local else { return }
+        if #available(macOS 15, *) {
             do {
                 try await qwen3PostProcessor.prepare()
             } catch {
@@ -425,13 +432,42 @@ actor TranscriptionCoordinator {
         appContext: String? = nil
     ) async -> SpeechTranscriptionResult? {
         guard enabled else {
-            Qwen3PostProcessorLogging.logVerbose("Qwen3 post-processor disabled for dictation")
+            Qwen3PostProcessorLogging.logVerbose("Transcript cleanup disabled for dictation")
             return nil
         }
         guard !result.text.isEmpty else {
-            Qwen3PostProcessorLogging.logVerbose("Qwen3 post-processor skipped: empty transcript")
+            Qwen3PostProcessorLogging.logVerbose("Transcript cleanup skipped: empty transcript")
             return nil
         }
+
+        if transcriptCleanupSettings.provider != .local {
+            do {
+                Qwen3PostProcessorLogging.logVerbose("External transcript cleanup forced by toggle")
+                let start = CFAbsoluteTimeGetCurrent()
+                let trimmed = try await ExternalTranscriptCleanupClient.cleanup(
+                    result.text,
+                    appContext: appContext,
+                    settings: transcriptCleanupSettings
+                )
+                let elapsedMs = (CFAbsoluteTimeGetCurrent() - start) * 1000
+                Qwen3PostProcessorLogging.logVerbose("External transcript cleanup applied via \(transcriptCleanupSettings.provider.label) to \(backend.label) in \(String(format: "%.1f", elapsedMs))ms (chars=\(trimmed.count))")
+                Qwen3PostProcessorLogging.logVerbose("External transcript cleanup final output: \(trimmed)")
+                logPostProcPair(
+                    raw: result.text,
+                    processed: trimmed,
+                    asr: backend.backend,
+                    model: transcriptCleanupSettings.provider.rawValue
+                )
+                return SpeechTranscriptionResult(
+                    text: trimmed,
+                    // Original ASR segments describe pre-cleanup text. Keep them only for debug diagnostics.
+                    segments: Qwen3PostProcessorLogging.isVerboseEnabled && !trimmed.isEmpty ? result.segments : []
+                )
+            } catch {
+                Qwen3PostProcessorLogging.logVerbose("External transcript cleanup failed, falling back: \(error)")
+            }
+        }
+
         guard #available(macOS 15, *) else {
             Qwen3PostProcessorLogging.logVerbose("Qwen3 post-processor skipped: requires macOS 15+")
             return nil

@@ -112,7 +112,7 @@ enum MeetingRetranscriptionError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .controllerUnavailable:
-            return "Meeting re-transcription could not continue because Muesli is no longer available."
+            return "Meeting re-transcription could not continue because Guesli is no longer available."
         case .recordingUnavailable:
             return "The saved meeting recording is no longer available on disk."
         case .noDownloadedTranscriptionModel:
@@ -282,12 +282,16 @@ final class MuesliController: NSObject {
     private var activeMeetingSession: MeetingSession?
     private var activeMeetingID: Int64?
     private var activeMeetingAudioWarning: ActiveMeetingAudioWarning?
+    private var pendingMeetSpeakerObservations: [MeetSpeakerObservation] = []
     private var liveMeetingTitleCache: [Int64: String] = [:]
     private var liveManualNotesCache: [Int64: String] = [:]
     private var liveManualNotesLastPersistedAt: [Int64: Date] = [:]
     private var liveManualNotesLastPersistedValue: [Int64: String] = [:]
     private var liveManualNotesPersistWorkItems: [Int64: DispatchWorkItem] = [:]
     private let liveManualNotesPersistInterval: TimeInterval = 0.75
+    private let pendingMeetSpeakerObservationLimit = 2000
+    private let pendingMeetSpeakerObservationRetention: TimeInterval = 2 * 60 * 60
+    private let pendingMeetSpeakerObservationFutureTolerance: TimeInterval = 5 * 60
     private var staleLiveMeetingRecoveryFailures = Set<Int64>()
     private var dictationState: DictationState = .idle
     private var dictationStartedAt: Date?
@@ -418,6 +422,7 @@ final class MuesliController: NSObject {
         } catch {
             fputs("[muesli-native] startup error: \(error)\n", stderr)
         }
+        importLegacyMuesliHistoryIfNeeded()
         recoverStaleLiveMeetings()
         normalizeMeetingTranscriptionSelectionForAvailability()
         SoundController.prewarmLifecycleSounds()
@@ -617,6 +622,9 @@ final class MuesliController: NSObject {
                 guard let self else { return }
                 let includesMeetings = self.config.resolvedOnboardingUseCase.includesMeetings
                 let ppOption = self.runtimePostProcessorOption()
+                await self.transcriptionCoordinator.setTranscriptCleanupSettings(
+                    TranscriptCleanupSettings(config: self.config)
+                )
                 if #available(macOS 15, *) {
                     if let ppOption {
                         await self.transcriptionCoordinator.setActivePostProcessor(
@@ -630,7 +638,7 @@ final class MuesliController: NSObject {
                 }
                 await self.transcriptionCoordinator.preload(
                     backend: self.selectedBackend,
-                    enablePostProcessor: self.config.enablePostProcessor && ppOption != nil,
+                    enablePostProcessor: self.shouldPreloadLocalPostProcessor,
                     includeMeetingHelpers: includesMeetings
                 )
                 if includesMeetings, self.selectedMeetingTranscriptionBackend != self.selectedBackend {
@@ -660,6 +668,31 @@ final class MuesliController: NSObject {
 
         if canRunMainApp {
             PostInstallChecker.check()
+        }
+    }
+
+    private func importLegacyMuesliHistoryIfNeeded() {
+        let defaultGuesliDatabase = MuesliPaths.defaultDatabaseURL(appName: AppIdentity.supportDirectoryName)
+            .standardizedFileURL
+        guard dictationStore.databasePath().standardizedFileURL == defaultGuesliDatabase else {
+            return
+        }
+        do {
+            let summary = try LegacyMuesliImporter().importIfNeeded(
+                targetStore: dictationStore,
+                targetSupportDirectory: AppIdentity.supportDirectoryURL
+            )
+            if summary.didImport {
+                fputs(
+                    "[muesli-native] imported legacy Muesli history: \(summary.dictationsImported) dictations, \(summary.meetingsImported) meetings\n",
+                    stderr
+                )
+                if summary.totalImported > 0 {
+                    MuesliNotifications.postDataDidChange()
+                }
+            }
+        } catch {
+            fputs("[muesli-native] legacy Muesli import failed: \(error)\n", stderr)
         }
     }
 
@@ -1536,6 +1569,9 @@ final class MuesliController: NSObject {
                 }
             }
             let ppOption = self.runtimePostProcessorOption()
+            await self.transcriptionCoordinator.setTranscriptCleanupSettings(
+                TranscriptCleanupSettings(config: self.config)
+            )
             if #available(macOS 15, *) {
                 if let ppOption {
                     await self.transcriptionCoordinator.setActivePostProcessor(
@@ -1546,7 +1582,7 @@ final class MuesliController: NSObject {
             }
             await self.transcriptionCoordinator.preload(
                 backend: option,
-                enablePostProcessor: self.config.enablePostProcessor && ppOption != nil,
+                enablePostProcessor: self.shouldPreloadLocalPostProcessor,
                 includeMeetingHelpers: self.config.resolvedOnboardingUseCase.includesMeetings
             )
             await MainActor.run {
@@ -1599,7 +1635,17 @@ final class MuesliController: NSObject {
     }
 
     var isPostProcessorReady: Bool {
-        config.enablePostProcessor && runtimePostProcessorOption() != nil
+        guard config.enablePostProcessor else { return false }
+        if transcriptCleanupProvider != .local { return true }
+        return runtimePostProcessorOption() != nil
+    }
+
+    private var shouldPreloadLocalPostProcessor: Bool {
+        config.enablePostProcessor && transcriptCleanupProvider == .local && runtimePostProcessorOption() != nil
+    }
+
+    private var transcriptCleanupProvider: TranscriptCleanupProviderOption {
+        TranscriptCleanupProviderOption.resolved(config.transcriptCleanupProvider)
     }
 
     @discardableResult
@@ -1620,7 +1666,7 @@ final class MuesliController: NSObject {
     }
 
     func setPostProcessorEnabled(_ enabled: Bool) {
-        if enabled {
+        if enabled, transcriptCleanupProvider == .local {
             guard normalizePostProcessorSelectionForAvailability() != nil else {
                 updateConfig { $0.enablePostProcessor = false }
                 appState.selectedTab = .models
@@ -1633,10 +1679,12 @@ final class MuesliController: NSObject {
 
     func preloadExperimentalTranscriptionFeatures() {
         let ppOption = runtimePostProcessorOption()
-        let enabled = config.enablePostProcessor && ppOption != nil
-        let ppPrompt = config.postProcessorSystemPrompt
+        let enabled = shouldPreloadLocalPostProcessor
+        let settings = TranscriptCleanupSettings(config: config)
+        let ppPrompt = settings.systemPrompt
         Task { [weak self] in
             guard let self else { return }
+            await self.transcriptionCoordinator.setTranscriptCleanupSettings(settings)
             if let ppOption, #available(macOS 15, *) {
                 await self.transcriptionCoordinator.setActivePostProcessor(
                     option: ppOption,
@@ -1647,6 +1695,19 @@ final class MuesliController: NSObject {
         }
     }
 
+    func setTranscriptCleanupProvider(_ provider: TranscriptCleanupProviderOption) {
+        updateConfig { $0.transcriptCleanupProvider = provider.rawValue }
+        if provider == .local, config.enablePostProcessor {
+            guard normalizePostProcessorSelectionForAvailability() != nil else {
+                updateConfig { $0.enablePostProcessor = false }
+                appState.selectedTab = .models
+                preloadExperimentalTranscriptionFeatures()
+                return
+            }
+        }
+        preloadExperimentalTranscriptionFeatures()
+    }
+
     func selectPostProcessor(_ option: PostProcessorOption) {
         updateConfig { $0.activePostProcessorId = option.id }
         appState.activePostProcessor = option
@@ -1654,6 +1715,9 @@ final class MuesliController: NSObject {
         let systemPrompt = config.postProcessorSystemPrompt
         Task { [weak self] in
             guard let self else { return }
+            await self.transcriptionCoordinator.setTranscriptCleanupSettings(
+                TranscriptCleanupSettings(config: self.config)
+            )
             if #available(macOS 15, *) {
                 await self.transcriptionCoordinator.setActivePostProcessor(
                     option: option,
@@ -1669,6 +1733,9 @@ final class MuesliController: NSObject {
         guard config.enablePostProcessor else { return }
         Task { [weak self] in
             guard let self else { return }
+            await self.transcriptionCoordinator.setTranscriptCleanupSettings(
+                TranscriptCleanupSettings(config: self.config)
+            )
             if let ppOption, #available(macOS 15, *) {
                 await self.transcriptionCoordinator.setActivePostProcessor(
                     option: ppOption,
@@ -1985,16 +2052,52 @@ final class MuesliController: NSObject {
     }
 
     private func handleMeetSpeakerObservation(_ observation: MeetSpeakerObservation) {
-        guard let activeMeetingSession else { return }
-        if let rawURL = observation.meetingURL,
-           let normalized = MeetingURLNormalizer.normalize(rawURL),
-           let source = activeMeetingAutoStop.source {
-            let matches = source.candidateID == normalized.id
-                || source.suppressionID == normalized.id
-                || source.normalizedURL == normalized.url
-            guard matches else { return }
+        prunePendingMeetSpeakerObservations()
+        guard meetSpeakerObservationMatchesActiveSource(observation) else { return }
+        guard let activeMeetingSession, activeMeetingSession.isRecording else {
+            bufferMeetSpeakerObservation(observation)
+            return
         }
         activeMeetingSession.recordSpeakerObservation(observation)
+    }
+
+    private func meetSpeakerObservationMatchesActiveSource(_ observation: MeetSpeakerObservation) -> Bool {
+        guard let rawURL = observation.meetingURL,
+              let normalized = MeetingURLNormalizer.normalize(rawURL),
+              let source = activeMeetingAutoStop.source else { return true }
+        return source.candidateID == normalized.id
+            || source.suppressionID == normalized.id
+            || source.normalizedURL == normalized.url
+    }
+
+    private func bufferMeetSpeakerObservation(_ observation: MeetSpeakerObservation) {
+        pendingMeetSpeakerObservations.append(observation)
+        if pendingMeetSpeakerObservations.count > pendingMeetSpeakerObservationLimit {
+            pendingMeetSpeakerObservations.removeFirst(pendingMeetSpeakerObservations.count - pendingMeetSpeakerObservationLimit)
+        }
+    }
+
+    private func prunePendingMeetSpeakerObservations(now: Date = Date()) {
+        pendingMeetSpeakerObservations.removeAll { observation in
+            now.timeIntervalSince(observation.observedAt) > pendingMeetSpeakerObservationRetention
+                || observation.observedAt.timeIntervalSince(now) > pendingMeetSpeakerObservationFutureTolerance
+        }
+    }
+
+    private func recordBufferedMeetSpeakerObservations(to session: MeetingSession) {
+        prunePendingMeetSpeakerObservations()
+        let meetingStart = session.startTime ?? Date()
+        let earliestUsefulObservation = meetingStart.addingTimeInterval(-pendingMeetSpeakerObservationRetention)
+        let latestUsefulObservation = Date().addingTimeInterval(pendingMeetSpeakerObservationFutureTolerance)
+        let buffered = pendingMeetSpeakerObservations
+        pendingMeetSpeakerObservations.removeAll(keepingCapacity: true)
+
+        for observation in buffered {
+            guard observation.observedAt >= earliestUsefulObservation,
+                  observation.observedAt <= latestUsefulObservation,
+                  meetSpeakerObservationMatchesActiveSource(observation) else { continue }
+            session.recordSpeakerObservation(observation)
+        }
     }
 
     private func startMeetingFeatureMonitors(includeMaraudersMap: Bool) {
@@ -2872,7 +2975,7 @@ final class MuesliController: NSObject {
 
     private func modelPreparationFailureMessage(for backend: BackendOption) -> String {
         backend.isDownloaded
-            ? "Model setup failed. Restart Muesli or retry from Models."
+            ? "Model setup failed. Restart Guesli or retry from Models."
             : "Download failed. Check your connection and retry."
     }
 
@@ -3284,8 +3387,12 @@ final class MuesliController: NSObject {
                     enablePostProcessor: false,
                     includeMeetingHelpers: true
                 )
+                let transcriptionWAVURL = try await MeetingRecordingStorage.temporaryWAVForTranscription(
+                    from: recordingURL
+                )
+                defer { try? FileManager.default.removeItem(at: transcriptionWAVURL) }
                 let transcription = try await self.transcriptionCoordinator.transcribeMeeting(
-                    at: recordingURL,
+                    at: transcriptionWAVURL,
                     backend: backend,
                     cohereLanguage: self.config.resolvedCohereLanguage
                 )
@@ -3853,7 +3960,7 @@ final class MuesliController: NSObject {
             informativeText = "Quitting now will cancel the meeting recording before it has been saved."
         case .recording:
             messageText = "Meeting recording in progress"
-            informativeText = "Quitting now will stop the meeting recording and the current transcript may be lost. Stop the recording first if you want Muesli to save notes."
+            informativeText = "Quitting now will stop the meeting recording and the current transcript may be lost. Stop the recording first if you want Guesli to save notes."
         case .processing:
             messageText = "Meeting transcription in progress"
             informativeText = "Quitting now will interrupt transcription and the meeting notes may not be saved."
@@ -3867,7 +3974,7 @@ final class MuesliController: NSObject {
         alert.alertStyle = .warning
         alert.messageText = messageText
         alert.informativeText = informativeText
-        alert.addButton(withTitle: "Keep Muesli Running")
+        alert.addButton(withTitle: "Keep Guesli Running")
         alert.addButton(withTitle: "Quit Anyway")
 
         isPresentingMeetingTerminationConfirmation = true
@@ -4437,6 +4544,7 @@ final class MuesliController: NSObject {
                     throw CancellationError()
                 }
                 activeMeetingSession = meetingSession
+                recordBufferedMeetSpeakerObservations(to: meetingSession)
                 activeMeetingID = meetingID
                 activeMeetingAutoStop.markRecordingStarted(now: Date())
                 meetingMonitor.suppressWhileActive()
@@ -4494,7 +4602,7 @@ final class MuesliController: NSObject {
         guard pendingMeetingJoinRecording == nil else {
             presentErrorAlert(
                 title: "Already waiting for a meeting",
-                message: "Muesli is already waiting for a meeting to start before recording."
+                message: "Guesli is already waiting for a meeting to start before recording."
             )
             return
         }
@@ -4502,7 +4610,7 @@ final class MuesliController: NSObject {
         guard let request = PendingMeetingJoinRecordingPolicy.Request(meetingURL: meetingURL) else {
             presentErrorAlert(
                 title: "Meeting link not recognized",
-                message: "Muesli could not recognize this meeting link. Open the meeting, then use Record Only."
+                message: "Guesli could not recognize this meeting link. Open the meeting, then use Record Only."
             )
             return
         }
@@ -4523,7 +4631,7 @@ final class MuesliController: NSObject {
                 self.cancelPendingMeetingJoinRecording(id: pendingID)
                 self.presentErrorAlert(
                     title: "Meeting failed to open",
-                    message: "Muesli could not open the meeting link in the selected browser."
+                    message: "Guesli could not open the meeting link in the selected browser."
                 )
             }
         }
@@ -5218,10 +5326,11 @@ final class MuesliController: NSObject {
         }
 
         do {
-            let outputURL = try MeetingRecordingWriter.persistTemporaryRecording(
+            let outputURL = try MeetingRecordingStorage.persistTemporaryRecording(
                 from: retainedRecordingURL,
                 meetingTitle: result.title,
                 startedAt: result.startTime,
+                config: config,
                 supportDirectory: AppIdentity.supportDirectoryURL
             )
             return outputURL.path
@@ -5258,8 +5367,10 @@ final class MuesliController: NSObject {
     }
 
     private func clearSavedMeetingRecordingsDirectory() throws {
-        let recordingsDirectory = AppIdentity.supportDirectoryURL
-            .appendingPathComponent("meeting-recordings", isDirectory: true)
+        let recordingsDirectory = MeetingRecordingStorage.directory(
+            config: config,
+            supportDirectory: AppIdentity.supportDirectoryURL
+        )
         guard FileManager.default.fileExists(atPath: recordingsDirectory.path) else { return }
         try FileManager.default.removeItem(at: recordingsDirectory)
     }
@@ -6935,7 +7046,7 @@ final class MuesliController: NSObject {
             return "The model could not finish downloading. Check your connection and retry."
         }
         if lowercasedMessage.contains("permission") || lowercasedMessage.contains("microphone") {
-            return "Muesli could not access the microphone. Check Microphone permission and try again."
+            return "Guesli could not access the microphone. Check Microphone permission and try again."
         }
         return "Dictation could not start. Try again in a moment."
     }

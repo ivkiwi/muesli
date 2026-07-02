@@ -18,7 +18,7 @@ struct DashboardRootView: View {
         .frame(minWidth: 900, minHeight: 600)
         .preferredColorScheme(appState.config.darkMode ? .dark : .light)
         .alert(
-            appState.contributionMilestonePrompt?.title ?? "Muesli milestone",
+            appState.contributionMilestonePrompt?.title ?? "Guesli milestone",
             isPresented: Binding(
                 get: { appState.contributionMilestonePrompt != nil },
                 set: { if !$0 { controller.dismissContributionMilestonePrompt() } }

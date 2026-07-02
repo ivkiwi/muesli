@@ -478,6 +478,34 @@ enum CustomLLMFormat: String, Codable, CaseIterable {
     }
 }
 
+enum TranscriptCleanupProviderOption: String, Codable, CaseIterable, Sendable {
+    case local = "local"
+    case openAI = "openai"
+    case openRouter = "openrouter"
+    case customLLM = "custom_llm"
+
+    var label: String {
+        switch self {
+        case .local:
+            return "Local model"
+        case .openAI:
+            return "OpenAI"
+        case .openRouter:
+            return "OpenRouter"
+        case .customLLM:
+            return "Custom LLM"
+        }
+    }
+
+    static func resolved(_ rawValue: String?) -> Self {
+        guard let rawValue,
+              let provider = Self(rawValue: rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) else {
+            return .local
+        }
+        return provider
+    }
+}
+
 struct PostProcessorOption: Identifiable, Equatable {
     let id: String
     let label: String
@@ -505,7 +533,7 @@ struct PostProcessorOption: Identifiable, Equatable {
         id: "qwen3-postproc-v2",
         label: "Post-Proc v2 (Finetuned)",
         sizeLabel: "~390 MB",
-        description: "Fine-tuned on Muesli dictation data. Best for filler removal, deletion cues, and spoken list formatting.",
+        description: "Fine-tuned on Guesli dictation data. Best for filler removal, deletion cues, and spoken list formatting.",
         downloadURL: URL(string: "https://huggingface.co/phequals/qwen3-postproc-v2/resolve/main/qwen3-postproc-v2-q4_k_m.gguf")!,
         filename: "qwen3-postproc-v2-q4_k_m.gguf"
     )
@@ -525,7 +553,7 @@ struct PostProcessorOption: Identifiable, Equatable {
         id: "qwen35-postproc-v3",
         label: "Post-Proc v3 (Finetuned)",
         sizeLabel: "~505 MB",
-        description: "Fine-tuned Qwen3.5-0.8B on Muesli dictation data. Improved over v2 on filler removal, deletion cues, and spoken list formatting.",
+        description: "Fine-tuned Qwen3.5-0.8B on Guesli dictation data. Improved over v2 on filler removal, deletion cues, and spoken list formatting.",
         downloadURL: URL(string: "https://huggingface.co/phequals/qwen35-postproc-v3-gguf/resolve/main/qwen35-postproc-v3-Q4_K_M.gguf")!,
         filename: "qwen35-postproc-v3-Q4_K_M.gguf"
     )
@@ -914,6 +942,7 @@ struct AppConfig: Codable {
     var showMeetingDetectionNotification: Bool = true
     var mutedMeetingDetectionAppBundleIDs: [String] = []
     var meetingRecordingSavePolicy: MeetingRecordingSavePolicy = .never
+    var meetingRecordingFolderPath: String = ""
     var darkMode: Bool = true
     var enableDoubleTapDictation: Bool = true
     var hotkeyTriggerThresholdMS: Int = HotkeyTriggerTiming.defaultThresholdMilliseconds
@@ -964,6 +993,7 @@ struct AppConfig: Codable {
     var hiddenCalendarEventSourceHints: [String: String] = [:]
     var disabledCalendarIDs: [String] = []
     var enablePostProcessor: Bool = false
+    var transcriptCleanupProvider: String = TranscriptCleanupProviderOption.local.rawValue
     var activePostProcessorId: String = PostProcessorOption.defaultOption.id
     var postProcessorSystemPrompt: String = PostProcessorOption.defaultSystemPrompt
     var enableScreenContext: Bool = false
@@ -1007,6 +1037,7 @@ struct AppConfig: Codable {
         case showMeetingDetectionNotification = "show_meeting_detection_notification"
         case mutedMeetingDetectionAppBundleIDs = "muted_meeting_detection_app_bundle_ids"
         case meetingRecordingSavePolicy = "meeting_recording_save_policy"
+        case meetingRecordingFolderPath = "meeting_recording_folder_path"
         case darkMode = "dark_mode"
         case enableDoubleTapDictation = "enable_double_tap_dictation"
         case hotkeyTriggerThresholdMS = "hotkey_trigger_threshold_ms"
@@ -1055,6 +1086,7 @@ struct AppConfig: Codable {
         case hiddenCalendarEventSourceHints = "hidden_calendar_event_source_hints"
         case disabledCalendarIDs = "disabled_calendar_ids"
         case enablePostProcessor = "enable_post_processor"
+        case transcriptCleanupProvider = "transcript_cleanup_provider"
         case activePostProcessorId = "active_post_processor_id"
         case postProcessorSystemPrompt = "post_processor_system_prompt"
         case enableScreenContext = "enable_screen_context"
@@ -1119,6 +1151,7 @@ struct AppConfig: Codable {
         showMeetingDetectionNotification = decodedShowMeetingDetectionNotification ?? defaults.showMeetingDetectionNotification
         mutedMeetingDetectionAppBundleIDs = (try? c.decode([String].self, forKey: .mutedMeetingDetectionAppBundleIDs)) ?? defaults.mutedMeetingDetectionAppBundleIDs
         meetingRecordingSavePolicy = (try? c.decode(MeetingRecordingSavePolicy.self, forKey: .meetingRecordingSavePolicy)) ?? defaults.meetingRecordingSavePolicy
+        meetingRecordingFolderPath = (try? c.decode(String.self, forKey: .meetingRecordingFolderPath)) ?? defaults.meetingRecordingFolderPath
         darkMode = (try? c.decode(Bool.self, forKey: .darkMode)) ?? defaults.darkMode
         iCloudSyncEnabled = (try? c.decode(Bool.self, forKey: .iCloudSyncEnabled)) ?? defaults.iCloudSyncEnabled
         showIOSCompanionPrompt = (try? c.decode(Bool.self, forKey: .showIOSCompanionPrompt)) ?? defaults.showIOSCompanionPrompt
@@ -1189,6 +1222,9 @@ struct AppConfig: Codable {
         )) ?? defaults.hiddenCalendarEventSourceHints
         disabledCalendarIDs = (try? c.decode([String].self, forKey: .disabledCalendarIDs)) ?? defaults.disabledCalendarIDs
         enablePostProcessor = (try? c.decode(Bool.self, forKey: .enablePostProcessor)) ?? defaults.enablePostProcessor
+        transcriptCleanupProvider = TranscriptCleanupProviderOption
+            .resolved(try? c.decode(String.self, forKey: .transcriptCleanupProvider))
+            .rawValue
         activePostProcessorId = (try? c.decode(String.self, forKey: .activePostProcessorId)) ?? defaults.activePostProcessorId
         postProcessorSystemPrompt = (try? c.decode(String.self, forKey: .postProcessorSystemPrompt)) ?? defaults.postProcessorSystemPrompt
         enableScreenContext = (try? c.decode(Bool.self, forKey: .enableScreenContext)) ?? defaults.enableScreenContext

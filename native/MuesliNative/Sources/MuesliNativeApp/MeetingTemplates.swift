@@ -83,27 +83,80 @@ enum MeetingTemplates {
 
     static let auto = MeetingTemplateDefinition(
         id: autoID,
-        title: "Auto",
+        title: "Auto Detailed Notes",
         category: nil,
         icon: "sparkles",
         kind: .auto,
         promptBody: """
-        Use this structure exactly:
+        Сначала определи основной язык встречи и тип встречи. Не выводи этот анализ отдельно, используй его только для выбора акцентов.
 
-        ## Meeting Summary
-        A 2-3 sentence overview of what was discussed.
+        Язык:
+        - Если встреча в основном на русском — пиши все заметки на русском.
+        - Если встреча в основном на английском — пиши все заметки на английском.
+        - Если встреча смешанная и основной язык неясен — пиши на русском.
+        - Не смешивай языки в заголовках и служебных словах.
+        - Не переводи имена, названия продуктов, компаний, файлов, путей, веток, команд, ticket IDs, ссылки, метрики, ошибки и короткие важные цитаты.
 
-        ## Key Discussion Points
-        - Bullet points of the main topics discussed
+        Тип встречи:
+        - dev/product/work execution: баги, продукт, код, архитектура, релизы, процессы.
+        - status/weekly/stand-up: прогресс, планы, блокеры, статусы.
+        - 1:1/sync: договоренности, поддержка, feedback, личный контекст.
+        - customer/discovery/sales: боли клиента, workflow, buying signals, next steps.
+        - hiring/interview: сигналы кандидата, риски, fit, следующий шаг.
+        - generic: если тип неясен.
 
-        ## Decisions Made
-        - Bullet points of any decisions reached
+        Главное правило:
+        Извлекай факты, решения и работу, которую надо сделать. Не делай красивое общее саммари вместо полезных заметок. Не выдумывай. Если владелец, срок или статус не названы, всё равно сохрани пункт и пометь как TBD / unclear.
 
-        ## Action Items
-        - [ ] Bullet points of tasks assigned or agreed upon, with owners if mentioned
+        Используй ровно эти разделы. Назови заголовки на выбранном языке встречи. Если выбран английский — переведи заголовки на английский и не показывай русские варианты.
 
-        ## Notable Quotes
-        - Any important or notable statements, if applicable
+        ## Коротко
+        - 2-4 пункта: главный outcome, что изменилось, что решили, что осталось сделать.
+        - Для customer-встреч добавь главный customer signal.
+        - Для hiring добавь главный hiring signal.
+        - Для status-встреч добавь главный прогресс и главный блокер.
+
+        ## Контекст
+        - Какая тема, проблема, цель или ситуация обсуждалась.
+        - Сохраняй важные ограничения, evidence, examples, numbers, affected users/customers/systems.
+        - Для customer: company, role, use case, current workflow.
+        - Для hiring: candidate background, role, relevant experience.
+        - Для 1:1: важный feedback, concerns, support context.
+
+        ## Обсуждали
+        - Конкретные темы и детали.
+        - Не пиши small talk, если он не влияет на работу.
+        - Сохраняй edge cases, rejected approaches, objections, blockers, dependencies.
+
+        ## Решения
+        - Решение — причина/контекст — владелец: NAME/TBD.
+        - Сохраняй confirmed agreements и explicit non-decisions.
+        - Если решений не было, напиши "Не зафиксировано." на выбранном языке.
+
+        ## TODO / Исправления / Доделки
+        - [ ] Задача — владелец: NAME/TBD — срок: DATE/TBD — статус: agreed/proposed/unclear — контекст: почему важно.
+        - Обязательно сохраняй все обсужденные действия: исправить, проверить, доделать, посмотреть позже, протестировать, задеплоить, написать, спросить, создать тикет, обновить документ, разобраться, вернуться к теме.
+        - Сохраняй tentative-пункты: "может быть", "надо бы", "давай потом", "посмотрим", "нужно проверить".
+        - Не объединяй разные задачи в один пункт.
+        - Не удаляй пункты без owner/date.
+        - Для customer: follow-up emails, demos, docs, pricing, trials, promised answers.
+        - Для hiring: next interview, references, take-home review, process steps, questions to ask.
+        - Для status: unblock actions, reviews, deploys, checks, tickets.
+
+        ## Проверка / Риски / Открытые вопросы
+        - Tests, metrics, logs, data, users, rollout checks, acceptance checks.
+        - Risks, blockers, dependencies, unclear requirements, disagreements.
+        - Если нужна проверка, но никто не назначен — всё равно запиши как TODO или риск.
+
+        ## Важные детали
+        - Ticket IDs, links, commands, paths, branch names, release names, metrics, dates, names, exact terms.
+        - Для customer: pains, buying signals, objections, competitors.
+        - Для hiring: strong signals, weak signals, fit concerns.
+        - Для 1:1: preferences, recurring themes, important personal/work constraints.
+
+        ## Цитаты
+        - Только короткие цитаты, если они сохраняют смысл решения, риска, боли клиента, feedback или несогласия.
+        - Если важных цитат нет, напиши "Не зафиксировано." на выбранном языке.
         """
     )
 

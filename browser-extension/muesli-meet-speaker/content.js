@@ -1,11 +1,18 @@
 const MUESLI_BRIDGE_URL = "http://127.0.0.1:1477/v1/meet-speaker";
 const MIN_SEND_INTERVAL_MS = 900;
 const PARTICIPANT_REFRESH_INTERVAL_MS = 8000;
+const MAX_PARTICIPANTS = 80;
+const BACKUP_STORAGE_KEY = "muesliMeetSpeakerBridge.timeline.v1";
+const BACKUP_MAX_EVENTS = 1200;
+const BACKUP_FLUSH_BATCH_SIZE = 50;
+const BACKUP_FLUSH_MAX_BYTES = 48000;
+const BACKUP_FLUSH_INTERVAL_MS = 5000;
 
 let lastSpeaker = "";
 let lastSentAt = 0;
 let lastParticipantSignature = "";
 let lastParticipantSentAt = 0;
+let flushingBackup = false;
 
 function isVisible(element) {
   const rect = element.getBoundingClientRect();
@@ -77,7 +84,9 @@ function collectParticipants() {
     if (firstLine) addParticipant(participants, firstLine);
   }
 
-  return [...participants.values()].sort((lhs, rhs) => lhs.name.localeCompare(rhs.name));
+  return [...participants.values()]
+    .sort((lhs, rhs) => lhs.name.localeCompare(rhs.name))
+    .slice(0, MAX_PARTICIPANTS);
 }
 
 function activeSpeakerFromAriaLabels() {
@@ -146,20 +155,120 @@ async function sendObservation(name) {
 
   const body = {
     meetingURL: location.href,
+    observedAt: new Date(now).toISOString(),
+    observedAtMs: now,
     participants,
     source: "google-meet-extension"
   };
   if (name) body.speakerName = name;
 
+  const backupId = storeBackupObservation(body);
   try {
-    await fetch(MUESLI_BRIDGE_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    });
+    await postBridgePayload(body);
+    removeBackupObservations([backupId]);
   } catch (_) {
     // Local app may be closed. Stay quiet inside Meet.
   }
+}
+
+function loadBackupObservations() {
+  try {
+    const raw = localStorage.getItem(BACKUP_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function saveBackupObservations(observations) {
+  try {
+    localStorage.setItem(BACKUP_STORAGE_KEY, JSON.stringify(observations.slice(-BACKUP_MAX_EVENTS)));
+  } catch (_) {
+    // If storage is unavailable or full, live push still works.
+  }
+}
+
+function storeBackupObservation(body) {
+  const id = `${body.observedAtMs}-${Math.random().toString(36).slice(2)}`;
+  const observations = loadBackupObservations();
+  observations.push({ id, body });
+  saveBackupObservations(observations);
+  return id;
+}
+
+function removeBackupObservations(ids) {
+  const remove = new Set(ids);
+  saveBackupObservations(loadBackupObservations().filter((entry) => !remove.has(entry.id)));
+}
+
+async function postBridgePayload(payload) {
+  if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+    const response = await sendBackgroundMessage({ type: "muesli.postBridgePayload", payload });
+    if (!response?.ok) {
+      throw new Error(response?.error || "Guesli bridge request failed");
+    }
+    return;
+  }
+
+  const response = await fetch(MUESLI_BRIDGE_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    throw new Error(`Guesli bridge returned ${response.status}`);
+  }
+}
+
+function sendBackgroundMessage(message) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(message, (response) => {
+      const error = chrome.runtime.lastError;
+      if (error) {
+        reject(new Error(error.message));
+      } else {
+        resolve(response);
+      }
+    });
+  });
+}
+
+async function flushBackupObservations() {
+  if (flushingBackup) return;
+  const observations = loadBackupObservations();
+  if (observations.length === 0) return;
+
+  flushingBackup = true;
+  const batch = selectBackupBatch(observations);
+  try {
+    await postBridgePayload({
+      meetingURL: location.href,
+      observations: batch.map((entry) => entry.body),
+      source: "google-meet-extension-backup"
+    });
+    removeBackupObservations(batch.map((entry) => entry.id));
+  } catch (_) {
+    // Keep the local backup for the next flush.
+  } finally {
+    flushingBackup = false;
+  }
+}
+
+function selectBackupBatch(observations) {
+  const batch = [];
+  for (const entry of observations.slice(0, BACKUP_MAX_EVENTS)) {
+    const candidate = batch.concat(entry);
+    const payload = {
+      meetingURL: location.href,
+      observations: candidate.map((candidateEntry) => candidateEntry.body),
+      source: "google-meet-extension-backup"
+    };
+    if (batch.length > 0 && JSON.stringify(payload).length > BACKUP_FLUSH_MAX_BYTES) break;
+    batch.push(entry);
+    if (batch.length >= BACKUP_FLUSH_BATCH_SIZE) break;
+  }
+  return batch.length > 0 ? batch : observations.slice(0, 1);
 }
 
 function sample() {
@@ -176,4 +285,6 @@ observer.observe(document.documentElement, {
 });
 
 setInterval(sample, 1500);
+setInterval(flushBackupObservations, BACKUP_FLUSH_INTERVAL_MS);
 sample();
+flushBackupObservations();

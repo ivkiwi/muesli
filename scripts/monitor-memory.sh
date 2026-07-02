@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Purpose: Monitor Muesli process memory health during meeting recording
+# Purpose: Monitor Guesli process memory health during meeting recording
 # Created: 2026-05-26
 #
 # Usage: ./scripts/monitor-memory.sh [duration_sec] [interval_sec]
 #   duration_sec  Total monitoring window in seconds (default: 180)
 #   interval_sec  Seconds between samples (default: 15)
 #
-# Output: live table + /tmp/muesli-memory-YYYYMMDD-HHMMSS.tsv
+# Output: live table + /tmp/guesli-memory-YYYYMMDD-HHMMSS.tsv
 #
 # What it tracks:
 #   Footprint      Physical RAM used by the process
@@ -20,18 +20,18 @@ INTERVAL=${2:-15}
 
 # ── Find process ─────────────────────────────────────────────────────────────
 PID=""
-for NAME in MuesliDev Muesli; do
+for NAME in GuesliDev Guesli; do
     PID=$(pgrep -x "$NAME" 2>/dev/null | head -1)
     [[ -n "$PID" ]] && break
 done
 
 if [[ -z "$PID" ]]; then
-    echo "Error: no Muesli process found. Launch the app first." >&2
+    echo "Error: no Guesli process found. Launch the app first." >&2
     exit 1
 fi
 
-APP_NAME=$(ps -p "$PID" -o comm= 2>/dev/null || echo "Muesli")
-LOG_FILE="/tmp/muesli-memory-$(date +%Y%m%d-%H%M%S).tsv"
+APP_NAME=$(ps -p "$PID" -o comm= 2>/dev/null || echo "Guesli")
+LOG_FILE="/tmp/guesli-memory-$(date +%Y%m%d-%H%M%S).tsv"
 
 echo "Monitoring $APP_NAME  PID=$PID  duration=${DURATION}s  interval=${INTERVAL}s"
 echo "Log → $LOG_FILE"

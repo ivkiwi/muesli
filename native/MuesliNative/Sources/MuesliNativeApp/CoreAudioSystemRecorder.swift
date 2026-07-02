@@ -176,11 +176,11 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
     private func createTapAndAggregateDevice() throws {
         // Use the global stereo process mix. This is the closest CoreAudio tap
         // equivalent to ScreenCaptureKit's "system audio" stream: all process
-        // output mixed to stereo, excluding Muesli itself. The previous
+        // output mixed to stereo, excluding Guesli itself. The previous
         // device-stream tap could be valid but zero-filled on some routes.
         let tapDesc = Self.makeGlobalTapDescription(
             excludingProcessID: Self.currentProcessAudioObjectID(),
-            name: "Muesli System Audio Tap"
+            name: "Guesli System Audio Tap"
         )
 
         // Register the tap with the audio system first — this triggers the
@@ -231,7 +231,7 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
 
     static func makeAggregateDeviceDescription(tapUID: String, aggregateUID: String) -> NSDictionary {
         [
-            kAudioAggregateDeviceNameKey: "Muesli System Audio",
+            kAudioAggregateDeviceNameKey: "Guesli System Audio",
             kAudioAggregateDeviceUIDKey: aggregateUID,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceTapListKey: [
@@ -543,7 +543,7 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
         guard let selfObjectID = currentProcessAudioObjectID() else { return false }
         let tapDesc = makeGlobalTapDescription(
             excludingProcessID: selfObjectID,
-            name: "Muesli Permission Check"
+            name: "Guesli Permission Check"
         )
 
         var testTapID: AudioObjectID = kAudioObjectUnknown
@@ -683,7 +683,7 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing, SystemAudioDiagnostic
                 deviceID, &nameAddr, 0, nil, &nameSize, &name
             ) == noErr, let name else { continue }
 
-            if (name.takeRetainedValue() as String) == "Muesli System Audio" {
+            if (name.takeRetainedValue() as String) == "Guesli System Audio" {
                 fputs("[system-audio] cleaning up stale aggregate device \(deviceID)\n", stderr)
                 AudioHardwareDestroyAggregateDevice(deviceID)
             }

@@ -7,7 +7,7 @@ VERSION=""
 SHORT_VERSION=""
 ARTIFACT_VERSION=""
 DMG_PATH=""
-APP_NAME="Muesli"
+APP_NAME="Guesli"
 EXPECTED_FEED_URL="https://muesli-hq.github.io/muesli/appcast.xml"
 SKIP_DMG=0
 REQUIRE_NOTARIZED=0
@@ -25,8 +25,8 @@ Options:
   --short-version <version> Require the latest short/display version. Defaults to --version.
   --artifact-version <ver>  Version string used in the DMG filename. Defaults to --version.
   --appcast <path>          Appcast XML path. Defaults to docs/appcast.xml.
-  --dmg <path>              DMG path. Defaults to dist-release/Muesli-<version>.dmg.
-  --app-name <name>         App bundle/update artifact name. Defaults to Muesli.
+  --dmg <path>              DMG path. Defaults to dist-release/Guesli-<version>.dmg.
+  --app-name <name>         App bundle/update artifact name. Defaults to Guesli.
   --feed-url <url>          Expected SUFeedURL. Defaults to the production appcast.
   --skip-dmg                Only validate appcast metadata. Suitable for CI.
   --require-release-notes   Require item-level release notes in the appcast.

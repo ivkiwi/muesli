@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Safely seed MuesliDev from production data without touching production files.
+# Safely seed GuesliDev from production data without touching production files.
 #
 # Default behavior:
-# - Reads from ~/Library/Application Support/Muesli
-# - Writes to ~/Library/Application Support/MuesliDev
+# - Reads from ~/Library/Application Support/Guesli
+# - Writes to ~/Library/Application Support/GuesliDev
 # - Stages the current dev support dir first so unrelated dev-only files are preserved
 # - Overlays production muesli.db / sidecars and config.json into the staged temp directory
 # - Validates the staged files
@@ -15,11 +15,11 @@ set -euo pipefail
 # Usage:
 #   ./scripts/dev-seed-from-prod.sh
 #   ./scripts/dev-seed-from-prod.sh --db-only
-#   ./scripts/dev-seed-from-prod.sh --prod-dir "/path/to/Muesli" --dev-dir "/path/to/MuesliDev"
+#   ./scripts/dev-seed-from-prod.sh --prod-dir "/path/to/Guesli" --dev-dir "/path/to/GuesliDev"
 #   ./scripts/dev-seed-from-prod.sh --dry-run
 
-PROD_SUPPORT_DIR="${MUESLI_PROD_SUPPORT_DIR:-$HOME/Library/Application Support/Muesli}"
-DEV_SUPPORT_DIR="${MUESLI_DEV_SUPPORT_DIR:-$HOME/Library/Application Support/MuesliDev}"
+PROD_SUPPORT_DIR="${MUESLI_PROD_SUPPORT_DIR:-$HOME/Library/Application Support/Guesli}"
+DEV_SUPPORT_DIR="${MUESLI_DEV_SUPPORT_DIR:-$HOME/Library/Application Support/GuesliDev}"
 COPY_CONFIG=1
 DRY_RUN=0
 FORCE=0
@@ -28,14 +28,14 @@ SEEDED_DEV=0
 
 usage() {
   cat <<'EOF'
-Safely seed MuesliDev from production data.
+Safely seed GuesliDev from production data.
 
 Options:
   --prod-dir PATH   Override the production support directory.
   --dev-dir PATH    Override the dev support directory.
   --db-only         Copy only muesli.db, not config.json.
   --dry-run         Print the planned actions without modifying files.
-  --force           Continue even if Muesli or MuesliDev appears to be running.
+  --force           Continue even if Guesli or GuesliDev appears to be running.
   --help            Show this help text.
 EOF
 }
@@ -70,7 +70,7 @@ require_safe_support_dir() {
 }
 
 running_processes() {
-  ps ax -o pid=,comm= | awk '$2 == "Muesli" || $2 == "MuesliDev" { print }'
+  ps ax -o pid=,comm= | awk '$2 == "Guesli" || $2 == "GuesliDev" { print }'
 }
 
 run_or_echo() {
@@ -181,7 +181,7 @@ trap cleanup EXIT
 
 if [[ "$FORCE" -ne 1 ]]; then
   if running="$(running_processes)" && [[ -n "$running" ]]; then
-    printf 'Refusing to seed while Muesli or MuesliDev is running:\n%s\n' "$running" >&2
+    printf 'Refusing to seed while Guesli or GuesliDev is running:\n%s\n' "$running" >&2
     die "Quit both apps or rerun with --force."
   fi
 fi

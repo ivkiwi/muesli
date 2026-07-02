@@ -48,7 +48,7 @@ Use fixed lanes when testing multiple worktrees side by side:
 ./scripts/dev-test.sh --lane C
 ```
 
-Named lanes install as `/Applications/MuesliDevA.app`, `/Applications/MuesliDevB.app`, and `/Applications/MuesliDevC.app`, with matching bundle IDs `com.muesli.dev.a`, `com.muesli.dev.b`, and `com.muesli.dev.c`. Each lane has its own support directory under `~/Library/Application Support/`.
+Named lanes install as `/Applications/GuesliDevA.app`, `/Applications/GuesliDevB.app`, and `/Applications/GuesliDevC.app`, with matching bundle IDs `com.guesli.dev.a`, `com.guesli.dev.b`, and `com.guesli.dev.c`. Each lane has its own support directory under `~/Library/Application Support/`.
 
 Named lanes default to local-only signing, which omits iCloud and APNs entitlements for feature work that does not test sync or push behavior. Use `--cloud-entitlements` only for lanes that have matching Apple Developer profiles and need iCloud/APNs behavior.
 

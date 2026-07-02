@@ -181,7 +181,7 @@ struct AboutView: View {
             return UpdateBanner(
                 icon: "arrow.triangle.2.circlepath",
                 title: "Checking for updates",
-                message: "Muesli is checking the appcast for the latest version.",
+                message: "Guesli is checking the appcast for the latest version.",
                 tint: MuesliTheme.transcribing
             )
         case .busy(let message):
@@ -194,28 +194,28 @@ struct AboutView: View {
         case .available(let version):
             return UpdateBanner(
                 icon: "exclamationmark.triangle.fill",
-                title: "Muesli \(version) is available",
+                title: "Guesli \(version) is available",
                 message: "An update is available. Use the menu bar icon > Check for Updates... to open the updater.",
                 tint: MuesliTheme.transcribing
             )
         case .downloaded(let version):
             return UpdateBanner(
                 icon: "exclamationmark.triangle.fill",
-                title: "Muesli \(version) is ready to install",
+                title: "Guesli \(version) is ready to install",
                 message: "The update is downloaded. Use the menu bar updater to finish installation.",
                 tint: MuesliTheme.transcribing
             )
         case .installing(let version):
             return UpdateBanner(
                 icon: "arrow.down.circle.fill",
-                title: "Installing Muesli \(version)",
-                message: "Sparkle is preparing the update. Muesli may relaunch when installation finishes.",
+                title: "Installing Guesli \(version)",
+                message: "Sparkle is preparing the update. Guesli may relaunch when installation finishes.",
                 tint: MuesliTheme.transcribing
             )
         case .upToDate:
             return UpdateBanner(
                 icon: "checkmark.circle.fill",
-                title: "Muesli is up to date",
+                title: "Guesli is up to date",
                 message: "No newer version was found in the appcast.",
                 tint: MuesliTheme.success
             )

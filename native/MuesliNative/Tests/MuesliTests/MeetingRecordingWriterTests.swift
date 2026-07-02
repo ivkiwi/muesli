@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 import Testing
 @testable import MuesliNativeApp
 
@@ -42,7 +43,7 @@ struct MeetingRecordingWriterTests {
         #expect(samples == [1000, 3000, 5000, 7000])
     }
 
-    @Test("persistTemporaryRecording moves the temp wav into the meeting recordings directory with a slugged name")
+    @Test("persistTemporaryRecording encodes the temp wav into the meeting recordings directory with a slugged m4a name")
     func persistTemporaryRecordingMovesFile() throws {
         let writer = try MeetingRecordingWriter()
         writer.appendSystem([1200, -800, 400])
@@ -59,8 +60,29 @@ struct MeetingRecordingWriterTests {
 
         #expect(FileManager.default.fileExists(atPath: tempURL.path) == false)
         #expect(savedURL.deletingLastPathComponent().lastPathComponent == "meeting-recordings")
-        #expect(savedURL.lastPathComponent.hasSuffix("-weekly-product-sync-with-very-long.wav"))
-        #expect(try readMonoPCM16WAVSamples(from: savedURL) == [1200, -800, 400])
+        #expect(savedURL.lastPathComponent.hasSuffix("-weekly-product-sync-with-very-long.m4a"))
+        #expect(try audioDuration(from: savedURL) > 0)
+    }
+
+    @Test("saved m4a decodes to temporary wav for retranscription")
+    func savedM4ADecodesToTemporaryWAVForRetranscription() async throws {
+        let writer = try MeetingRecordingWriter()
+        writer.appendSystem(Array(repeating: 1200, count: 16_000))
+        let tempURL = try #require(writer.stop())
+        let supportDirectory = makeTemporaryDirectory()
+        let savedURL = try MeetingRecordingWriter.persistTemporaryRecording(
+            from: tempURL,
+            meetingTitle: "Retranscribe",
+            startedAt: Date(timeIntervalSince1970: 1_711_000_000),
+            supportDirectory: supportDirectory
+        )
+
+        let wavURL = try await MeetingRecordingStorage.temporaryWAVForTranscription(from: savedURL)
+        defer { try? FileManager.default.removeItem(at: wavURL) }
+
+        #expect(wavURL.pathExtension == "wav")
+        #expect(FileManager.default.fileExists(atPath: wavURL.path))
+        #expect(try readMonoPCM16WAVSamples(from: wavURL).isEmpty == false)
     }
 
     private func makeTemporaryDirectory() -> URL {
@@ -80,5 +102,10 @@ struct MeetingRecordingWriterTests {
             let buffer = rawBuffer.bindMemory(to: Int16.self)
             return Array(buffer.prefix(count)).map(Int16.init(littleEndian:))
         }
+    }
+
+    private func audioDuration(from url: URL) throws -> TimeInterval {
+        let file = try AVAudioFile(forReading: url)
+        return Double(file.length) / file.processingFormat.sampleRate
     }
 }

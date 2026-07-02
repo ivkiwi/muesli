@@ -44,7 +44,7 @@ struct DictionaryView: View {
                 controller.requestDictionaryCorrectionAccessibilityEnable()
             }
         } message: {
-            Text("Dictionary suggestions briefly read focused app text via Accessibility after dictation. Grant access, then relaunch Muesli to turn suggestions on.")
+            Text("Dictionary suggestions briefly read focused app text via Accessibility after dictation. Grant access, then relaunch Guesli to turn suggestions on.")
         }
     }
 
@@ -109,7 +109,7 @@ struct DictionaryView: View {
                     Text("Suggested Corrections")
                         .font(MuesliTheme.headline())
                         .foregroundStyle(MuesliTheme.textPrimary)
-                    Text("Corrections Muesli noticed by briefly reading focused app text after dictation.")
+                    Text("Corrections Guesli noticed by briefly reading focused app text after dictation.")
                         .font(MuesliTheme.caption())
                         .foregroundStyle(MuesliTheme.textTertiary)
                 }

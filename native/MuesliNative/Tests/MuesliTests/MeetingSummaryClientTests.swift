@@ -41,8 +41,9 @@ struct MeetingSummaryClientTests {
         let instructions = MeetingSummaryClient.summaryInstructions(for: MeetingTemplates.auto.snapshot)
 
         #expect(instructions.contains("You are a meeting notes assistant"))
-        #expect(instructions.contains("## Meeting Summary"))
-        #expect(instructions.contains("## Action Items"))
+        #expect(instructions.contains("Сначала определи основной язык встречи и тип встречи"))
+        #expect(instructions.contains("## TODO / Исправления / Доделки"))
+        #expect(instructions.contains("Не объединяй разные задачи в один пункт"))
     }
 
     @Test("summary instructions include custom template prompt verbatim")

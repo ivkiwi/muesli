@@ -21,7 +21,7 @@ set -euo pipefail
 #
 # Prerequisites:
 #   - Developer ID cert in keychain
-#   - Production provisioning profile for com.muesli.app when CloudKit
+#   - Production provisioning profile for com.guesli.app when CloudKit
 #     entitlements are enabled:
 #       MUESLI_PROVISIONING_PROFILE=/path/to/profile.provisionprofile
 #   - Notary profile stored: xcrun notarytool store-credentials MuesliNotary
@@ -53,7 +53,7 @@ SIGN_IDENTITY="${MUESLI_SIGN_IDENTITY:-Developer ID Application: Pranav Hari Gur
 PROVISIONING_PROFILE="${MUESLI_PROVISIONING_PROFILE:-}"
 OUTPUT_DIR="$ROOT/dist-release"
 INSTALL_DIR="${MUESLI_RELEASE_INSTALL_DIR:-$OUTPUT_DIR/install-root}"
-APP_DIR="${MUESLI_RELEASE_APP_DIR:-$INSTALL_DIR/Muesli.app}"
+APP_DIR="${MUESLI_RELEASE_APP_DIR:-$INSTALL_DIR/Guesli.app}"
 GENERATE_APPCAST="$(muesli_spm_artifacts_dir "$PACKAGE_DIR" "$SWIFTPM_SCRATCH_PATH")/sparkle/Sparkle/bin/generate_appcast"
 UPDATE_APPCAST_RELEASE_NOTES="$ROOT/scripts/update_appcast_release_notes.py"
 TAP_REPO="${MUESLI_TAP_REPO:-Muesli-HQ/homebrew-muesli}"
@@ -112,7 +112,7 @@ fi
 
 if [[ -z "$PROVISIONING_PROFILE" ]]; then
   echo "ERROR: stable release builds require MUESLI_PROVISIONING_PROFILE." >&2
-  echo "Use the production provisioning profile for bundle ID com.muesli.app with CloudKit container iCloud.com.mueslihq.muesli." >&2
+  echo "Use the production provisioning profile for bundle ID com.guesli.app with CloudKit container iCloud.com.mueslihq.muesli." >&2
   exit 1
 fi
 
@@ -121,17 +121,17 @@ if [[ ! -f "$PROVISIONING_PROFILE" ]]; then
   exit 1
 fi
 
-DOWNLOAD_URL="https://github.com/Muesli-HQ/muesli/releases/download/v${VERSION}/Muesli-${VERSION}.dmg"
+DOWNLOAD_URL="https://github.com/Muesli-HQ/muesli/releases/download/v${VERSION}/Guesli-${VERSION}.dmg"
 TAG="v${VERSION}"
-RELEASE_TITLE="Muesli ${VERSION}"
+RELEASE_TITLE="Guesli ${VERSION}"
 RELEASE_NOTES="$(cat <<EOF
-## Muesli ${VERSION}
+## Guesli ${VERSION}
 
 Native macOS app — dictation + meeting transcription on Apple Silicon.
 
 ### Install
-1. Download \`Muesli-${VERSION}.dmg\`
-2. Open the DMG and drag Muesli to Applications
+1. Download \`Guesli-${VERSION}.dmg\`
+2. Open the DMG and drag Guesli to Applications
 3. Launch from Applications
 
 Signed, notarized, and stapled by Apple.
@@ -167,7 +167,7 @@ update_personal_tap() {
   echo "  Personal tap updated: https://github.com/$TAP_REPO"
 }
 
-echo "=== Muesli Release v${VERSION} ==="
+echo "=== Guesli Release v${VERSION} ==="
 echo ""
 
 # --- Step 0: Update version in build script ---
@@ -195,7 +195,7 @@ RELEASE_BUILD_ENV=(
   MUESLI_SIGN_IDENTITY="$SIGN_IDENTITY"
   "${BUILD_ENV[@]}"
 )
-echo "  Bundle ID: com.muesli.app"
+echo "  Bundle ID: com.guesli.app"
 echo "  Profile:   $PROVISIONING_PROFILE"
 echo "  Identity:  $SIGN_IDENTITY"
 echo "y" | env "${RELEASE_BUILD_ENV[@]}" "$ROOT/scripts/build_native_app.sh" > /dev/null
@@ -211,7 +211,7 @@ echo "  Signature: $FLAGS"
 
 # --- Step 3: Notarize app bundle ---
 echo "[3/13] Notarizing app bundle with Apple (this may take several minutes)..."
-APP_ZIP="$OUTPUT_DIR/Muesli-app-${VERSION}.zip"
+APP_ZIP="$OUTPUT_DIR/Guesli-app-${VERSION}.zip"
 ditto -c -k --keepParent "$APP_DIR" "$APP_ZIP"
 NOTARY_OUTPUT=$(xcrun notarytool submit "$APP_ZIP" \
   --keychain-profile "$PROFILE_NAME" \
@@ -236,7 +236,7 @@ echo "  App stapled."
 # --- Step 5: Create DMG from stapled app ---
 echo "[5/13] Creating DMG from stapled app..."
 "$ROOT/scripts/create_dmg.sh" "$APP_DIR" "$OUTPUT_DIR"
-DMG_PATH="$OUTPUT_DIR/Muesli-${VERSION}.dmg"
+DMG_PATH="$OUTPUT_DIR/Guesli-${VERSION}.dmg"
 
 # --- Step 6: Notarize DMG ---
 echo "[6/13] Notarizing DMG with Apple..."
@@ -267,10 +267,10 @@ if [[ -z "$MOUNT_POINT" ]]; then
   exit 1
 fi
 
-SPCTL_RESULT=$(spctl -a -vv "$MOUNT_POINT/Muesli.app" 2>&1)
+SPCTL_RESULT=$(spctl -a -vv "$MOUNT_POINT/Guesli.app" 2>&1)
 echo "  $SPCTL_RESULT"
 
-STAPLE_RESULT=$(xcrun stapler validate "$MOUNT_POINT/Muesli.app" 2>&1)
+STAPLE_RESULT=$(xcrun stapler validate "$MOUNT_POINT/Guesli.app" 2>&1)
 echo "  $STAPLE_RESULT"
 
 hdiutil detach "$MOUNT_POINT" -quiet 2>/dev/null
@@ -340,10 +340,10 @@ echo "  Draft release: $DRAFT_RELEASE_URL"
 # --- Step 10: Verify the hosted draft asset from GitHub Releases ---
 echo "[10/13] Verifying hosted GitHub Release DMG..."
 VERIFY_DIR=$(mktemp -d)
-HOSTED_DMG="$VERIFY_DIR/Muesli-${VERSION}.dmg"
+HOSTED_DMG="$VERIFY_DIR/Guesli-${VERSION}.dmg"
 
 gh release download "$TAG" \
-  -p "Muesli-${VERSION}.dmg" \
+  -p "Guesli-${VERSION}.dmg" \
   -D "$VERIFY_DIR" \
   --clobber >/dev/null
 
@@ -384,10 +384,10 @@ if [[ -z "$HOSTED_MOUNT_POINT" ]]; then
   exit 1
 fi
 
-HOSTED_APP_SPCTL_RESULT=$(spctl -a -vv "$HOSTED_MOUNT_POINT/Muesli.app" 2>&1)
+HOSTED_APP_SPCTL_RESULT=$(spctl -a -vv "$HOSTED_MOUNT_POINT/Guesli.app" 2>&1)
 echo "  $HOSTED_APP_SPCTL_RESULT"
 
-HOSTED_APP_STAPLE_RESULT=$(xcrun stapler validate "$HOSTED_MOUNT_POINT/Muesli.app" 2>&1)
+HOSTED_APP_STAPLE_RESULT=$(xcrun stapler validate "$HOSTED_MOUNT_POINT/Guesli.app" 2>&1)
 echo "  $HOSTED_APP_STAPLE_RESULT"
 
 hdiutil detach "$HOSTED_MOUNT_POINT" -quiet 2>/dev/null
@@ -419,7 +419,7 @@ echo "[12/13] Updating appcast and release metadata..."
 "$GENERATE_APPCAST" "$OUTPUT_DIR" -o "$ROOT/docs/appcast.xml"
 
 # Point appcast enclosures at GitHub Releases, not GitHub Pages.
-perl -0pi -e 's{https://muesli-hq\.github\.io/muesli/(Muesli-([0-9][0-9A-Za-z\.\-]*)\.dmg)}{"https://github.com/Muesli-HQ/muesli/releases/download/v$2/$1"}ge' "$ROOT/docs/appcast.xml"
+perl -0pi -e 's{https://muesli-hq\.github\.io/muesli/(Guesli-([0-9][0-9A-Za-z\.\-]*)\.dmg)}{"https://github.com/Muesli-HQ/muesli/releases/download/v$2/$1"}ge' "$ROOT/docs/appcast.xml"
 
 # Delta artifacts are not hosted, so strip delta enclosures from the appcast.
 perl -0pi -e 's{^\h*<enclosure\b[^>]*\bsparkle:deltaFrom="[^"]*"[^>]*/>\n}{}mg' "$ROOT/docs/appcast.xml"

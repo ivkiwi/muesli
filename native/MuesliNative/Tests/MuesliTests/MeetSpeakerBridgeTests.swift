@@ -32,6 +32,33 @@ struct MeetSpeakerBridgeTests {
         #expect(observation.participants.map(\.name) == ["Alice Owner", "Bob Reviewer"])
     }
 
+    @Test("parses client observation timestamp")
+    func parsesClientObservationTimestamp() throws {
+        let data = """
+        {"speakerName":"Alice Owner","observedAtMs":1710000000123,"source":"google-meet-extension"}
+        """.data(using: .utf8)!
+
+        let observation = try #require(MeetSpeakerBridgeServer.parseObservation(data))
+
+        #expect(abs(observation.observedAt.timeIntervalSince1970 - 1_710_000_000.123) < 0.001)
+    }
+
+    @Test("parses backup batch and inherits root metadata")
+    func parsesBackupBatch() {
+        let data = """
+        {"meetingURL":"https://meet.google.com/abc-defg-hij","source":"google-meet-extension-backup","observations":[{"speakerName":"Alice Owner","observedAtMs":1710000000123},{"participants":[{"name":"Bob Reviewer"}],"observedAtMs":1710000002123}]}
+        """.data(using: .utf8)!
+
+        let observations = MeetSpeakerBridgeServer.parseObservations(data)
+
+        #expect(observations.count == 2)
+        #expect(observations[0].speakerName == "Alice Owner")
+        #expect(observations[0].meetingURL == "https://meet.google.com/abc-defg-hij")
+        #expect(observations[0].source == "google-meet-extension-backup")
+        #expect(observations[1].participants.map(\.name) == ["Bob Reviewer"])
+        #expect(abs(observations[1].observedAt.timeIntervalSince1970 - 1_710_000_002.123) < 0.001)
+    }
+
     @Test("maps observed Meet speaker names to diarization clusters")
     func mapsSpeakerNamesToDiarizationClusters() {
         let start = Date(timeIntervalSince1970: 1000)

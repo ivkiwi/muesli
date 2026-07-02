@@ -3,7 +3,7 @@ import AppKit
 enum MenuBarIconRenderer {
 
     static let options: [(id: String, label: String)] = [
-        ("muesli", "Muesli Logo"),
+        ("muesli", "Guesli Logo"),
         ("mic.fill", "Microphone"),
         ("waveform", "Waveform"),
         ("bubble.left.fill", "Bubble"),
@@ -29,7 +29,7 @@ enum MenuBarIconRenderer {
             }
         }
         let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
-        let image = NSImage(systemSymbolName: choice, accessibilityDescription: "Muesli")?
+        let image = NSImage(systemSymbolName: choice, accessibilityDescription: "Guesli")?
             .withSymbolConfiguration(config)
         image?.isTemplate = true
         return image

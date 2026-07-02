@@ -3,8 +3,8 @@ set -euo pipefail
 
 # Builds and launches an isolated dev app for end-to-end testing.
 #
-# - Separate bundle ID (com.muesli.dev*) — won't interfere with production Muesli
-# - Separate data directory (~/Library/Application Support/MuesliDev*/)
+# - Separate bundle ID (com.guesli.dev*) — won't interfere with production Guesli
+# - Separate data directory (~/Library/Application Support/GuesliDev*/)
 # - Preserves existing dev config and database by default
 # - Dev builds default to local-only entitlements to preserve existing TCC
 #   permissions and avoid requiring Apple Developer profiles
@@ -13,11 +13,11 @@ set -euo pipefail
 #   maintainer signing certificate
 # - Uses a shared, worktree-isolated SwiftPM scratch path by default; set
 #   MUESLI_DISABLE_SWIFTPM_SCRATCH_PATH=1 to use package-local .build instead
-# - Installs to /Applications/MuesliDev*.app
+# - Installs to /Applications/GuesliDev*.app
 #
 # Usage:
-#   ./scripts/dev-test.sh                         # Build and launch MuesliDev
-#   ./scripts/dev-test.sh --lane A                # Build and launch MuesliDevA
+#   ./scripts/dev-test.sh                         # Build and launch GuesliDev
+#   ./scripts/dev-test.sh --lane A                # Build and launch GuesliDevA
 #   ./scripts/dev-test.sh --lane A --local-only   # Omit iCloud/APNs entitlements
 #   ./scripts/dev-test.sh --reset                 # Reset onboarding only (keeps data)
 #   MUESLI_PROVISIONING_PROFILE=/path/to/profile.provisionprofile \
@@ -28,10 +28,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 usage() {
   cat <<'EOF'
-Build and launch a local Muesli dev app.
+Build and launch a local Guesli dev app.
 
 Options:
-  --lane A|B|C            Build a fixed reusable dev lane: MuesliDevA/B/C.
+  --lane A|B|C            Build a fixed reusable dev lane: GuesliDevA/B/C.
   --local-only            Sign without iCloud/APNs entitlements.
                           Alias: --without-cloud-entitlements.
   --cloud-entitlements    Sign with the default cloud entitlements file.
@@ -39,15 +39,15 @@ Options:
   --reset                 Reset onboarding only for the selected lane.
   --help                  Show this help text.
 
-Default behavior without --lane is unchanged for the app identity: MuesliDev,
-com.muesli.dev, ~/Library/Application Support/MuesliDev, and
-/Applications/MuesliDev.app. Dev builds use local-only entitlements unless
+Default behavior without --lane uses the app identity: GuesliDev,
+com.guesli.dev, ~/Library/Application Support/GuesliDev, and
+/Applications/GuesliDev.app. Dev builds use local-only entitlements unless
 --cloud-entitlements is provided.
 
 Cloud-entitled dev builds require a provisioning profile whose app identifier
 matches the selected bundle ID and a signing identity included by that profile.
-For the maintainer's plain MuesliDev lane, this script auto-selects the local
-com.muesli.dev CloudKit profile from ../muesli-ios/secrets when
+For the maintainer's plain GuesliDev lane, this script auto-selects the local
+com.guesli.dev CloudKit profile from ../muesli-ios/secrets when
 --cloud-entitlements is provided and the profile exists.
 EOF
 }
@@ -60,7 +60,7 @@ ENTITLEMENTS_MODE_EXPLICIT=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --clean)
-      echo "Error: --clean has been removed because it deletes MuesliDev data." >&2
+      echo "Error: --clean has been removed because it deletes GuesliDev data." >&2
       echo "To test a fresh profile, create a named backup first and use a separate support directory." >&2
       exit 2
       ;;
@@ -101,14 +101,14 @@ done
 
 case "$LANE" in
   "")
-    DEV_APP_NAME="MuesliDev"
-    DEV_BUNDLE_ID="com.muesli.dev"
+    DEV_APP_NAME="GuesliDev"
+    DEV_BUNDLE_ID="com.guesli.dev"
     ;;
   A|a|B|b|C|c)
     LANE_UPPER="$(printf '%s' "$LANE" | tr '[:lower:]' '[:upper:]')"
     LANE_LOWER="$(printf '%s' "$LANE" | tr '[:upper:]' '[:lower:]')"
-    DEV_APP_NAME="MuesliDev${LANE_UPPER}"
-    DEV_BUNDLE_ID="com.muesli.dev.${LANE_LOWER}"
+    DEV_APP_NAME="GuesliDev${LANE_UPPER}"
+    DEV_BUNDLE_ID="com.guesli.dev.${LANE_LOWER}"
     ;;
   *)
     echo "Error: unsupported lane '$LANE'. Allowed lanes: A, B, C." >&2
@@ -123,7 +123,7 @@ fi
 DEV_SUPPORT_DIR="$HOME/Library/Application Support/$DEV_APP_NAME"
 DEV_APP="/Applications/$DEV_APP_NAME.app"
 ONBOARDING_PROGRESS_FILE="$DEV_SUPPORT_DIR/onboarding-progress.json"
-DEFAULT_DEV_CLOUD_PROFILE="$ROOT/../muesli-ios/secrets/mueslimacosdevcloudkitcommueslidev.provisionprofile"
+DEFAULT_DEV_CLOUD_PROFILE="$ROOT/../muesli-ios/secrets/gueslimacosdevcloudkitcomgueslidev.provisionprofile"
 DEFAULT_DEV_CLOUD_SIGN_IDENTITY="Apple Development: Pranav Hari Guruvayurappan (59WTZW55XG)"
 RESOLVED_PROVISIONING_PROFILE="${MUESLI_PROVISIONING_PROFILE:-}"
 RESOLVED_SIGN_IDENTITY="${MUESLI_SIGN_IDENTITY:-}"
@@ -155,7 +155,7 @@ case "$ENTITLEMENTS_MODE" in
     use_local_only_entitlements
     ;;
   cloud)
-    if [[ -z "$RESOLVED_PROVISIONING_PROFILE" && "$DEV_BUNDLE_ID" == "com.muesli.dev" && -f "$DEFAULT_DEV_CLOUD_PROFILE" ]]; then
+    if [[ -z "$RESOLVED_PROVISIONING_PROFILE" && "$DEV_BUNDLE_ID" == "com.guesli.dev" && -f "$DEFAULT_DEV_CLOUD_PROFILE" ]]; then
       RESOLVED_PROVISIONING_PROFILE="$DEFAULT_DEV_CLOUD_PROFILE"
       if [[ -z "$RESOLVED_SIGN_IDENTITY" ]]; then
         RESOLVED_SIGN_IDENTITY="$DEFAULT_DEV_CLOUD_SIGN_IDENTITY"

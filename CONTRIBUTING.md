@@ -1,6 +1,6 @@
-# Contributing to Muesli
+# Contributing to Guesli
 
-Thanks for helping improve Muesli. This project is a native macOS app built
+Thanks for helping improve Guesli. This project is a native macOS app built
 with SwiftPM, AppKit, SwiftUI, and a small set of shell scripts around local
 builds and CI shards.
 
@@ -20,9 +20,9 @@ dev app without signing:
 MUESLI_SKIP_SIGN=1 ./scripts/dev-test.sh
 ```
 
-That installs `/Applications/MuesliDev.app` with bundle ID `com.muesli.dev`
-and stores data under `~/Library/Application Support/MuesliDev/`, so it does
-not touch your production Muesli install or data.
+That installs `/Applications/GuesliDev.app` with bundle ID `com.guesli.dev`
+and stores data under `~/Library/Application Support/GuesliDev/`, so it does
+not touch your production Guesli install or data.
 
 By default, `scripts/dev-test.sh` uses local-only entitlements. Maintainer
 machines keep CloudKit profiles outside this repository under a sibling
@@ -33,10 +33,10 @@ Developer account access for ordinary local development.
 Useful dev commands:
 
 ```bash
-MUESLI_SKIP_SIGN=1 ./scripts/dev-test.sh                # Build and launch MuesliDev
+MUESLI_SKIP_SIGN=1 ./scripts/dev-test.sh                # Build and launch GuesliDev
 MUESLI_SKIP_SIGN=1 ./scripts/dev-test.sh --reset        # Re-run onboarding, keep data
 MUESLI_SKIP_SIGN=1 ./scripts/dev-test.sh --local-only   # Force local-only entitlements
-./scripts/dev-reset-permissions.sh                      # Reset macOS privacy permissions for MuesliDev
+./scripts/dev-reset-permissions.sh                      # Reset macOS privacy permissions for GuesliDev
 ```
 
 If you do have your own signing certificate, you can override the identity:
@@ -68,8 +68,8 @@ requirement.
 Official preprod and stable release scripts require maintainer-only Developer
 ID provisioning profiles:
 
-- `com.muesli.preprod` for `scripts/release-preprod.sh`
-- `com.muesli.app` for `scripts/release.sh`
+- `com.guesli.preprod` for `scripts/release-preprod.sh`
+- `com.guesli.app` for `scripts/release.sh`
 
 Those profiles are not committed to the repository. Maintainers pass them with
 `MUESLI_PROVISIONING_PROFILE`; contributors should not need to run these

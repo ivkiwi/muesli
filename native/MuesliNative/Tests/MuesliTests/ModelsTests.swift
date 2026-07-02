@@ -518,6 +518,7 @@ struct AppConfigTests {
         #expect(config.customLLMAPIKey.isEmpty)
         #expect(config.customLLMModel.isEmpty)
         #expect(config.customLLMFormat == "openai")
+        #expect(config.transcriptCleanupProvider == TranscriptCleanupProviderOption.local.rawValue)
         #expect(config.dictationHotkey == .default)
         #expect(config.computerUseHotkey == .computerUseDefault)
         #expect(config.enableComputerUseHotkey == false)
@@ -585,6 +586,7 @@ struct AppConfigTests {
         config.customLLMAPIKey = "custom-key"
         config.customLLMModel = "custom-model"
         config.customLLMFormat = "anthropic"
+        config.transcriptCleanupProvider = TranscriptCleanupProviderOption.openRouter.rawValue
         config.contributionPromptNextWordCount = 31_000
         config.contributionPromptNextMeetingCount = 75
         config.contributionGitHubStarClicked = true
@@ -632,6 +634,7 @@ struct AppConfigTests {
         #expect(decoded.customLLMAPIKey == "custom-key")
         #expect(decoded.customLLMModel == "custom-model")
         #expect(decoded.customLLMFormat == "anthropic")
+        #expect(decoded.transcriptCleanupProvider == TranscriptCleanupProviderOption.openRouter.rawValue)
         #expect(decoded.contributionPromptNextWordCount == 31_000)
         #expect(decoded.contributionPromptNextMeetingCount == 75)
         #expect(decoded.contributionGitHubStarClicked == true)
@@ -668,6 +671,7 @@ struct AppConfigTests {
         #expect(json["user_name"] != nil)
         #expect(json["default_meeting_template_id"] != nil)
         #expect(json["meeting_recording_save_policy"] != nil)
+        #expect(json["meeting_recording_folder_path"] != nil)
         #expect(json["show_scheduled_meeting_notifications"] != nil)
         #expect(json["show_meeting_detection_notification"] != nil)
         #expect(json["muted_meeting_detection_app_bundle_ids"] != nil)
@@ -686,6 +690,7 @@ struct AppConfigTests {
         #expect(json["custom_llm_api_key"] != nil)
         #expect(json["custom_llm_model"] != nil)
         #expect(json["custom_llm_format"] != nil)
+        #expect(json["transcript_cleanup_provider"] != nil)
     }
 
     @Test("decodes with missing fields using defaults")
@@ -726,6 +731,7 @@ struct AppConfigTests {
         #expect(config.customLLMAPIKey.isEmpty)
         #expect(config.customLLMModel.isEmpty)
         #expect(config.customLLMFormat == "openai")
+        #expect(config.transcriptCleanupProvider == TranscriptCleanupProviderOption.local.rawValue)
     }
 
     @Test("legacy completed onboarding enables meetings when use case is missing")
@@ -1884,5 +1890,18 @@ struct AppConfigAppearanceTests {
         let data = try JSONEncoder().encode(config)
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         #expect(json?["recording_color_hex"] as? String == "eff1f5")
+    }
+
+    @Test("meetingRecordingFolderPath round-trips through JSON")
+    func meetingRecordingFolderPathRoundTrip() throws {
+        var config = AppConfig()
+        config.meetingRecordingFolderPath = "/tmp/guesli-recordings"
+
+        let data = try JSONEncoder().encode(config)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+        #expect(decoded.meetingRecordingFolderPath == "/tmp/guesli-recordings")
+        #expect(json?["meeting_recording_folder_path"] as? String == "/tmp/guesli-recordings")
     }
 }

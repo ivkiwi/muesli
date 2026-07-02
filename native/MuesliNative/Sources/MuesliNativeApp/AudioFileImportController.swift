@@ -259,12 +259,16 @@ enum AudioFileImportController {
 
         try Task.checkCancellation()
 
-        // Persist the converted WAV as a saved recording so retranscription works
-        let savedRecordingPath = try persistRecording(wavURL: wavURL, title: generatedTitle)
-
         progress("Saving...")
         let now = Date()
         let startTime = now.addingTimeInterval(-duration)
+        // Persist the converted WAV as compressed retained audio so retranscription works.
+        let savedRecordingPath = try MeetingRecordingStorage.persistTemporaryRecording(
+            from: wavURL,
+            meetingTitle: generatedTitle,
+            startedAt: startTime,
+            config: config
+        ).path
         let meetingID = try await controller.persistImportedAudioMeeting(
             title: generatedTitle,
             calendarEventID: nil,
@@ -370,39 +374,6 @@ enum AudioFileImportController {
             throw ImportError.readError(reader.error?.localizedDescription ?? "Read did not complete")
         }
         return samples
-    }
-
-    /// Copies the converted WAV to the meeting-recordings directory so the imported
-    /// meeting can be retranscribed later.
-    private static func persistRecording(wavURL: URL, title: String) throws -> String {
-        let recordingsDirectory = AppIdentity.supportDirectoryURL
-            .appendingPathComponent("meeting-recordings", isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: recordingsDirectory,
-            withIntermediateDirectories: true
-        )
-
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd'T'HH-mm-ss"
-        let datePrefix = dateFormatter.string(from: Date())
-        let safeTitle = safeFilenameComponent(title)
-        let filename = "\(datePrefix)_\(safeTitle)_\(UUID().uuidString.prefix(8)).wav"
-        let destinationURL = recordingsDirectory.appendingPathComponent(filename)
-
-        try FileManager.default.copyItem(at: wavURL, to: destinationURL)
-        return destinationURL.path
-    }
-
-    private static func safeFilenameComponent(_ value: String) -> String {
-        let allowed = CharacterSet.alphanumerics.union(.whitespaces).union(CharacterSet(charactersIn: "-_"))
-        let scalars = value.unicodeScalars.map { scalar in
-            allowed.contains(scalar) ? Character(scalar) : "-"
-        }
-        let collapsed = String(scalars)
-            .split(whereSeparator: { $0.isWhitespace || $0 == "-" })
-            .joined(separator: "-")
-            .trimmingCharacters(in: CharacterSet(charactersIn: "-_ "))
-        return collapsed.isEmpty ? "Imported-Recording" : String(collapsed.prefix(80))
     }
 
     private static func importedTranscriptTimelineStart() -> Date {

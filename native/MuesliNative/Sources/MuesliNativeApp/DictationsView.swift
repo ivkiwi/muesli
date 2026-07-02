@@ -344,7 +344,7 @@ struct DictationsView: View {
         case .error:
             return "iPhone sync needs attention"
         case .notConfigured:
-            return "Use Muesli on iPhone"
+            return "Use Guesli on iPhone"
         }
     }
 
@@ -362,7 +362,7 @@ struct DictationsView: View {
         case .needsICloud, .error:
             return appState.iCloudBridgeMessage ?? "Open iCloud settings, then try again."
         case .notConfigured:
-            return "Your Muesli history follows you through private iCloud. Audio stays local."
+            return "Your Guesli history follows you through private iCloud. Audio stays local."
         }
     }
 
@@ -623,7 +623,7 @@ private struct IPhoneBridgeQRCodeSheet: View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                    Text("Open Muesli on iPhone")
+                    Text("Open Guesli on iPhone")
                         .font(MuesliTheme.title3())
                         .foregroundStyle(MuesliTheme.textPrimary)
                     Text("Scan this after installing the iPhone app. The QR only opens setup; private iCloud does the actual sync.")

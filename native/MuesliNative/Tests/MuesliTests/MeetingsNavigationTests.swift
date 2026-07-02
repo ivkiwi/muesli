@@ -27,6 +27,12 @@ struct MeetingsNavigationTests {
         return store
     }
 
+    private func makeRetainedRecordingURL() throws -> URL {
+        let writer = try MeetingRecordingWriter()
+        writer.appendSystem([1_200, -800, 400, -200])
+        return try #require(writer.stop())
+    }
+
     @Test("app state defaults meetings to browser mode")
     func meetingsDefaultToBrowser() {
         let appState = AppState()
@@ -429,10 +435,7 @@ struct MeetingsNavigationTests {
         )
         controller.updateConfig { $0.meetingRecordingSavePolicy = .prompt }
 
-        let retainedRecordingURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("retained-\(UUID().uuidString)")
-            .appendingPathExtension("wav")
-        try Data("recording".utf8).write(to: retainedRecordingURL)
+        let retainedRecordingURL = try makeRetainedRecordingURL()
 
         let result = MeetingSessionResult(
             title: "Prompt Decision",
@@ -474,10 +477,7 @@ struct MeetingsNavigationTests {
         )
         controller.updateConfig { $0.meetingRecordingSavePolicy = .never }
 
-        let retainedRecordingURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("retained-policy-drift-\(UUID().uuidString)")
-            .appendingPathExtension("wav")
-        try Data("recording".utf8).write(to: retainedRecordingURL)
+        let retainedRecordingURL = try makeRetainedRecordingURL()
 
         let result = MeetingSessionResult(
             title: "Policy Drift",
@@ -502,6 +502,53 @@ struct MeetingsNavigationTests {
         let storedMeeting = try #require(try store.meeting(id: persistenceResult.meetingID))
         let savedRecordingPath = try #require(storedMeeting.savedRecordingPath)
         #expect(FileManager.default.fileExists(atPath: savedRecordingPath))
+        #expect(URL(fileURLWithPath: savedRecordingPath).pathExtension == "m4a")
+        #expect(FileManager.default.fileExists(atPath: retainedRecordingURL.path) == false)
+    }
+
+    @Test("persistCompletedMeetingResult saves retained recording in configured folder")
+    func persistCompletedMeetingResultSavesRecordingInConfiguredFolder() async throws {
+        let store = try makeStore()
+        let controller = MuesliController(
+            runtime: RuntimePaths(
+                repoRoot: FileManager.default.temporaryDirectory,
+                menuIcon: nil,
+                appIcon: nil,
+                bundlePath: nil
+            ),
+            dictationStore: store
+        )
+        let recordingFolder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("meeting-recordings-custom-\(UUID().uuidString)", isDirectory: true)
+        controller.updateConfig {
+            $0.meetingRecordingSavePolicy = .always
+            $0.meetingRecordingFolderPath = recordingFolder.path
+        }
+
+        let retainedRecordingURL = try makeRetainedRecordingURL()
+        let result = MeetingSessionResult(
+            title: "Custom Folder",
+            originalTitle: "Meeting",
+            calendarEventID: nil,
+            startTime: Date(),
+            endTime: Date().addingTimeInterval(30),
+            durationSeconds: 30,
+            rawTranscript: "Custom folder transcript.",
+            formattedNotes: "## Summary\nCustom folder notes.",
+            retainedRecordingURL: retainedRecordingURL,
+            retainedRecordingError: nil,
+            systemRecordingURL: nil,
+            templateSnapshot: MeetingTemplates.auto.snapshot
+        )
+
+        let persistenceResult = try controller.persistCompletedMeetingResult(result)
+
+        let storedMeeting = try #require(try store.meeting(id: persistenceResult.meetingID))
+        let savedRecordingPath = try #require(storedMeeting.savedRecordingPath)
+        let savedURL = URL(fileURLWithPath: savedRecordingPath)
+        #expect(savedURL.deletingLastPathComponent().standardizedFileURL == recordingFolder.standardizedFileURL)
+        #expect(savedURL.pathExtension == "m4a")
+        #expect(FileManager.default.fileExists(atPath: savedURL.path))
         #expect(FileManager.default.fileExists(atPath: retainedRecordingURL.path) == false)
     }
 

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Muesli Meet Speaker Bridge",
-  "version": "0.1.0",
-  "description": "Sends Google Meet active speaker and participant names to the local Muesli app.",
+  "name": "Guesli Meet Speaker Bridge",
+  "version": "0.1.2",
+  "description": "Sends Google Meet active speaker and participant names to the local Guesli app.",
   "host_permissions": [
     "https://meet.google.com/*",
     "http://127.0.0.1:1477/*"
@@ -13,5 +13,8 @@
       "js": ["content.js"],
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
 }

@@ -1,13 +1,13 @@
 ---
 name: muesli-dev-build-lanes
-description: Use when working on Muesli local dev builds, fixed dev lanes, parallel worktrees, SwiftPM scratch paths, app bundle IDs, app support directories, signing, entitlements, iCloud/APNs-capable builds, or local-only builds that should omit cloud entitlements.
+description: Use when working on Guesli local dev builds, fixed dev lanes, parallel worktrees, SwiftPM scratch paths, app bundle IDs, app support directories, signing, entitlements, iCloud/APNs-capable builds, or local-only builds that should omit cloud entitlements.
 ---
 
-# Muesli Dev Build Lanes
+# Guesli Dev Build Lanes
 
 ## Overview
 
-Use this skill to build and reason about local Muesli dev apps across multiple worktrees without overwriting app bundles, sharing support data, or accidentally requiring iCloud/APNs entitlements.
+Use this skill to build and reason about local Guesli dev apps across multiple worktrees without overwriting app bundles, sharing support data, or accidentally requiring iCloud/APNs entitlements.
 
 ## Core Workflow
 
@@ -22,17 +22,17 @@ Use this skill to build and reason about local Muesli dev apps across multiple w
 Default dev app:
 
 ```text
-App:        /Applications/MuesliDev.app
-Bundle ID:  com.muesli.dev
-Support:    ~/Library/Application Support/MuesliDev
+App:        /Applications/GuesliDev.app
+Bundle ID:  com.guesli.dev
+Support:    ~/Library/Application Support/GuesliDev
 ```
 
 Fixed lanes:
 
 ```text
-A -> MuesliDevA, com.muesli.dev.a, process MuesliDevA, ~/Library/Application Support/MuesliDevA
-B -> MuesliDevB, com.muesli.dev.b, process MuesliDevB, ~/Library/Application Support/MuesliDevB
-C -> MuesliDevC, com.muesli.dev.c, process MuesliDevC, ~/Library/Application Support/MuesliDevC
+A -> GuesliDevA, com.guesli.dev.a, process GuesliDevA, ~/Library/Application Support/GuesliDevA
+B -> GuesliDevB, com.guesli.dev.b, process GuesliDevB, ~/Library/Application Support/GuesliDevB
+C -> GuesliDevC, com.guesli.dev.c, process GuesliDevC, ~/Library/Application Support/GuesliDevC
 ```
 
 ## Entitlement Modes
@@ -54,7 +54,7 @@ MUESLI_CODESIGN_TIMESTAMP=none \
 ./scripts/dev-test.sh --lane A --cloud-entitlements
 ```
 
-Plain `./scripts/dev-test.sh` keeps the existing cloud-entitlement-capable `MuesliDev` behavior.
+Plain `./scripts/dev-test.sh` uses the default `GuesliDev` app identity.
 
 ## Build Cache Rules
 

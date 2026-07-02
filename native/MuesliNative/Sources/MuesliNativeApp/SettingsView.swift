@@ -267,7 +267,7 @@ struct SettingsView: View {
                 controller.requestDictionaryCorrectionAccessibilityEnable()
             }
         } message: {
-            Text("Dictionary suggestions briefly read focused app text via Accessibility after dictation. Grant access, then relaunch Muesli to turn suggestions on.")
+            Text("Dictionary suggestions briefly read focused app text via Accessibility after dictation. Grant access, then relaunch Guesli to turn suggestions on.")
         }
     }
 
@@ -448,7 +448,7 @@ struct SettingsView: View {
                         controller.setICloudSyncEnabledFromSettings(newValue)
                     }
                 }
-                settingsDescription("Sync dictation text, meeting transcripts, notes, summaries, and manual notes with Muesli for iPhone through your private iCloud account. Audio recordings are never synced.")
+                settingsDescription("Sync dictation text, meeting transcripts, notes, summaries, and manual notes with Guesli for iPhone through your private iCloud account. Audio recordings are never synced.")
 
                 Divider().background(MuesliTheme.surfaceBorder)
 
@@ -485,13 +485,13 @@ struct SettingsView: View {
                         controller.updateConfig { $0.showIOSCompanionPrompt = newValue }
                     }
                 }
-                settingsDescription("Keep the timeline bridge card available while users connect Muesli on iPhone.")
+                settingsDescription("Keep the timeline bridge card available while users connect Guesli on iPhone.")
 
                 Divider().background(MuesliTheme.surfaceBorder)
 
                 HStack(spacing: MuesliTheme.spacing12) {
                     VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                        Text("Muesli for iPhone")
+                        Text("Guesli for iPhone")
                             .font(MuesliTheme.body())
                             .foregroundStyle(MuesliTheme.textPrimary)
                         Text("Use iPhone for offline meetings, keyboard dictation, and private iCloud text sync with this Mac.")
@@ -511,7 +511,7 @@ struct SettingsView: View {
 
     private var syncStatusText: String {
         if !appState.config.iCloudSyncEnabled {
-            return "Sync is off. Turn it on to bridge this Mac with Muesli for iPhone."
+            return "Sync is off. Turn it on to bridge this Mac with Guesli for iPhone."
         }
         return appState.iCloudSyncStatus ?? "Private iCloud text sync is ready."
     }
@@ -591,17 +591,23 @@ struct SettingsView: View {
                         controller.setPostProcessorEnabled(newValue)
                     }
                 }
-                Divider().background(MuesliTheme.surfaceBorder)
-                settingsRow(
-                    "Dictionary suggestions",
-                    description: "Suggest words after corrections by briefly reading focused app text via Accessibility."
-                ) {
-                    settingsSwitch(isOn: appState.config.enableDictionaryCorrectionPrompts) { newValue in
-                        handleDictionaryCorrectionPromptsToggle(newValue)
+                if appState.config.enablePostProcessor {
+                    Divider().background(MuesliTheme.surfaceBorder)
+                    settingsRow("Cleanup provider") {
+                        let provider = TranscriptCleanupProviderOption.resolved(appState.config.transcriptCleanupProvider)
+                        settingsMenu(
+                            selection: provider.label,
+                            options: TranscriptCleanupProviderOption.allCases.map(\.label)
+                        ) { label in
+                            if let option = TranscriptCleanupProviderOption.allCases.first(where: { $0.label == label }) {
+                                controller.setTranscriptCleanupProvider(option)
+                            }
+                        }
                     }
-                    .help("Briefly reads focused app text after dictation to detect corrections.")
                 }
-                if appState.config.enablePostProcessor && !downloadedPostProcOptions.isEmpty {
+                if appState.config.enablePostProcessor
+                    && TranscriptCleanupProviderOption.resolved(appState.config.transcriptCleanupProvider) == .local
+                    && !downloadedPostProcOptions.isEmpty {
                     Divider().background(MuesliTheme.surfaceBorder)
                     settingsRow("Cleanup model") {
                         let selection = downloadedPostProcOptions.contains(where: { $0.id == appState.activePostProcessor.id })
@@ -616,7 +622,8 @@ struct SettingsView: View {
                             }
                         }
                     }
-                } else if appState.config.enablePostProcessor {
+                } else if appState.config.enablePostProcessor
+                    && TranscriptCleanupProviderOption.resolved(appState.config.transcriptCleanupProvider) == .local {
                     Divider().background(MuesliTheme.surfaceBorder)
                     settingsRow("Cleanup model") {
                         Text("Download a cleanup model in Models")
@@ -625,6 +632,16 @@ struct SettingsView: View {
                             .multilineTextAlignment(.trailing)
                             .frame(width: controlWidth, alignment: .trailing)
                     }
+                }
+                Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow(
+                    "Dictionary suggestions",
+                    description: "Suggest words after corrections by briefly reading focused app text via Accessibility."
+                ) {
+                    settingsSwitch(isOn: appState.config.enableDictionaryCorrectionPrompts) { newValue in
+                        handleDictionaryCorrectionPromptsToggle(newValue)
+                    }
+                    .help("Briefly reads focused app text after dictation to detect corrections.")
                 }
             }
 
@@ -888,6 +905,11 @@ struct SettingsView: View {
                         controller.updateConfig { $0.meetingRecordingSavePolicy = policy }
                     }
                 }
+                Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow("Recording folder") {
+                    meetingRecordingFolderPicker
+                }
+                settingsDescription("Saved recordings are stored as compact m4a audio. Retranscription uses a temporary WAV copy and removes it afterward.")
             }
 
             settingsSection("Meeting Notifications") {
@@ -1348,7 +1370,7 @@ struct SettingsView: View {
 
         do {
             let supportDir = appSupportBase
-                .appendingPathComponent(Bundle.main.infoDictionary?["MuesliSupportDirectoryName"] as? String ?? "Muesli")
+                .appendingPathComponent(Bundle.main.infoDictionary?["MuesliSupportDirectoryName"] as? String ?? "Guesli")
             let destPath = try SoundController.importCustomClip(from: url, supportDir: supportDir)
             controller.updateConfig {
                 $0.maraudersMapAudioClip = SoundController.customClipID
@@ -1844,7 +1866,7 @@ struct SettingsView: View {
             groups.append(CalendarSourceGroup(
                 id: "google_oauth",
                 title: "Google Calendar",
-                subtitle: "Connected directly to Muesli",
+                subtitle: "Connected directly to Guesli",
                 iconName: "calendar.badge.plus",
                 items: items
             ))
@@ -1855,7 +1877,7 @@ struct SettingsView: View {
 
     private var calendarSourcesControl: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing16) {
-            Text("Calendar sources are listed first, with their calendars underneath. Disabled calendars are hidden from Muesli — no notifications, no Coming Up, no meeting detection.")
+            Text("Calendar sources are listed first, with their calendars underneath. Disabled calendars are hidden from Guesli — no notifications, no Coming Up, no meeting detection.")
                 .font(MuesliTheme.caption())
                 .foregroundStyle(MuesliTheme.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1872,7 +1894,7 @@ struct SettingsView: View {
             }
 
             if appState.isGoogleCalendarAuthenticated && !appState.availableEventKitCalendars.isEmpty {
-                Text("Google calendars may appear once from macOS Calendar and once from Muesli's Google connection. Turn off both copies to hide that calendar completely.")
+                Text("Google calendars may appear once from macOS Calendar and once from Guesli's Google connection. Turn off both copies to hide that calendar completely.")
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -2013,6 +2035,112 @@ struct SettingsView: View {
             config.disabledCalendarIDs = disabled.sorted()
         }
         Task { await controller.refreshUpcomingCalendarEvents() }
+    }
+
+    @ViewBuilder
+    private var meetingRecordingFolderPicker: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "folder")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(MuesliTheme.textTertiary)
+
+                Text(meetingRecordingFolderLabel)
+                    .font(.system(size: 12))
+                    .foregroundStyle(appState.config.meetingRecordingFolderPath.isEmpty ? MuesliTheme.textTertiary : MuesliTheme.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(MuesliTheme.surfacePrimary)
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .overlay(
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                    .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+            )
+            .frame(maxWidth: .infinity)
+            .help(meetingRecordingFolderHelp)
+
+            if !appState.config.meetingRecordingFolderPath.isEmpty {
+                Button {
+                    controller.updateConfig { $0.meetingRecordingFolderPath = "" }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .frame(width: 28, height: 28)
+                        .background(MuesliTheme.surfacePrimary)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+                .help("Use default recording folder")
+            }
+
+            Button {
+                pickMeetingRecordingFolder()
+            } label: {
+                Image(systemName: "folder")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .frame(width: 28, height: 28)
+                    .background(MuesliTheme.surfacePrimary)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                            .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .help("Choose recording folder")
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private var meetingRecordingFolderLabel: String {
+        let path = appState.config.meetingRecordingFolderPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty else { return "Default folder" }
+        return path
+    }
+
+    private var meetingRecordingFolderHelp: String {
+        let path = appState.config.meetingRecordingFolderPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty else {
+            return MeetingRecordingStorage.defaultDirectory().path
+        }
+        return path
+    }
+
+    private func pickMeetingRecordingFolder() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose recording folder"
+        panel.prompt = "Choose Folder"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = preferredMeetingRecordingDirectoryURL()
+
+        presentOpenPanel(panel) { url in
+            controller.updateConfig { $0.meetingRecordingFolderPath = url.standardizedFileURL.path }
+        }
+    }
+
+    private func preferredMeetingRecordingDirectoryURL() -> URL {
+        let configuredPath = appState.config.meetingRecordingFolderPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !configuredPath.isEmpty {
+            let configuredURL = URL(fileURLWithPath: configuredPath, isDirectory: true).standardizedFileURL
+            if FileManager.default.fileExists(atPath: configuredURL.path) {
+                return configuredURL
+            }
+        }
+        return MeetingRecordingStorage.defaultDirectory()
     }
 
     @ViewBuilder

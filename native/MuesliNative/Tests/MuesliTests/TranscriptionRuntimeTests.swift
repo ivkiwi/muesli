@@ -321,3 +321,49 @@ struct Qwen3PostProcessingOutputCleanerTests {
         ))
     }
 }
+
+@Suite("External transcript cleanup client")
+struct ExternalTranscriptCleanupClientTests {
+
+    @Test("normalizes OpenAI-compatible endpoints")
+    func normalizesOpenAICompatibleEndpoints() {
+        #expect(
+            ExternalTranscriptCleanupClient.resolveOpenAICompatibleURL("https://models.example.com")?.absoluteString ==
+                "https://models.example.com/v1/chat/completions"
+        )
+        #expect(
+            ExternalTranscriptCleanupClient.resolveOpenAICompatibleURL("https://models.example.com/v1")?.absoluteString ==
+                "https://models.example.com/v1/chat/completions"
+        )
+        #expect(
+            ExternalTranscriptCleanupClient.resolveOpenAICompatibleURL("https://models.example.com/openai/v1/chat/completions")?.absoluteString ==
+                "https://models.example.com/openai/v1/chat/completions"
+        )
+    }
+
+    @Test("extracts chat completions content")
+    func extractsChatCompletionsContent() {
+        let payload: [String: Any] = [
+            "choices": [
+                [
+                    "message": [
+                        "content": "Clean transcript",
+                    ],
+                ],
+            ],
+        ]
+        #expect(ExternalTranscriptCleanupClient.extractChatCompletionsText(from: payload) == "Clean transcript")
+    }
+
+    @Test("validates external cleanup output with Qwen safeguards")
+    func validatesExternalCleanupOutput() throws {
+        let raw = "<think>nope</think>Ship the release."
+        #expect(
+            try ExternalTranscriptCleanupClient.validateOutput(
+                raw,
+                input: "um ship the release",
+                provider: "OpenAI"
+            ) == "Ship the release."
+        )
+    }
+}

@@ -63,7 +63,7 @@ Full detail: `docs/plans/plan-2026-06-20-nemotron-3.5-multilingual-asr.md` §0.
 
 1. `git fetch && git checkout claude/nemotron-asr-streaming-msek2t` (HEAD `22c1049f`).
 2. **Tests (no model/mic needed):** `swift test --package-path native/MuesliNative` — this handoff observed 1002 tests / 114 suites green; current `main` may report a higher count. To keep the worktree small, pass `--scratch-path "$HOME/Library/Caches/muesli-spm/worktrees/nemotron35/build"` (see CLAUDE.md "SwiftPM build artifacts").
-3. **Run the dev app:** `MUESLI_SKIP_SIGN=1 ./scripts/dev-test.sh` (installs `/Applications/MuesliDev.app`, bundle id `com.muesli.dev`, data under `~/Library/Application Support/MuesliDev/`). Without the maintainer's Developer ID cert this is the path; it now ad-hoc signs.
+3. **Run the dev app:** `MUESLI_SKIP_SIGN=1 ./scripts/dev-test.sh` (installs `/Applications/GuesliDev.app`, bundle id `com.guesli.dev`, data under `~/Library/Application Support/GuesliDev/`). Without the maintainer's Developer ID cert this is the path; it now ad-hoc signs.
 4. **Use the model:** Models tab → "Nemotron 3.5 Multilingual" → Download (~665 MB, first load ~30s ANE warmup). Then select it; pick a Language (Auto/Hindi/…). Hold-to-talk or double-tap to dictate. Cache: `~/.cache/muesli/models/nemotron35-multilingual-2240ms/`.
 5. **Headless E2E sanity** (no mic): generate speech with `say -o /tmp/s.aiff "…"` → `afconvert -f WAVE -d LEI16@16000 -c 1 /tmp/s.aiff /tmp/s.wav`, then rewrite a canonical 44-byte-header WAV (afconvert inserts an FLLR chunk pushing `data` past offset 44 — the backend's WAV loader assumes 44). Run a temp `@Test` gated by an env var that calls `Nemotron35StreamingTranscriber().loadModels()` + `transcribe(wavURL:)`. This is how English + explicit-prompt_id were validated; delete the temp test after.
 
@@ -71,7 +71,7 @@ Full detail: `docs/plans/plan-2026-06-20-nemotron-3.5-multilingual-asr.md` §0.
 
 ## Environment gotchas
 
-- **Ad-hoc signing + TCC:** ad-hoc cdhash changes every rebuild, so macOS privacy grants (Accessibility, Input Monitoring, Mic) must be **re-approved after each `dev-test.sh`**. If the onboarding permissions step won't advance after granting, the cause is a stale/incoherent signature — `tccutil reset All com.muesli.dev`, rebuild, re-grant. For grants that persist across rebuilds, create a self-signed code-signing cert and pass `MUESLI_SIGN_IDENTITY=<cert>` (not yet wired into the script — see "Open items").
+- **Ad-hoc signing + TCC:** ad-hoc cdhash changes every rebuild, so macOS privacy grants (Accessibility, Input Monitoring, Mic) must be **re-approved after each `dev-test.sh`**. If the onboarding permissions step won't advance after granting, the cause is a stale/incoherent signature — `tccutil reset All com.guesli.dev`, rebuild, re-grant. For grants that persist across rebuilds, create a self-signed code-signing cert and pass `MUESLI_SIGN_IDENTITY=<cert>` (not yet wired into the script — see "Open items").
 - `AXIsProcessTrusted()` updates live for a **coherent** signature (no restart needed for the query); the onboarding restart is for event-tap re-creation.
 - Don't run concurrent builds from different worktrees into the same `--scratch-path`.
 
