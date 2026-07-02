@@ -28,6 +28,7 @@ struct MeetingSignals {
 struct CalendarEventContext {
     let id: String
     let title: String
+    var participants: [MeetingParticipant] = []
 }
 
 /// A running application on the system.

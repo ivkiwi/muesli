@@ -2,6 +2,20 @@ import Foundation
 
 // MARK: - Shared Calendar Event Model
 
+struct MeetingParticipant: Equatable, Sendable {
+    let name: String
+    let email: String?
+    let isOrganizer: Bool
+    let isSelf: Bool
+
+    var summaryLabel: String {
+        if let email, !email.isEmpty, email.localizedCaseInsensitiveCompare(name) != .orderedSame {
+            return "\(name) <\(email)>"
+        }
+        return name
+    }
+}
+
 struct UnifiedCalendarEvent: Identifiable, Equatable {
     let id: String
     let title: String
@@ -14,6 +28,7 @@ struct UnifiedCalendarEvent: Identifiable, Equatable {
     /// Optional because legacy events deserialized from older state may not have it.
     var calendarID: String? = nil
     var meetingURL: URL? = nil
+    var participants: [MeetingParticipant] = []
 
     enum CalendarSource: String {
         case eventKit
@@ -511,7 +526,50 @@ final class GoogleCalendarClient {
             isAllDay: isAllDay,
             source: .googleCalendar,
             calendarID: calendarID,
-            meetingURL: meetingURL
+            meetingURL: meetingURL,
+            participants: Self.parseParticipants(from: item)
+        )
+    }
+
+    static func parseParticipants(from item: [String: Any]) -> [MeetingParticipant] {
+        var participants: [MeetingParticipant] = []
+
+        if let organizer = item["organizer"] as? [String: Any],
+           let participant = parseParticipant(organizer, isOrganizer: true) {
+            participants.append(participant)
+        }
+
+        if let attendees = item["attendees"] as? [[String: Any]] {
+            for attendee in attendees {
+                guard attendee["resource"] as? Bool != true else { continue }
+                guard attendee["responseStatus"] as? String != "declined" else { continue }
+                if let participant = parseParticipant(attendee, isOrganizer: false) {
+                    participants.append(participant)
+                }
+            }
+        }
+
+        var seen = Set<String>()
+        return participants.filter { participant in
+            let key = (participant.email ?? participant.name).lowercased()
+            return seen.insert(key).inserted
+        }
+    }
+
+    private static func parseParticipant(_ raw: [String: Any], isOrganizer: Bool) -> MeetingParticipant? {
+        let email = (raw["email"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayName = (raw["displayName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallbackName = email?.split(separator: "@", maxSplits: 1).first.map(String.init)
+        let name = [displayName, fallbackName, email]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+
+        guard let name else { return nil }
+        return MeetingParticipant(
+            name: name,
+            email: email?.isEmpty == true ? nil : email,
+            isOrganizer: isOrganizer,
+            isSelf: raw["self"] as? Bool == true
         )
     }
 
@@ -535,6 +593,9 @@ final class GoogleCalendarClient {
                 // Prefer Google Calendar's meetingURL when EventKit doesn't have one
                 if merged[idx].meetingURL == nil, gEvent.meetingURL != nil {
                     merged[idx].meetingURL = gEvent.meetingURL
+                }
+                if merged[idx].participants.isEmpty, !gEvent.participants.isEmpty {
+                    merged[idx].participants = gEvent.participants
                 }
             } else {
                 merged.append(gEvent)

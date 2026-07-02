@@ -243,6 +243,31 @@ struct TranscriptFormatterTests {
         #expect(lines[1].contains("Speaker 2: Second person talking"))
     }
 
+    @Test("diarization uses explicit speaker name map when available")
+    func diarizationUsesSpeakerNameMap() {
+        let meetingStart = Date(timeIntervalSince1970: 0)
+        let system = [
+            SpeechSegment(start: 0.0, end: 5.0, text: "First person talking"),
+            SpeechSegment(start: 6.0, end: 10.0, text: "Second person talking"),
+        ]
+        let diarization = [
+            makeDiarSeg(speakerId: "spk_0", start: 0.0, end: 5.5),
+            makeDiarSeg(speakerId: "spk_1", start: 5.5, end: 11.0),
+        ]
+
+        let result = TranscriptFormatter.merge(
+            micSegments: [],
+            systemSegments: system,
+            diarizationSegments: diarization,
+            speakerNameMap: ["spk_0": "Alice Owner", "spk_1": "Bob Reviewer"],
+            meetingStart: meetingStart
+        )
+
+        #expect(result.contains("Alice Owner: First person talking"))
+        #expect(result.contains("Bob Reviewer: Second person talking"))
+        #expect(!result.contains("Speaker 1:"))
+    }
+
     @Test("diarization labels ordered by first appearance")
     func diarizationLabelOrder() {
         let meetingStart = Date(timeIntervalSince1970: 0)
