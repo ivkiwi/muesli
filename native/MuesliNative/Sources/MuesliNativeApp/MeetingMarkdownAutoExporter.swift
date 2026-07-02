@@ -160,7 +160,7 @@ final class MeetingMarkdownAutoExporter: MeetingMarkdownAutoExporting {
 
     private func writeLog(_ message: String) {
         let line = "[\(Self.isoFormatter.string(from: dateProvider()))] \(message)\n"
-        Self.logger.log("\(line, privacy: .public)")
+        Self.logger.log("\(line, privacy: .private)")
 
         logQueue.async { [self] in
             do {
