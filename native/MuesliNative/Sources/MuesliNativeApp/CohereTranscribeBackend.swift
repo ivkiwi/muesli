@@ -6,76 +6,8 @@ import Foundation
 // MARK: - Testable Utilities
 
 enum CohereTranscribeUtils {
-    /// Merge transcripts from overlapping audio chunks by deduplicating shared content.
-    /// Uses hash-based trigram matching: build a dictionary of word trigrams from the
-    /// tail of chunk N, then scan the head of chunk N+1 to find where the overlap ends.
-    /// Words before the anchor are preserved as unique content.
     static func mergeOverlappingTranscripts(_ transcripts: [String]) -> String {
-        guard transcripts.count > 1 else {
-            return transcripts.first ?? ""
-        }
-
-        var merged = transcripts[0]
-        for i in 1..<transcripts.count {
-            let prevWords = merged.split(separator: " ").map(String.init)
-            let nextWords = transcripts[i].split(separator: " ").map(String.init)
-            guard !prevWords.isEmpty, !nextWords.isEmpty else {
-                if !transcripts[i].isEmpty {
-                    merged += " " + transcripts[i]
-                }
-                continue
-            }
-
-            let normalize: (String) -> String = { $0.lowercased().filter(\.isLetter) }
-
-            let tailSize = min(prevWords.count, 40)
-            let tail = prevWords.suffix(tailSize).map { normalize($0) }
-            var trigramIndex: [String: Int] = [:]
-            if tail.count >= 3 {
-                for j in 0...(tail.count - 3) {
-                    let key = "\(tail[j])|\(tail[j + 1])|\(tail[j + 2])"
-                    trigramIndex[key] = j
-                }
-            }
-
-            let headSize = min(nextWords.count, 40)
-            let head = nextWords.prefix(headSize).map { normalize($0) }
-            var bestAnchorStart = -1
-            var bestRunEnd = 0
-
-            if head.count >= 3 {
-                for j in 0...(head.count - 3) {
-                    let key = "\(head[j])|\(head[j + 1])|\(head[j + 2])"
-                    if let tailPos = trigramIndex[key] {
-                        var run = 3
-                        var ti = tailPos + 3
-                        var hi = j + 3
-                        while ti < tail.count && hi < head.count && tail[ti] == head[hi] {
-                            run += 1
-                            ti += 1
-                            hi += 1
-                        }
-                        if bestAnchorStart < 0 {
-                            bestAnchorStart = j
-                            bestRunEnd = j + run
-                        }
-                    }
-                }
-            }
-
-            if bestAnchorStart >= 0 {
-                let preAnchor = nextWords.prefix(bestAnchorStart).joined(separator: " ")
-                let postOverlap = nextWords.dropFirst(bestRunEnd).joined(separator: " ")
-                let newContent = [preAnchor, postOverlap].filter { !$0.isEmpty }.joined(separator: " ")
-                if !newContent.isEmpty {
-                    merged += " " + newContent
-                }
-            } else {
-                merged += " " + transcripts[i]
-            }
-        }
-
-        return merged
+        TranscriptOverlapMerger.merge(transcripts)
     }
 
     /// Strip hallucinated tails: text after <|endoftext|> and repeated sentence fragments.

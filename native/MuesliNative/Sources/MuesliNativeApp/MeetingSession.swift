@@ -87,11 +87,42 @@ struct MeetingSessionResult {
     let endTime: Date
     let durationSeconds: Double
     let rawTranscript: String
+    let rawOriginalTranscript: String?
     let formattedNotes: String
     let retainedRecordingURL: URL?
     let retainedRecordingError: Error?
     let systemRecordingURL: URL?
     let templateSnapshot: MeetingTemplateSnapshot
+
+    init(
+        title: String,
+        originalTitle: String,
+        calendarEventID: String?,
+        startTime: Date,
+        endTime: Date,
+        durationSeconds: Double,
+        rawTranscript: String,
+        rawOriginalTranscript: String? = nil,
+        formattedNotes: String,
+        retainedRecordingURL: URL?,
+        retainedRecordingError: Error?,
+        systemRecordingURL: URL?,
+        templateSnapshot: MeetingTemplateSnapshot
+    ) {
+        self.title = title
+        self.originalTitle = originalTitle
+        self.calendarEventID = calendarEventID
+        self.startTime = startTime
+        self.endTime = endTime
+        self.durationSeconds = durationSeconds
+        self.rawTranscript = rawTranscript
+        self.rawOriginalTranscript = rawOriginalTranscript
+        self.formattedNotes = formattedNotes
+        self.retainedRecordingURL = retainedRecordingURL
+        self.retainedRecordingError = retainedRecordingError
+        self.systemRecordingURL = systemRecordingURL
+        self.templateSnapshot = templateSnapshot
+    }
 }
 
 enum MeetingProcessingStage {
@@ -107,6 +138,33 @@ private enum MeetingTranscriptRecoveryResult {
     case replace([SpeechSegment])
 }
 
+struct LiveMeetingChunkingConfiguration: Equatable, Sendable {
+    static let defaultSampleRate = 16_000
+
+    let minChunkDuration: TimeInterval
+    let maxChunkDuration: TimeInterval
+    let overlapSampleCount: Int
+    let deduplicatesText: Bool
+
+    static func configuration(for backend: BackendOption) -> LiveMeetingChunkingConfiguration {
+        if backend.backend == BackendOption.gigaAMV3Russian.backend {
+            return LiveMeetingChunkingConfiguration(
+                minChunkDuration: 3.0,
+                maxChunkDuration: 20.0,
+                overlapSampleCount: 2 * defaultSampleRate,
+                deduplicatesText: true
+            )
+        }
+
+        return LiveMeetingChunkingConfiguration(
+            minChunkDuration: 3.0,
+            maxChunkDuration: 5.0,
+            overlapSampleCount: 0,
+            deduplicatesText: false
+        )
+    }
+}
+
 final class MeetingSession {
     private static let logger = Logger(subsystem: "com.muesli.native", category: "MeetingSession")
 
@@ -116,7 +174,9 @@ final class MeetingSession {
     private let backendLock = OSAllocatedUnfairLock(initialState: BackendOption.whisper)
     private let runtime: RuntimePaths
     private let config: AppConfig
+    private let liveChunkingConfiguration: LiveMeetingChunkingConfiguration
     private let transcriptionCoordinator: TranscriptionCoordinator
+    private let transcriptCleaner: any MeetingTranscriptCleaning
     private let systemAudioRecorder: SystemAudioCapturing
     private let neuralAec = MeetingNeuralAec()
 
@@ -172,6 +232,7 @@ final class MeetingSession {
         runtime: RuntimePaths,
         config: AppConfig,
         transcriptionCoordinator: TranscriptionCoordinator,
+        transcriptCleaner: any MeetingTranscriptCleaning = ChatGPTMeetingTranscriptCleaner(),
         meetingMicRecorder: MeetingMicRecording = RouteAwareMeetingMicRecorder()
     ) {
         self.title = title
@@ -180,7 +241,9 @@ final class MeetingSession {
         backendLock.withLock { $0 = backend }
         self.runtime = runtime
         self.config = config
+        self.liveChunkingConfiguration = Self.liveChunkingConfiguration(for: backend)
         self.transcriptionCoordinator = transcriptionCoordinator
+        self.transcriptCleaner = transcriptCleaner
         self.meetingMicRecorder = meetingMicRecorder
         if config.useCoreAudioTap {
             self.systemAudioRecorder = CoreAudioSystemRecorder()
@@ -205,6 +268,10 @@ final class MeetingSession {
 
     private func currentBackend() -> BackendOption {
         backendLock.withLock { $0 }
+    }
+
+    static func liveChunkingConfiguration(for backend: BackendOption) -> LiveMeetingChunkingConfiguration {
+        LiveMeetingChunkingConfiguration.configuration(for: backend)
     }
 
     func start() async throws {
@@ -463,6 +530,11 @@ final class MeetingSession {
             }
         }
 
+        if liveChunkingConfiguration.deduplicatesText {
+            micSegments = TranscriptOverlapMerger.deduplicateSegments(micSegments)
+            systemSegments = TranscriptOverlapMerger.deduplicateSegments(systemSegments)
+        }
+
         fputs("[meeting] \(micSegments.count) mic chunks transcribed during meeting\n", stderr)
         fputs("[meeting] \(systemSegments.count) system chunks transcribed during meeting\n", stderr)
 
@@ -491,6 +563,13 @@ final class MeetingSession {
             speakerNameMap: speakerNameMap,
             meetingStart: meetingStart
         )
+        let cleanupResult = await MeetingTranscriptCleanupPipeline.cleanIfNeeded(
+            transcript: rawTranscript,
+            config: config,
+            isChatGPTAuthenticated: ChatGPTAuthManager.shared.isAuthenticated,
+            cleaner: transcriptCleaner
+        )
+        let finalTranscript = cleanupResult.transcript
 
         let generatedTitle: String
         onProgress?(.generatingTitle)
@@ -501,7 +580,7 @@ final class MeetingSession {
             calendarEventID: calendarEventID
         ) {
             generatedTitle = calendarTitle
-        } else if let autoTitle = await MeetingSummaryClient.generateTitle(transcript: rawTranscript, config: config),
+        } else if let autoTitle = await MeetingSummaryClient.generateTitle(transcript: finalTranscript, config: config),
            !autoTitle.isEmpty {
             generatedTitle = autoTitle
             fputs("[meeting] auto-generated title: \(generatedTitle)\n", stderr)
@@ -525,7 +604,7 @@ final class MeetingSession {
         let formattedNotes: String
         do {
             formattedNotes = try await MeetingSummaryClient.summarize(
-                transcript: rawTranscript,
+                transcript: finalTranscript,
                 meetingTitle: generatedTitle,
                 config: config,
                 template: templateSnapshot,
@@ -536,7 +615,7 @@ final class MeetingSession {
         } catch {
             fputs("[meeting] summary generation failed: \(error.localizedDescription)\n", stderr)
             formattedNotes = MeetingSummaryClient.summaryFailureNotes(
-                transcript: rawTranscript,
+                transcript: finalTranscript,
                 meetingTitle: generatedTitle,
                 error: error,
                 manualNotes: manualNotes
@@ -547,7 +626,7 @@ final class MeetingSession {
             title: generatedTitle,
             startedAt: meetingStart,
             endedAt: endTime,
-            rawTranscript: rawTranscript,
+            rawTranscript: finalTranscript,
             rawMicURL: rawStreamingMicURL,
             systemAudioURL: systemAudioURL,
             systemCapture: (systemAudioRecorder as? SystemAudioDiagnosticsProviding)?.diagnosticsSnapshot,
@@ -567,7 +646,8 @@ final class MeetingSession {
             startTime: meetingStart,
             endTime: endTime,
             durationSeconds: max(endTime.timeIntervalSince(meetingStart), 0),
-            rawTranscript: rawTranscript,
+            rawTranscript: finalTranscript,
+            rawOriginalTranscript: cleanupResult.originalTranscript,
             formattedNotes: formattedNotes,
             retainedRecordingURL: retainedRecordingURL,
             retainedRecordingError: retainedRecordingWriterError,
@@ -722,7 +802,9 @@ final class MeetingSession {
     private func rotateChunkOnQueue() {
         guard isRecording, !isPaused else { return }
         appendFlushedStreamingMicOnQueue()
-        guard let chunkTiming = chunkTimingTracker.rotate() else {
+        guard let chunkTiming = chunkTimingTracker.rotate(
+            overlapSampleCount: liveChunkingConfiguration.overlapSampleCount
+        ) else {
             return
         }
         let rawChunkURL = rawMicChunkRecorder?.rotateFile()
@@ -772,7 +854,9 @@ final class MeetingSession {
     private func rotateSystemChunkOnQueue() {
         guard isRecording, !isPaused else { return }
         guard let chunkURL = systemChunkRecorder?.rotateFile(),
-              let chunkTiming = systemChunkTimingTracker.rotate() else {
+              let chunkTiming = systemChunkTimingTracker.rotate(
+                overlapSampleCount: liveChunkingConfiguration.overlapSampleCount
+              ) else {
             return
         }
 
@@ -844,14 +928,24 @@ final class MeetingSession {
     }
 
     private func prepareRealtimeAudioPipeline(vadManager: VadManager?) throws {
-        rawMicChunkRecorder = try PCMChunkRecorder(directoryName: "muesli-meeting-mic-chunks")
-        systemChunkRecorder = try PCMChunkRecorder(directoryName: "muesli-meeting-system-chunks")
+        rawMicChunkRecorder = try PCMChunkRecorder(
+            directoryName: "muesli-meeting-mic-chunks",
+            overlapSampleCount: liveChunkingConfiguration.overlapSampleCount
+        )
+        systemChunkRecorder = try PCMChunkRecorder(
+            directoryName: "muesli-meeting-system-chunks",
+            overlapSampleCount: liveChunkingConfiguration.overlapSampleCount
+        )
         configureRealtimeAudioCallbacks(vadManager: vadManager)
     }
 
     private func configureRealtimeAudioCallbacks(vadManager: VadManager?) {
         if let vadManager {
-            let controller = StreamingVadController(vadManager: vadManager)
+            let controller = StreamingVadController(
+                vadManager: vadManager,
+                minChunkDuration: liveChunkingConfiguration.minChunkDuration,
+                maxChunkDuration: liveChunkingConfiguration.maxChunkDuration
+            )
             controller.onChunkBoundary = { [weak self] in
                 // Streaming VAD callbacks can arrive off-main; serialize chunk rotation explicitly.
                 self?.chunkRotationQueue.async { [weak self] in
@@ -861,7 +955,11 @@ final class MeetingSession {
             controller.start()
             vadController = controller
 
-            let systemController = StreamingVadController(vadManager: vadManager)
+            let systemController = StreamingVadController(
+                vadManager: vadManager,
+                minChunkDuration: liveChunkingConfiguration.minChunkDuration,
+                maxChunkDuration: liveChunkingConfiguration.maxChunkDuration
+            )
             systemController.onChunkBoundary = { [weak self] in
                 // Streaming VAD callbacks can arrive off-main; serialize chunk rotation explicitly.
                 self?.chunkRotationQueue.async { [weak self] in

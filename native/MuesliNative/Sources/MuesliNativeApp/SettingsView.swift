@@ -739,6 +739,22 @@ struct SettingsView: View {
             }
 
             settingsSection("Meeting Summaries") {
+                settingsRow("AI transcript cleanup (meetings)", controlWidth: meetingControlWidth) {
+                    settingsSwitch(isOn: appState.config.enableMeetingTranscriptCleanup) { newValue in
+                        controller.updateConfig { config in
+                            config.enableMeetingTranscriptCleanup = newValue
+                            config.meetingTranscriptCleanupProvider = MeetingTranscriptCleanupProviderOption.chatGPT.rawValue
+                        }
+                    }
+                }
+                if appState.config.enableMeetingTranscriptCleanup && appState.selectedMeetingSummaryBackend != .chatGPT {
+                    Divider().background(MuesliTheme.surfaceBorder)
+                    settingsRow("Cleanup account", controlWidth: meetingControlWidth) {
+                        chatGPTAccountControl
+                    }
+                }
+                Divider().background(MuesliTheme.surfaceBorder)
+
                 settingsRow("Summary backend", controlWidth: meetingControlWidth) {
                     settingsMenu(
                         selection: appState.selectedMeetingSummaryBackend.label,

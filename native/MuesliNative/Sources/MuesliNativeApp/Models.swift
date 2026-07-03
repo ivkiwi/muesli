@@ -913,6 +913,24 @@ enum OnboardingUseCase: String, Codable, CaseIterable {
     }
 }
 
+enum MeetingTranscriptCleanupProviderOption: String, Codable, CaseIterable, Sendable {
+    case chatGPT = "chatgpt"
+
+    var label: String {
+        switch self {
+        case .chatGPT:
+            return "ChatGPT"
+        }
+    }
+
+    static func resolved(_ rawValue: String?) -> MeetingTranscriptCleanupProviderOption {
+        guard let rawValue, let option = MeetingTranscriptCleanupProviderOption(rawValue: rawValue) else {
+            return .chatGPT
+        }
+        return option
+    }
+}
+
 struct AppConfig: Codable {
     var dictationHotkey: HotkeyConfig = .default
     var computerUseHotkey: HotkeyConfig = .computerUseDefault
@@ -994,6 +1012,8 @@ struct AppConfig: Codable {
     var disabledCalendarIDs: [String] = []
     var enablePostProcessor: Bool = false
     var transcriptCleanupProvider: String = TranscriptCleanupProviderOption.local.rawValue
+    var enableMeetingTranscriptCleanup: Bool = false
+    var meetingTranscriptCleanupProvider: String = MeetingTranscriptCleanupProviderOption.chatGPT.rawValue
     var activePostProcessorId: String = PostProcessorOption.defaultOption.id
     var postProcessorSystemPrompt: String = PostProcessorOption.defaultSystemPrompt
     var enableScreenContext: Bool = false
@@ -1087,6 +1107,8 @@ struct AppConfig: Codable {
         case disabledCalendarIDs = "disabled_calendar_ids"
         case enablePostProcessor = "enable_post_processor"
         case transcriptCleanupProvider = "transcript_cleanup_provider"
+        case enableMeetingTranscriptCleanup = "enable_meeting_transcript_cleanup"
+        case meetingTranscriptCleanupProvider = "meeting_transcript_cleanup_provider"
         case activePostProcessorId = "active_post_processor_id"
         case postProcessorSystemPrompt = "post_processor_system_prompt"
         case enableScreenContext = "enable_screen_context"
@@ -1225,6 +1247,10 @@ struct AppConfig: Codable {
         transcriptCleanupProvider = TranscriptCleanupProviderOption
             .resolved(try? c.decode(String.self, forKey: .transcriptCleanupProvider))
             .rawValue
+        enableMeetingTranscriptCleanup = (try? c.decode(Bool.self, forKey: .enableMeetingTranscriptCleanup)) ?? defaults.enableMeetingTranscriptCleanup
+        meetingTranscriptCleanupProvider = MeetingTranscriptCleanupProviderOption
+            .resolved(try? c.decode(String.self, forKey: .meetingTranscriptCleanupProvider))
+            .rawValue
         activePostProcessorId = (try? c.decode(String.self, forKey: .activePostProcessorId)) ?? defaults.activePostProcessorId
         postProcessorSystemPrompt = (try? c.decode(String.self, forKey: .postProcessorSystemPrompt)) ?? defaults.postProcessorSystemPrompt
         enableScreenContext = (try? c.decode(Bool.self, forKey: .enableScreenContext)) ?? defaults.enableScreenContext
@@ -1248,6 +1274,10 @@ struct AppConfig: Codable {
 
     var resolvedOnboardingUseCase: OnboardingUseCase {
         OnboardingUseCase.resolved(onboardingUseCase)
+    }
+
+    var resolvedMeetingTranscriptCleanupProvider: MeetingTranscriptCleanupProviderOption {
+        MeetingTranscriptCleanupProviderOption.resolved(meetingTranscriptCleanupProvider)
     }
 }
 

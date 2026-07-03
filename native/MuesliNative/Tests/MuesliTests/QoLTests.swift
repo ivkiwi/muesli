@@ -357,4 +357,34 @@ struct MeetingChunkTimingTrackerTests {
         #expect(second?.startTimeSeconds == 0.1)
         #expect(second?.durationSeconds == 0.05)
     }
+
+    @Test("tracks overlap as the next chunk start")
+    func tracksOverlapOffsets() {
+        var tracker = MeetingChunkTimingTracker()
+        tracker.start()
+        tracker.append(sampleCount: 1600)
+
+        let first = tracker.rotate(overlapSampleCount: 400)
+        tracker.append(sampleCount: 800)
+        let second = tracker.finish()
+
+        #expect(first?.startSampleIndex == 0)
+        #expect(first?.sampleCount == 1600)
+        #expect(second?.startSampleIndex == 1200)
+        #expect(second?.sampleCount == 1200)
+        #expect(second?.startTimeSeconds == 0.075)
+    }
+
+    @Test("GigaAM meeting chunking uses longer chunks and overlap")
+    func gigaAMMeetingChunkingPolicy() {
+        let gigaAM = MeetingSession.liveChunkingConfiguration(for: .gigaAMV3Russian)
+        let whisper = MeetingSession.liveChunkingConfiguration(for: .whisperTinyEnglish)
+
+        #expect(gigaAM.maxChunkDuration == 20)
+        #expect(gigaAM.overlapSampleCount == 32_000)
+        #expect(gigaAM.deduplicatesText)
+        #expect(whisper.maxChunkDuration == 5)
+        #expect(whisper.overlapSampleCount == 0)
+        #expect(!whisper.deduplicatesText)
+    }
 }

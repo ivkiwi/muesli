@@ -35,11 +35,14 @@ final class StreamingVadController: @unchecked Sendable {
     private let maxChunkDuration: TimeInterval
     private var maxDurationTimer: Timer?
 
-    convenience init(vadManager: VadManager) {
+    convenience init(
+        vadManager: VadManager,
+        minChunkDuration: TimeInterval = 3.0,
+        maxChunkDuration: TimeInterval = 5.0
+    ) {
         self.init(
-            minChunkDuration: 3.0,
-            // Keep live transcript latency bounded by forcing shorter meeting chunks.
-            maxChunkDuration: 5.0,
+            minChunkDuration: minChunkDuration,
+            maxChunkDuration: maxChunkDuration,
             makeInitialState: { await vadManager.makeStreamState() },
             processStreamChunk: { samples, state in
                 try await vadManager.processStreamingChunk(samples, state: state)

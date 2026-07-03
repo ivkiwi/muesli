@@ -190,6 +190,30 @@ struct DictationStoreTests {
         #expect(inserted?.savedRecordingPath == "/tmp/meeting.wav")
     }
 
+    @Test("migration adds raw original transcript column")
+    func migrationAddsRawOriginalTranscriptColumn() throws {
+        let store = try makeLegacyStore()
+
+        try store.migrateIfNeeded()
+
+        let start = Date()
+        try store.insertMeeting(
+            title: "Cleaned Meeting",
+            calendarEventID: nil,
+            startTime: start,
+            endTime: start.addingTimeInterval(60),
+            rawTranscript: "Cleaned transcript",
+            rawOriginalTranscript: "Raw transcript",
+            formattedNotes: "Notes",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+
+        let inserted = try #require(store.recentMeetings(limit: 1).first)
+        #expect(inserted.rawTranscript == "Cleaned transcript")
+        #expect(inserted.rawOriginalTranscript == "Raw transcript")
+    }
+
     @Test("meeting source is persisted")
     func meetingSourcePersists() throws {
         let store = try makeStore()
@@ -1428,6 +1452,7 @@ struct DictationStoreTests {
             startTime: start,
             endTime: start.addingTimeInterval(60),
             rawTranscript: "Original words",
+            rawOriginalTranscript: "Uncleaned original words",
             formattedNotes: "## Summary\nExisting notes",
             micAudioPath: nil,
             systemAudioPath: nil
@@ -1444,6 +1469,7 @@ struct DictationStoreTests {
         #expect(updated.formattedNotes == "## Summary\nExisting notes")
         #expect(updated.manualNotes == "Manual note")
         #expect(updated.wordCount == 7)
+        #expect(updated.rawOriginalTranscript == nil)
     }
 
     @Test("fetch dictation by id returns the full record")

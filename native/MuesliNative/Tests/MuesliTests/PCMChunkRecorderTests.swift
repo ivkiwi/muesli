@@ -18,6 +18,35 @@ struct PCMChunkRecorderTests {
         #expect(try readMonoPCM16WAVSamples(from: secondChunkURL) == [400, 500])
     }
 
+    @Test("rotateFile carries configured overlap into the next chunk")
+    func rotatesWithOverlapCarryover() throws {
+        let recorder = try PCMChunkRecorder(
+            directoryName: "pcm-chunk-recorder-tests",
+            overlapSampleCount: 2
+        )
+        recorder.append([100, 200, 300])
+
+        let firstChunkURL = try #require(recorder.rotateFile())
+        recorder.append([400, 500])
+        let secondChunkURL = try #require(recorder.stop())
+
+        #expect(try readMonoPCM16WAVSamples(from: firstChunkURL) == [100, 200, 300])
+        #expect(try readMonoPCM16WAVSamples(from: secondChunkURL) == [200, 300, 400, 500])
+    }
+
+    @Test("stop ignores a carryover-only chunk")
+    func stopIgnoresCarryoverOnlyChunk() throws {
+        let recorder = try PCMChunkRecorder(
+            directoryName: "pcm-chunk-recorder-tests",
+            overlapSampleCount: 2
+        )
+        recorder.append([100, 200, 300])
+
+        let firstChunkURL = try #require(recorder.rotateFile())
+        #expect(try readMonoPCM16WAVSamples(from: firstChunkURL) == [100, 200, 300])
+        #expect(recorder.stop() == nil)
+    }
+
     @Test("cancel removes the in-progress chunk file")
     func cancelRemovesTempFile() throws {
         let recorder = try PCMChunkRecorder(directoryName: "pcm-chunk-recorder-tests")

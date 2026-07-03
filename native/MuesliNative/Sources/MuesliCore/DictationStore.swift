@@ -27,7 +27,7 @@ public final class DictationStore {
     t.id, t.final_status, t.final_message, t.trace_json, t.created_at
     """
     private static let meetingColumns = """
-    id, title, start_time, duration_seconds, raw_transcript, formatted_notes, word_count, folder_id, calendar_event_id, mic_audio_path, system_audio_path, saved_recording_path, meeting_status, manual_notes, selected_template_id, selected_template_name, selected_template_kind, selected_template_prompt, source
+    id, title, start_time, duration_seconds, raw_transcript, raw_original_transcript, formatted_notes, word_count, folder_id, calendar_event_id, mic_audio_path, system_audio_path, saved_recording_path, meeting_status, manual_notes, selected_template_id, selected_template_name, selected_template_kind, selected_template_prompt, source
     """
 
     public init() {
@@ -89,6 +89,7 @@ public final class DictationStore {
             end_time TEXT,
             duration_seconds REAL,
             raw_transcript TEXT,
+            raw_original_transcript TEXT,
             formatted_notes TEXT,
             mic_audio_path TEXT,
             system_audio_path TEXT,
@@ -140,6 +141,9 @@ public final class DictationStore {
         try exec(foldersSQL, db: db)
 
         if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN folder_id INTEGER REFERENCES meeting_folders(id)", nil, nil, nil) != SQLITE_OK {
+            // Column may already exist.
+        }
+        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN raw_original_transcript TEXT", nil, nil, nil) != SQLITE_OK {
             // Column may already exist.
         }
         // These template columns are also present in CREATE TABLE for fresh databases.
@@ -641,6 +645,7 @@ public final class DictationStore {
         startTime: Date,
         endTime: Date,
         rawTranscript: String,
+        rawOriginalTranscript: String? = nil,
         formattedNotes: String,
         micAudioPath: String?,
         systemAudioPath: String?,
@@ -656,8 +661,8 @@ public final class DictationStore {
 
         let sql = """
         INSERT INTO meetings
-        (title, calendar_event_id, start_time, end_time, duration_seconds, raw_transcript, formatted_notes, mic_audio_path, system_audio_path, saved_recording_path, word_count, selected_template_id, selected_template_name, selected_template_kind, selected_template_prompt, source, updated_at, sync_dirty)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        (title, calendar_event_id, start_time, end_time, duration_seconds, raw_transcript, raw_original_transcript, formatted_notes, mic_audio_path, system_audio_path, saved_recording_path, word_count, selected_template_id, selected_template_name, selected_template_kind, selected_template_prompt, source, updated_at, sync_dirty)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
@@ -676,17 +681,18 @@ public final class DictationStore {
         sqlite3_bind_text(statement, 4, (endString as NSString).utf8String, -1, nil)
         sqlite3_bind_double(statement, 5, durationSeconds)
         sqlite3_bind_text(statement, 6, (rawTranscript as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 7, (formattedNotes as NSString).utf8String, -1, nil)
-        bindOptionalText(micAudioPath, at: 8, statement: statement)
-        bindOptionalText(systemAudioPath, at: 9, statement: statement)
-        bindOptionalText(savedRecordingPath, at: 10, statement: statement)
-        sqlite3_bind_int(statement, 11, Int32(wordCount))
-        bindOptionalText(selectedTemplateID, at: 12, statement: statement)
-        bindOptionalText(selectedTemplateName, at: 13, statement: statement)
-        bindOptionalText(selectedTemplateKind?.rawValue, at: 14, statement: statement)
-        bindOptionalText(selectedTemplatePrompt, at: 15, statement: statement)
-        sqlite3_bind_text(statement, 16, (source.rawValue as NSString).utf8String, -1, nil)
-        sqlite3_bind_double(statement, 17, Date().timeIntervalSince1970)
+        bindOptionalText(rawOriginalTranscript, at: 7, statement: statement)
+        sqlite3_bind_text(statement, 8, (formattedNotes as NSString).utf8String, -1, nil)
+        bindOptionalText(micAudioPath, at: 9, statement: statement)
+        bindOptionalText(systemAudioPath, at: 10, statement: statement)
+        bindOptionalText(savedRecordingPath, at: 11, statement: statement)
+        sqlite3_bind_int(statement, 12, Int32(wordCount))
+        bindOptionalText(selectedTemplateID, at: 13, statement: statement)
+        bindOptionalText(selectedTemplateName, at: 14, statement: statement)
+        bindOptionalText(selectedTemplateKind?.rawValue, at: 15, statement: statement)
+        bindOptionalText(selectedTemplatePrompt, at: 16, statement: statement)
+        sqlite3_bind_text(statement, 17, (source.rawValue as NSString).utf8String, -1, nil)
+        sqlite3_bind_double(statement, 18, Date().timeIntervalSince1970)
 
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw lastError(db)
@@ -843,6 +849,7 @@ public final class DictationStore {
         UPDATE meetings
         SET title = 'Deleted Meeting',
             raw_transcript = '',
+            raw_original_transcript = NULL,
             formatted_notes = NULL,
             manual_notes = '',
             mic_audio_path = NULL,
@@ -950,6 +957,7 @@ public final class DictationStore {
             UPDATE meetings
             SET title = 'Deleted Meeting',
                 raw_transcript = '',
+                raw_original_transcript = NULL,
                 formatted_notes = NULL,
                 manual_notes = '',
                 mic_audio_path = NULL,
@@ -1006,7 +1014,7 @@ public final class DictationStore {
         defer { sqlite3_close(db) }
         let manualNotes = try manualNotesForMeeting(id: id, db: db)
         let wordCount = Self.countWords(in: rawTranscript) + Self.countWords(in: manualNotes)
-        let sql = "UPDATE meetings SET raw_transcript = ?, word_count = ?, updated_at = ?, sync_dirty = 1 WHERE id = ?"
+        let sql = "UPDATE meetings SET raw_transcript = ?, raw_original_transcript = NULL, word_count = ?, updated_at = ?, sync_dirty = 1 WHERE id = ?"
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             throw lastError(db)
@@ -1107,7 +1115,7 @@ public final class DictationStore {
         let endTime = try liveMeetingFallbackEndTime(meetingID: id, durationSeconds: durationSeconds, db: db)
         let sql = """
         UPDATE meetings
-        SET end_time = ?, duration_seconds = ?, raw_transcript = ?, formatted_notes = ?, meeting_status = ?, word_count = ?, updated_at = ?, sync_dirty = 1
+        SET end_time = ?, duration_seconds = ?, raw_transcript = ?, raw_original_transcript = NULL, formatted_notes = ?, meeting_status = ?, word_count = ?, updated_at = ?, sync_dirty = 1
         WHERE id = ?
         """
         var statement: OpaquePointer?
@@ -1189,6 +1197,7 @@ public final class DictationStore {
         startTime: Date,
         endTime: Date,
         rawTranscript: String,
+        rawOriginalTranscript: String? = nil,
         formattedNotes: String,
         micAudioPath: String?,
         systemAudioPath: String?,
@@ -1202,7 +1211,7 @@ public final class DictationStore {
         defer { sqlite3_close(db) }
         let sql = """
         UPDATE meetings
-        SET title = ?, calendar_event_id = ?, start_time = ?, end_time = ?, duration_seconds = ?, raw_transcript = ?, formatted_notes = ?, mic_audio_path = ?, system_audio_path = ?, saved_recording_path = ?, meeting_status = ?, word_count = ?, selected_template_id = ?, selected_template_name = ?, selected_template_kind = ?, selected_template_prompt = ?, updated_at = ?, sync_dirty = 1
+        SET title = ?, calendar_event_id = ?, start_time = ?, end_time = ?, duration_seconds = ?, raw_transcript = ?, raw_original_transcript = ?, formatted_notes = ?, mic_audio_path = ?, system_audio_path = ?, saved_recording_path = ?, meeting_status = ?, word_count = ?, selected_template_id = ?, selected_template_name = ?, selected_template_kind = ?, selected_template_prompt = ?, updated_at = ?, sync_dirty = 1
         WHERE id = ?
         """
         var statement: OpaquePointer?
@@ -1224,18 +1233,19 @@ public final class DictationStore {
         sqlite3_bind_text(statement, 4, (endString as NSString).utf8String, -1, nil)
         sqlite3_bind_double(statement, 5, durationSeconds)
         sqlite3_bind_text(statement, 6, (rawTranscript as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(statement, 7, (formattedNotes as NSString).utf8String, -1, nil)
-        bindOptionalText(micAudioPath, at: 8, statement: statement)
-        bindOptionalText(systemAudioPath, at: 9, statement: statement)
-        bindOptionalText(savedRecordingPath, at: 10, statement: statement)
-        sqlite3_bind_text(statement, 11, (MeetingStatus.completed.rawValue as NSString).utf8String, -1, nil)
-        sqlite3_bind_int(statement, 12, Int32(wordCount))
-        bindOptionalText(selectedTemplateID, at: 13, statement: statement)
-        bindOptionalText(selectedTemplateName, at: 14, statement: statement)
-        bindOptionalText(selectedTemplateKind?.rawValue, at: 15, statement: statement)
-        bindOptionalText(selectedTemplatePrompt, at: 16, statement: statement)
-        sqlite3_bind_double(statement, 17, Date().timeIntervalSince1970)
-        sqlite3_bind_int64(statement, 18, id)
+        bindOptionalText(rawOriginalTranscript, at: 7, statement: statement)
+        sqlite3_bind_text(statement, 8, (formattedNotes as NSString).utf8String, -1, nil)
+        bindOptionalText(micAudioPath, at: 9, statement: statement)
+        bindOptionalText(systemAudioPath, at: 10, statement: statement)
+        bindOptionalText(savedRecordingPath, at: 11, statement: statement)
+        sqlite3_bind_text(statement, 12, (MeetingStatus.completed.rawValue as NSString).utf8String, -1, nil)
+        sqlite3_bind_int(statement, 13, Int32(wordCount))
+        bindOptionalText(selectedTemplateID, at: 14, statement: statement)
+        bindOptionalText(selectedTemplateName, at: 15, statement: statement)
+        bindOptionalText(selectedTemplateKind?.rawValue, at: 16, statement: statement)
+        bindOptionalText(selectedTemplatePrompt, at: 17, statement: statement)
+        sqlite3_bind_double(statement, 18, Date().timeIntervalSince1970)
+        sqlite3_bind_int64(statement, 19, id)
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw lastError(db)
         }
@@ -1407,7 +1417,7 @@ public final class DictationStore {
         let wordCount = Self.countWords(in: rawTranscript) + Self.countWords(in: manualNotes)
         let sql = """
         UPDATE meetings
-        SET raw_transcript = ?, formatted_notes = ?, meeting_status = ?, word_count = ?, selected_template_id = ?, selected_template_name = ?, selected_template_kind = ?, selected_template_prompt = ?, updated_at = ?, sync_dirty = 1
+        SET raw_transcript = ?, raw_original_transcript = NULL, formatted_notes = ?, meeting_status = ?, word_count = ?, selected_template_id = ?, selected_template_name = ?, selected_template_kind = ?, selected_template_prompt = ?, updated_at = ?, sync_dirty = 1
         WHERE id = ?
         """
         var statement: OpaquePointer?
@@ -2365,28 +2375,30 @@ public final class DictationStore {
     }
 
     private func makeMeetingRecord(_ statement: OpaquePointer?) -> MeetingRecord {
-        let folderID: Int64? = sqlite3_column_type(statement, 7) == SQLITE_NULL ? nil : sqlite3_column_int64(statement, 7)
-        let calendarEventID: String? = sqlite3_column_type(statement, 8) == SQLITE_NULL ? nil : stringColumn(statement, index: 8)
-        let micAudioPath: String? = sqlite3_column_type(statement, 9) == SQLITE_NULL ? nil : stringColumn(statement, index: 9)
-        let systemAudioPath: String? = sqlite3_column_type(statement, 10) == SQLITE_NULL ? nil : stringColumn(statement, index: 10)
-        let savedRecordingPath: String? = sqlite3_column_type(statement, 11) == SQLITE_NULL ? nil : stringColumn(statement, index: 11)
-        let status = MeetingStatus(rawValue: stringColumn(statement, index: 12)) ?? .completed
-        let manualNotes = stringColumn(statement, index: 13)
-        let selectedTemplateID: String? = sqlite3_column_type(statement, 14) == SQLITE_NULL ? nil : stringColumn(statement, index: 14)
-        let selectedTemplateName: String? = sqlite3_column_type(statement, 15) == SQLITE_NULL ? nil : stringColumn(statement, index: 15)
-        let selectedTemplateKind: MeetingTemplateKind? = sqlite3_column_type(statement, 16) == SQLITE_NULL
+        let rawOriginalTranscript: String? = sqlite3_column_type(statement, 5) == SQLITE_NULL ? nil : stringColumn(statement, index: 5)
+        let folderID: Int64? = sqlite3_column_type(statement, 8) == SQLITE_NULL ? nil : sqlite3_column_int64(statement, 8)
+        let calendarEventID: String? = sqlite3_column_type(statement, 9) == SQLITE_NULL ? nil : stringColumn(statement, index: 9)
+        let micAudioPath: String? = sqlite3_column_type(statement, 10) == SQLITE_NULL ? nil : stringColumn(statement, index: 10)
+        let systemAudioPath: String? = sqlite3_column_type(statement, 11) == SQLITE_NULL ? nil : stringColumn(statement, index: 11)
+        let savedRecordingPath: String? = sqlite3_column_type(statement, 12) == SQLITE_NULL ? nil : stringColumn(statement, index: 12)
+        let status = MeetingStatus(rawValue: stringColumn(statement, index: 13)) ?? .completed
+        let manualNotes = stringColumn(statement, index: 14)
+        let selectedTemplateID: String? = sqlite3_column_type(statement, 15) == SQLITE_NULL ? nil : stringColumn(statement, index: 15)
+        let selectedTemplateName: String? = sqlite3_column_type(statement, 16) == SQLITE_NULL ? nil : stringColumn(statement, index: 16)
+        let selectedTemplateKind: MeetingTemplateKind? = sqlite3_column_type(statement, 17) == SQLITE_NULL
             ? nil
-            : MeetingTemplateKind(rawValue: stringColumn(statement, index: 16))
-        let selectedTemplatePrompt: String? = sqlite3_column_type(statement, 17) == SQLITE_NULL ? nil : stringColumn(statement, index: 17)
-        let source = MeetingSource(rawValue: stringColumn(statement, index: 18)) ?? .meeting
+            : MeetingTemplateKind(rawValue: stringColumn(statement, index: 17))
+        let selectedTemplatePrompt: String? = sqlite3_column_type(statement, 18) == SQLITE_NULL ? nil : stringColumn(statement, index: 18)
+        let source = MeetingSource(rawValue: stringColumn(statement, index: 19)) ?? .meeting
         return MeetingRecord(
             id: sqlite3_column_int64(statement, 0),
             title: stringColumn(statement, index: 1),
             startTime: stringColumn(statement, index: 2),
             durationSeconds: sqlite3_column_double(statement, 3),
             rawTranscript: stringColumn(statement, index: 4),
-            formattedNotes: stringColumn(statement, index: 5),
-            wordCount: Int(sqlite3_column_int(statement, 6)),
+            rawOriginalTranscript: rawOriginalTranscript,
+            formattedNotes: stringColumn(statement, index: 6),
+            wordCount: Int(sqlite3_column_int(statement, 7)),
             folderID: folderID,
             calendarEventID: calendarEventID,
             micAudioPath: micAudioPath,

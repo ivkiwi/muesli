@@ -215,6 +215,7 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
     public let startTime: String
     public let durationSeconds: Double
     public let rawTranscript: String
+    public let rawOriginalTranscript: String?
     public let formattedNotes: String
     public let wordCount: Int
     public let folderID: Int64?
@@ -236,6 +237,7 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
         startTime: String,
         durationSeconds: Double,
         rawTranscript: String,
+        rawOriginalTranscript: String? = nil,
         formattedNotes: String,
         wordCount: Int,
         folderID: Int64?,
@@ -256,6 +258,7 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
         self.startTime = startTime
         self.durationSeconds = durationSeconds
         self.rawTranscript = rawTranscript
+        self.rawOriginalTranscript = rawOriginalTranscript
         self.formattedNotes = formattedNotes
         self.wordCount = wordCount
         self.folderID = folderID
@@ -278,6 +281,7 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
         case startTime
         case durationSeconds
         case rawTranscript
+        case rawOriginalTranscript
         case formattedNotes
         case wordCount
         case folderID
@@ -302,6 +306,7 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
             startTime: try c.decode(String.self, forKey: .startTime),
             durationSeconds: try c.decode(Double.self, forKey: .durationSeconds),
             rawTranscript: try c.decode(String.self, forKey: .rawTranscript),
+            rawOriginalTranscript: try c.decodeIfPresent(String.self, forKey: .rawOriginalTranscript),
             formattedNotes: try c.decode(String.self, forKey: .formattedNotes),
             wordCount: try c.decode(Int.self, forKey: .wordCount),
             folderID: try c.decodeIfPresent(Int64.self, forKey: .folderID),

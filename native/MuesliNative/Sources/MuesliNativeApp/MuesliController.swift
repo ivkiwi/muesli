@@ -342,6 +342,7 @@ final class MuesliController: NSObject {
     private var contributionMilestonePromptDismissedThisLaunch = false
     private var meetingStartTask: Task<Void, Never>?
     private var meetingStartMeetingID: Int64?
+    private var liveTranscriptOverlapByMeetingSpeaker: [String: String] = [:]
     private var importTask: Task<Void, Never>?
     private var importSessionID: UUID?
     private var legacyRecordingMigrationTask: Task<Void, Never>?
@@ -4500,6 +4501,9 @@ final class MuesliController: NSObject {
                 routeSnapshotProvider: { routeSnapshot }
             )
             meetingMicRecorder.preferredInputDeviceID = routeSnapshot.preferredInputDeviceID
+            let shouldDeduplicateLiveTranscript = MeetingSession
+                .liveChunkingConfiguration(for: backend)
+                .deduplicatesText
             let meetingSession = MeetingSession(
                 title: title,
                 calendarEventID: calendarEventID,
@@ -4530,7 +4534,7 @@ final class MuesliController: NSObject {
                         guard self.appState.liveMeetingTranscriptOwnerID == meetingID else { return }
                         let liveTranscriptStart = meetingSession?.startTime ?? Date()
                         let liveTranscriptCalendar = Calendar(identifier: .gregorian)
-                        let entries = segments.compactMap { segment -> LiveTranscriptCheckpointEntry? in
+                        let rawEntries = segments.compactMap { segment -> LiveTranscriptCheckpointEntry? in
                             let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
                             guard !text.isEmpty else { return nil }
                             let timestampDate = liveTranscriptStart.addingTimeInterval(segment.start)
@@ -4549,6 +4553,24 @@ final class MuesliController: NSObject {
                                 text: text
                             )
                         }
+                        let entries = rawEntries.compactMap { entry -> LiveTranscriptCheckpointEntry? in
+                            guard shouldDeduplicateLiveTranscript else { return entry }
+                            let key = "\(meetingID)|\(entry.speaker)"
+                            let previous = self.liveTranscriptOverlapByMeetingSpeaker[key] ?? ""
+                            let addition = TranscriptOverlapMerger
+                                .uniqueAddition(previous: previous, next: entry.text)
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                            self.liveTranscriptOverlapByMeetingSpeaker[key] = TranscriptOverlapMerger
+                                .merge([previous, entry.text])
+                            guard !addition.isEmpty else { return nil }
+                            return LiveTranscriptCheckpointEntry(
+                                timestampLabel: entry.timestampLabel,
+                                speaker: entry.speaker,
+                                startSeconds: entry.startSeconds,
+                                endSeconds: entry.endSeconds,
+                                text: addition
+                            )
+                        }
                         guard !entries.isEmpty else { return }
                         do {
                             try self.dictationStore.appendLiveTranscriptCheckpoints(meetingID: meetingID, entries: entries)
@@ -4563,6 +4585,7 @@ final class MuesliController: NSObject {
                 }
                 appState.liveMeetingTranscriptOwnerID = meetingID
                 appState.liveMeetingTranscript = ""
+                liveTranscriptOverlapByMeetingSpeaker.removeAll()
                 let micHealthWarningLock = NSLock()
                 var lastForwardedMicHealthWarning: String?
                 meetingSession.onMicHealthChanged = { [weak self] snapshot in
@@ -5203,6 +5226,7 @@ final class MuesliController: NSObject {
                     self.appState.liveMeetingTranscript = ""
                     self.appState.liveMeetingTranscriptOwnerID = nil
                 }
+                self.liveTranscriptOverlapByMeetingSpeaker.removeAll()
                 if let meetingResult {
                     self.cleanupTemporaryMeetingAudioFiles(for: meetingResult)
                 }
@@ -5256,6 +5280,7 @@ final class MuesliController: NSObject {
                 startTime: result.startTime,
                 endTime: result.endTime,
                 rawTranscript: result.rawTranscript,
+                rawOriginalTranscript: result.rawOriginalTranscript,
                 formattedNotes: result.formattedNotes,
                 micAudioPath: nil,
                 systemAudioPath: nil,
@@ -5275,6 +5300,7 @@ final class MuesliController: NSObject {
                 startTime: result.startTime,
                 endTime: result.endTime,
                 rawTranscript: result.rawTranscript,
+                rawOriginalTranscript: result.rawOriginalTranscript,
                 formattedNotes: result.formattedNotes,
                 micAudioPath: nil,
                 systemAudioPath: nil,

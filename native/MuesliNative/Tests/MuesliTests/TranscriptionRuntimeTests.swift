@@ -161,6 +161,15 @@ struct CohereTranscribeUtilsTests {
         #expect(result == "The Model Works well on device")
     }
 
+    @Test("shared overlap merger returns only unique suffix")
+    func sharedOverlapMergerUniqueSuffix() {
+        let result = TranscriptOverlapMerger.uniqueAddition(
+            previous: "Speaker one explains the migration plan in detail",
+            next: "the migration plan in detail then assigns owners"
+        )
+        #expect(result == "then assigns owners")
+    }
+
     @Test("cleanTranscript strips endoftext token")
     func stripsEndOfText() {
         let result = CohereTranscribeUtils.cleanTranscript("Hello world<|endoftext|>garbage after")
