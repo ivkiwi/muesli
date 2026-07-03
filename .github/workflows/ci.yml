@@ -122,7 +122,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Verify Sparkle update metadata
-        run: ./scripts/verify_update_flow.sh --skip-dmg
+        run: ./scripts/verify_update_flow.sh --skip-dmg --app-name Muesli
 
   # Gate job — always runs, always reports a status
   # This is the only required check in branch protection
