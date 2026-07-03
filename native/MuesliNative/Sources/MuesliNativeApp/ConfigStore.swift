@@ -173,6 +173,7 @@ final class ConfigStore {
 
         importValue("dark_mode", \.darkMode)
         importValue("enable_double_tap_dictation", \.enableDoubleTapDictation)
+        importValue("paste_shortcut", \.pasteShortcut)
         importValue("hotkey_trigger_threshold_ms", \.hotkeyTriggerThresholdMS)
         importValue("computer_use_hotkey_trigger_threshold_ms", \.computerUseHotkeyTriggerThresholdMS)
         importValue("meeting_recording_hotkey_trigger_threshold_ms", \.meetingRecordingHotkeyTriggerThresholdMS)

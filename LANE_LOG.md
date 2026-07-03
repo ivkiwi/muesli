@@ -43,3 +43,14 @@
   - `swift test --package-path native/MuesliNative --scratch-path /private/tmp/muesli-spm-lane-settings` - passed, 1215 tests / 131 suites.
   - `git diff --check` - passed.
 - Deviations: no auto-export config keys exist in this branch; no files outside this worktree changed.
+
+## 2026-07-03 16:09 +03 - PR206 configurable dictation paste shortcut
+
+- Status: complete.
+- Change: added `paste_shortcut` config with default `command_v`; dictation paste now uses the configured shortcut so users can select `⌘⇧V` for terminals/apps that remap `⌘V`.
+- Change: Settings > Dictation > Advanced exposes Paste shortcut; legacy Muesli settings import preserves the key for Guesli migration.
+- Tests:
+  - `swift test --package-path native/MuesliNative --scratch-path /private/tmp/muesli-spm-lane-settings --filter 'PasteControllerTests|AppConfigTests|ConfigStoreTests'` - passed, 45 tests.
+  - `swift test --package-path native/MuesliNative --scratch-path /private/tmp/muesli-spm-lane-settings` - passed, 1218 tests / 131 suites.
+  - `git diff --check` - passed.
+- Deviations: no push; no files outside this worktree changed.

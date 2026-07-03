@@ -165,6 +165,7 @@ struct ConfigStoreTests {
             """
             {
               "cohere_language": "fr",
+              "paste_shortcut": "command_shift_v",
               "enable_meeting_transcript_cleanup": true,
               "meeting_transcript_cleanup_provider": "chatgpt"
             }
@@ -176,6 +177,7 @@ struct ConfigStoreTests {
 
         #expect(loaded.cohereLanguageDictation == CohereTranscribeLanguage.french.rawValue)
         #expect(loaded.cohereLanguageMeetings == CohereTranscribeLanguage.french.rawValue)
+        #expect(loaded.pasteShortcut == .commandShiftV)
         #expect(loaded.enableMeetingTranscriptCleanup == true)
         #expect(loaded.meetingTranscriptCleanupProvider == MeetingTranscriptCleanupProviderOption.chatGPT.rawValue)
     }

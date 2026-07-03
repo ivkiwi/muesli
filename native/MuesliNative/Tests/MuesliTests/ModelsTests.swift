@@ -530,6 +530,7 @@ struct AppConfigTests {
         #expect(config.hotkeyTriggerThresholdMS == HotkeyTriggerTiming.defaultThresholdMilliseconds)
         #expect(config.computerUseHotkeyTriggerThresholdMS == HotkeyTriggerTiming.defaultThresholdMilliseconds)
         #expect(config.meetingRecordingHotkeyTriggerThresholdMS == HotkeyTriggerTiming.defaultMeetingThresholdMilliseconds)
+        #expect(config.pasteShortcut == .commandV)
         #expect(config.showFloatingIndicator == true)
         #expect(config.indicatorAnchor == .midTrailing)
         #expect(config.hasCompletedOnboarding == false)
@@ -579,6 +580,7 @@ struct AppConfigTests {
         config.enableComputerUsePlanner = false
         config.computerUsePlannerModel = "gpt-5.4"
         config.computerUseTimeoutSeconds = 180
+        config.pasteShortcut = .commandShiftV
         config.hotkeyTriggerThresholdMS = 125
         config.computerUseHotkeyTriggerThresholdMS = 350
         config.meetingRecordingHotkeyTriggerThresholdMS = 900
@@ -628,6 +630,7 @@ struct AppConfigTests {
         #expect(decoded.enableComputerUsePlanner == false)
         #expect(decoded.computerUsePlannerModel == "gpt-5.4")
         #expect(decoded.computerUseTimeoutSeconds == 180)
+        #expect(decoded.pasteShortcut == .commandShiftV)
         #expect(decoded.hotkeyTriggerThresholdMS == 125)
         #expect(decoded.computerUseHotkeyTriggerThresholdMS == 350)
         #expect(decoded.meetingRecordingHotkeyTriggerThresholdMS == 900)
@@ -668,6 +671,7 @@ struct AppConfigTests {
         #expect(json["cohere_language"] == nil)
         #expect(json["cohere_language_dictation"] != nil)
         #expect(json["cohere_language_meetings"] != nil)
+        #expect(json["paste_shortcut"] != nil)
         #expect(json["meeting_transcription_backend"] != nil)
         #expect(json["meeting_transcription_model"] != nil)
         #expect(json["indicator_anchor"] != nil)
@@ -708,6 +712,7 @@ struct AppConfigTests {
         #expect(config.showFloatingIndicator == true)
         #expect(config.resolvedCohereLanguageDictation == .english)
         #expect(config.resolvedCohereLanguageMeetings == .english)
+        #expect(config.pasteShortcut == .commandV)
         #expect(config.hasCompletedOnboarding == false)
         #expect(config.resolvedOnboardingUseCase == .dictation)
         #expect(config.defaultMeetingTemplateID == MeetingTemplates.autoID)

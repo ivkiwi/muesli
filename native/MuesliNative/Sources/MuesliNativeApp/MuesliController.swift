@@ -7177,7 +7177,7 @@ final class MuesliController: NSObject {
                     self.historyWindowController?.reload()
                     self.syncAppState()
                     if outputMode != .voiceNote {
-                        PasteController.paste(text: text)
+                        PasteController.paste(text: text, shortcut: self.config.pasteShortcut)
                         if self.config.enableDictionaryCorrectionPrompts {
                             // Dictionary correction prompts are an explicit opt-in
                             // screen-context feature: they briefly read focused app
