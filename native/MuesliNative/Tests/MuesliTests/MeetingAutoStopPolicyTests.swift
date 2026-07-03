@@ -138,8 +138,8 @@ struct MeetingAutoStopPolicyTests {
         #expect(source.hasObservedCandidate)
     }
 
-    @Test("manual start origin tracks signal loss for warning only")
-    func manualStartOriginTracksSignalLossForWarningOnly() {
+    @Test("manual start origin does not track meeting signal loss")
+    func manualStartOriginDoesNotTrackMeetingSignalLoss() {
         let explicitSource = MeetingAutoStopSource(candidate: googleMeetCandidate())
         let recentSource = MeetingAutoStopSource(candidate: teamsCandidate())
 
@@ -149,12 +149,12 @@ struct MeetingAutoStopPolicyTests {
         )
 
         #expect(!MeetingRecordingStartOrigin.manual.enablesMeetingAutoStop)
-        #expect(MeetingRecordingStartOrigin.manual.signalLossResponse == .warnOnly)
-        #expect(resolvedSource == explicitSource)
+        #expect(MeetingRecordingStartOrigin.manual.signalLossResponse == .none)
+        #expect(resolvedSource == nil)
         #expect(MeetingRecordingStartOrigin.manual.signalLossSource(
             explicitSource: nil,
             recentSource: recentSource
-        ) == recentSource)
+        ) == nil)
     }
 
     @Test("source-backed start origins can auto-stop after warning")

@@ -17,14 +17,19 @@ enum MeetingRecordingStartOrigin: Equatable {
     }
 
     var signalLossResponse: MeetingSignalLossResponse {
-        enablesMeetingAutoStop ? .autoStopAfterWarning : .warnOnly
+        enablesMeetingAutoStop ? .autoStopAfterWarning : .none
     }
 
     func signalLossSource(
         explicitSource: MeetingAutoStopSource?,
         recentSource: @autoclosure () -> MeetingAutoStopSource?
     ) -> MeetingAutoStopSource? {
-        return explicitSource ?? recentSource()
+        switch self {
+        case .manual:
+            return nil
+        case .detectedPrompt, .calendarAutoRecord, .scheduledMeetingPrompt, .joinAndRecord:
+            return explicitSource ?? recentSource()
+        }
     }
 }
 
