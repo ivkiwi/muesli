@@ -406,7 +406,11 @@ struct MeetingsNavigationTests {
             templateSnapshot: MeetingTemplates.auto.snapshot
         )
 
-        let persistenceResult = try controller.persistCompletedMeetingResult(result)
+        let preparedRecordingSave = await controller.prepareMeetingRecordingSave(for: result)
+        let persistenceResult = try controller.persistCompletedMeetingResult(
+            result,
+            preparedRecordingSave: preparedRecordingSave
+        )
 
         #expect(persistenceResult.recordingSaveError != nil)
         let storedMeeting = try store.meeting(id: persistenceResult.meetingID)
@@ -449,9 +453,13 @@ struct MeetingsNavigationTests {
             templateSnapshot: MeetingTemplates.auto.snapshot
         )
 
+        let preparedRecordingSave = await controller.prepareMeetingRecordingSave(
+            for: result,
+            saveDecision: false
+        )
         let persistenceResult = try controller.persistCompletedMeetingResult(
             result,
-            recordingSaveDecision: false
+            preparedRecordingSave: preparedRecordingSave
         )
 
         let storedMeeting = try store.meeting(id: persistenceResult.meetingID)
@@ -497,9 +505,13 @@ struct MeetingsNavigationTests {
             templateSnapshot: MeetingTemplates.auto.snapshot
         )
 
+        let preparedRecordingSave = await controller.prepareMeetingRecordingSave(
+            for: result,
+            saveDecision: true
+        )
         let persistenceResult = try controller.persistCompletedMeetingResult(
             result,
-            recordingSaveDecision: true
+            preparedRecordingSave: preparedRecordingSave
         )
 
         let storedMeeting = try #require(try store.meeting(id: persistenceResult.meetingID))
@@ -537,7 +549,11 @@ struct MeetingsNavigationTests {
             templateSnapshot: MeetingTemplates.auto.snapshot
         )
 
-        let persistenceResult = try controller.persistCompletedMeetingResult(result)
+        let preparedRecordingSave = await controller.prepareMeetingRecordingSave(for: result)
+        let persistenceResult = try controller.persistCompletedMeetingResult(
+            result,
+            preparedRecordingSave: preparedRecordingSave
+        )
 
         let storedMeeting = try #require(try store.meeting(id: persistenceResult.meetingID))
         #expect(storedMeeting.savedRecordingPath == nil)
@@ -573,9 +589,13 @@ struct MeetingsNavigationTests {
             templateSnapshot: MeetingTemplates.auto.snapshot
         )
 
+        let preparedRecordingSave = await controller.prepareMeetingRecordingSave(
+            for: result,
+            saveDecision: true
+        )
         let persistenceResult = try controller.persistCompletedMeetingResult(
             result,
-            recordingSaveDecision: true
+            preparedRecordingSave: preparedRecordingSave
         )
 
         let storedMeeting = try #require(try store.meeting(id: persistenceResult.meetingID))
@@ -614,7 +634,11 @@ struct MeetingsNavigationTests {
             templateSnapshot: MeetingTemplates.auto.snapshot
         )
 
-        _ = try controller.persistCompletedMeetingResult(result, existingMeetingID: liveID)
+        _ = try controller.persistCompletedMeetingResult(
+            result,
+            existingMeetingID: liveID,
+            preparedRecordingSave: .none
+        )
 
         let storedMeeting = try #require(try store.meeting(id: liveID))
         #expect(storedMeeting.title == "Investor Follow-up")
@@ -650,7 +674,11 @@ struct MeetingsNavigationTests {
             templateSnapshot: MeetingTemplates.auto.snapshot
         )
 
-        _ = try controller.persistCompletedMeetingResult(result, existingMeetingID: liveID)
+        _ = try controller.persistCompletedMeetingResult(
+            result,
+            existingMeetingID: liveID,
+            preparedRecordingSave: .none
+        )
 
         let storedMeeting = try #require(try store.meeting(id: liveID))
         #expect(storedMeeting.durationSeconds == 120)
@@ -687,7 +715,11 @@ struct MeetingsNavigationTests {
             templateSnapshot: MeetingTemplates.auto.snapshot
         )
 
-        _ = try controller.persistCompletedMeetingResult(result, existingMeetingID: liveID)
+        _ = try controller.persistCompletedMeetingResult(
+            result,
+            existingMeetingID: liveID,
+            preparedRecordingSave: .none
+        )
 
         let storedMeeting = try #require(try store.meeting(id: liveID))
         #expect(storedMeeting.title == "Status Bar Stop Title")

@@ -44,14 +44,14 @@ struct MeetingRecordingWriterTests {
     }
 
     @Test("persistTemporaryRecording moves the temp wav when WAV is selected")
-    func persistTemporaryRecordingMovesWAVFile() throws {
+    func persistTemporaryRecordingMovesWAVFile() async throws {
         let writer = try MeetingRecordingWriter()
         writer.appendSystem([1200, -800, 400])
         let tempURL = try #require(writer.stop())
         let supportDirectory = makeTemporaryDirectory()
         let startedAt = Date(timeIntervalSince1970: 1_711_000_000)
 
-        let savedURL = try MeetingRecordingWriter.persistTemporaryRecording(
+        let savedURL = try await MeetingRecordingWriter.persistTemporaryRecordingAsync(
             from: tempURL,
             meetingTitle: "Weekly Product Sync! With Very Long Title Extra Words",
             startedAt: startedAt,

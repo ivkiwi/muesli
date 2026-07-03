@@ -113,41 +113,6 @@ final class MeetingRecordingWriter {
         }
     }
 
-    static func persistTemporaryRecording(
-        from tempURL: URL,
-        meetingTitle: String,
-        startedAt: Date,
-        supportDirectory: URL,
-        fileFormat: MeetingRecordingFileFormat = .m4a
-    ) throws -> URL {
-        let recordingsDirectory = supportDirectory
-            .appendingPathComponent("meeting-recordings", isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: recordingsDirectory,
-            withIntermediateDirectories: true
-        )
-
-        let destinationURL = recordingsDirectory.appendingPathComponent(
-            "\(fileNamePrefix(for: startedAt, title: meetingTitle)).\(fileFormat.fileExtension)"
-        )
-        if FileManager.default.fileExists(atPath: destinationURL.path) {
-            try FileManager.default.removeItem(at: destinationURL)
-        }
-        switch fileFormat {
-        case .m4a:
-            do {
-                try transcodeWAVToM4A(sourceURL: tempURL, destinationURL: destinationURL)
-                try FileManager.default.removeItem(at: tempURL)
-            } catch {
-                try? FileManager.default.removeItem(at: destinationURL)
-                throw error
-            }
-        case .wav:
-            try FileManager.default.moveItem(at: tempURL, to: destinationURL)
-        }
-        return destinationURL
-    }
-
     static func persistTemporaryRecordingAsync(
         from tempURL: URL,
         meetingTitle: String,
@@ -247,37 +212,6 @@ final class MeetingRecordingWriter {
         }
 
         return output
-    }
-
-    private static func transcodeWAVToM4A(sourceURL: URL, destinationURL: URL) throws {
-        let asset = AVURLAsset(url: sourceURL)
-        guard let exportSession = AVAssetExportSession(
-            asset: asset,
-            presetName: AVAssetExportPresetAppleM4A
-        ) else {
-            throw NSError(
-                domain: "MeetingRecordingWriter",
-                code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "Could not create M4A export session for meeting recording."]
-            )
-        }
-
-        exportSession.outputURL = destinationURL
-        exportSession.outputFileType = .m4a
-
-        let semaphore = DispatchSemaphore(value: 0)
-        exportSession.exportAsynchronously {
-            semaphore.signal()
-        }
-        semaphore.wait()
-
-        guard exportSession.status == .completed else {
-            throw exportSession.error ?? NSError(
-                domain: "MeetingRecordingWriter",
-                code: 3,
-                userInfo: [NSLocalizedDescriptionKey: "Could not export meeting recording as M4A."]
-            )
-        }
     }
 
     private static func transcodeWAVToM4AAsync(sourceURL: URL, destinationURL: URL) async throws {
