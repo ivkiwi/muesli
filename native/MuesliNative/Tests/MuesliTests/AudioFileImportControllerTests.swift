@@ -5,6 +5,20 @@ import FluidAudio
 import MuesliCore
 @testable import MuesliNativeApp
 
+private struct ImportStaticMeetingTranscriptCleaner: MeetingTranscriptCleaning {
+    let output: String
+
+    func cleanupMeetingTranscript(_ transcript: String, config: AppConfig) async throws -> String {
+        output
+    }
+}
+
+private struct ImportThrowingMeetingTranscriptCleaner: MeetingTranscriptCleaning {
+    func cleanupMeetingTranscript(_ transcript: String, config: AppConfig) async throws -> String {
+        throw NSError(domain: "AudioFileImportControllerTests", code: 1)
+    }
+}
+
 @Suite("AudioFileImportController")
 struct AudioFileImportControllerTests {
 
@@ -94,6 +108,42 @@ struct AudioFileImportControllerTests {
         #expect(AudioFileImportController.isSupportedFileURL(URL(fileURLWithPath: "/tmp/test.wav")))
         #expect(AudioFileImportController.isSupportedFileURL(URL(fileURLWithPath: "/tmp/test.MP3")))
         #expect(!AudioFileImportController.isSupportedFileURL(URL(fileURLWithPath: "/tmp/test.txt")))
+    }
+
+    // MARK: - Transcript Cleanup Tests
+
+    @Test("import transcript cleanup preserves original when cleanup changes text")
+    func importTranscriptCleanupPreservesOriginal() async {
+        var config = AppConfig()
+        config.enableMeetingTranscriptCleanup = true
+        config.meetingTranscriptCleanupProvider = MeetingTranscriptCleanupProviderOption.chatGPT.rawValue
+
+        let result = await AudioFileImportController.cleanImportedTranscriptIfNeeded(
+            "[00:00:01] Speaker 1: um hello hello",
+            config: config,
+            isChatGPTAuthenticated: true,
+            cleaner: ImportStaticMeetingTranscriptCleaner(output: "[00:00:01] Speaker 1: Hello.")
+        )
+
+        #expect(result.transcript == "[00:00:01] Speaker 1: Hello.")
+        #expect(result.originalTranscript == "[00:00:01] Speaker 1: um hello hello")
+    }
+
+    @Test("import transcript cleanup falls back to raw transcript on error")
+    func importTranscriptCleanupFallsBackOnError() async {
+        var config = AppConfig()
+        config.enableMeetingTranscriptCleanup = true
+        config.meetingTranscriptCleanupProvider = MeetingTranscriptCleanupProviderOption.chatGPT.rawValue
+
+        let result = await AudioFileImportController.cleanImportedTranscriptIfNeeded(
+            "[00:00:01] Speaker 1: raw words",
+            config: config,
+            isChatGPTAuthenticated: true,
+            cleaner: ImportThrowingMeetingTranscriptCleaner()
+        )
+
+        #expect(result.transcript == "[00:00:01] Speaker 1: raw words")
+        #expect(result.originalTranscript == nil)
     }
 
     // MARK: - Speaker Formatting Tests

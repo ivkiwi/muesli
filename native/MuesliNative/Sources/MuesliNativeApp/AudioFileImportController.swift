@@ -223,10 +223,23 @@ enum AudioFileImportController {
 
         try Task.checkCancellation()
 
-        let wordCount = DictationStore.countWords(in: diarizedTranscript)
+        progress("Cleaning transcript...")
+        let isChatGPTAuthenticated = await MainActor.run {
+            ChatGPTAuthManager.shared.isAuthenticated
+        }
+        let cleanupResult = await cleanImportedTranscriptIfNeeded(
+            diarizedTranscript,
+            config: config,
+            isChatGPTAuthenticated: isChatGPTAuthenticated
+        )
+        let finalTranscript = cleanupResult.transcript
+
+        try Task.checkCancellation()
+
+        let wordCount = DictationStore.countWords(in: finalTranscript)
         let generatedTitle: String
         progress("Generating title...")
-        if let autoTitle = await MeetingSummaryClient.generateTitle(transcript: diarizedTranscript, config: config),
+        if let autoTitle = await MeetingSummaryClient.generateTitle(transcript: finalTranscript, config: config),
            !autoTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             generatedTitle = autoTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         } else {
@@ -240,7 +253,7 @@ enum AudioFileImportController {
         let formattedNotes: String
         do {
             formattedNotes = try await MeetingSummaryClient.summarize(
-                transcript: diarizedTranscript,
+                transcript: finalTranscript,
                 meetingTitle: generatedTitle,
                 config: config,
                 template: templateSnapshot,
@@ -250,7 +263,7 @@ enum AudioFileImportController {
         } catch {
             fputs("[import] summary generation failed: \(error)\n", stderr)
             formattedNotes = MeetingSummaryClient.summaryFailureNotes(
-                transcript: diarizedTranscript,
+                transcript: finalTranscript,
                 meetingTitle: generatedTitle,
                 error: error,
                 manualNotes: ""
@@ -274,7 +287,8 @@ enum AudioFileImportController {
             calendarEventID: nil,
             startTime: startTime,
             endTime: now,
-            rawTranscript: diarizedTranscript,
+            rawTranscript: finalTranscript,
+            rawOriginalTranscript: cleanupResult.originalTranscript,
             formattedNotes: formattedNotes,
             micAudioPath: nil,
             systemAudioPath: nil,
@@ -288,7 +302,7 @@ enum AudioFileImportController {
         return ImportResult(
             meetingID: meetingID,
             title: generatedTitle,
-            rawTranscript: diarizedTranscript,
+            rawTranscript: finalTranscript,
             formattedNotes: formattedNotes,
             durationSeconds: duration,
             wordCount: wordCount
@@ -296,6 +310,20 @@ enum AudioFileImportController {
     }
 
     // MARK: - Helpers
+
+    static func cleanImportedTranscriptIfNeeded(
+        _ transcript: String,
+        config: AppConfig,
+        isChatGPTAuthenticated: Bool,
+        cleaner: MeetingTranscriptCleaning = ChatGPTMeetingTranscriptCleaner()
+    ) async -> MeetingTranscriptCleanupResult {
+        await MeetingTranscriptCleanupPipeline.cleanIfNeeded(
+            transcript: transcript,
+            config: config,
+            isChatGPTAuthenticated: isChatGPTAuthenticated,
+            cleaner: cleaner
+        )
+    }
 
     private static func temporaryWAVURL() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
