@@ -38,3 +38,13 @@
 - Full suite: `swift test --package-path native/MuesliNative --scratch-path /private/tmp/muesli-spm-lane-controller` passed, 1215 tests; no PasteController/StreamingVadController flake rerun needed.
 - Hygiene: `git diff --check` passed.
 - Intended commit subject: `Clean up stale waveform cache files`.
+
+## 2026-07-03 - PR #228 selectable dictation text
+
+- Branch/worktree: `codex/lane-controller` in `/Users/kiwi/Projects/muesli-lane-controller`.
+- What changed: adopted upstream PR #228 in `DictationRowView`; dictation text is selectable, and row-level tap-to-copy/expand was removed so selection gestures are not intercepted.
+- Fork reconciliation: no Guesli-specific rename needed; `SettingsView.swift` and `ConfigStore.swift` untouched.
+- Targeted tests: `swift test --package-path native/MuesliNative --scratch-path /private/tmp/muesli-spm-lane-controller --list-tests | rg -i "DictationRowView|DictationsView|SearchResultsView|View"` found no row/view UI tests; `swift test --package-path native/MuesliNative --scratch-path /private/tmp/muesli-spm-lane-controller --filter Dictation` passed, 220 tests.
+- Full suite: `swift test --package-path native/MuesliNative --scratch-path /private/tmp/muesli-spm-lane-controller` passed, 1215 tests; no PasteController/StreamingVadController flake rerun needed.
+- Hygiene: `git diff --check` passed.
+- Intended commit subject: `Enable dictation text selection`.
