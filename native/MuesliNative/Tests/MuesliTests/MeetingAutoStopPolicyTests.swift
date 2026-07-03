@@ -151,6 +151,10 @@ struct MeetingAutoStopPolicyTests {
         #expect(!MeetingRecordingStartOrigin.manual.enablesMeetingAutoStop)
         #expect(MeetingRecordingStartOrigin.manual.signalLossResponse == .warnOnly)
         #expect(resolvedSource == explicitSource)
+        #expect(MeetingRecordingStartOrigin.manual.signalLossSource(
+            explicitSource: nil,
+            recentSource: recentSource
+        ) == recentSource)
     }
 
     @Test("source-backed start origins can auto-stop after warning")
