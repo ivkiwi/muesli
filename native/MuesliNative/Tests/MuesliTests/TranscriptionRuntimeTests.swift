@@ -198,6 +198,47 @@ struct CohereTranscribeUtilsTests {
     }
 }
 
+@Suite("GigaAMV3FileChunking")
+struct GigaAMV3FileChunkingTests {
+
+    @Test("short files use one passthrough window")
+    func shortFilesUseOnePassthroughWindow() {
+        let sampleCount = 25 * GigaAMV3FileChunking.sampleRate
+        #expect(GigaAMV3FileChunking.windows(sampleCount: sampleCount) == [0..<sampleCount])
+        #expect(!GigaAMV3FileChunking.shouldChunk(sampleCount: sampleCount))
+    }
+
+    @Test("long files use 20 second windows with 2 second overlap")
+    func longFilesUseOverlappingWindows() {
+        let sampleRate = GigaAMV3FileChunking.sampleRate
+        let sampleCount = 61 * sampleRate
+        let windows = GigaAMV3FileChunking.windows(sampleCount: sampleCount)
+
+        #expect(windows == [
+            0..<(20 * sampleRate),
+            (18 * sampleRate)..<(38 * sampleRate),
+            (36 * sampleRate)..<(56 * sampleRate),
+            (54 * sampleRate)..<(61 * sampleRate),
+        ])
+    }
+
+    @Test("empty audio produces no windows")
+    func emptyAudioProducesNoWindows() {
+        #expect(GigaAMV3FileChunking.windows(sampleCount: 0).isEmpty)
+    }
+
+    @Test("merge deduplicates overlap")
+    func mergeDeduplicatesOverlap() {
+        let result = GigaAMV3FileChunking.mergeTranscripts([
+            "alpha beta gamma delta epsilon",
+            "gamma delta epsilon zeta eta",
+            "zeta eta theta iota",
+        ])
+
+        #expect(result == "alpha beta gamma delta epsilon zeta eta theta iota")
+    }
+}
+
 @Suite("TranscriptionEngineArtifactsFilter")
 struct TranscriptionEngineArtifactsFilterTests {
 

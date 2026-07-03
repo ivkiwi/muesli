@@ -1,10 +1,84 @@
+import AVFoundation
 import Foundation
 import GigaAMKit
+@preconcurrency import MLX
 
 struct GigaAMV3TranscriptionResult: Sendable {
     let text: String
     let duration: TimeInterval
     let processingTime: TimeInterval
+}
+
+enum GigaAMV3FileChunking {
+    static let sampleRate = 16_000
+    static let passthroughThresholdSeconds: TimeInterval = 25
+    static let windowSeconds: TimeInterval = 20
+    static let overlapSeconds: TimeInterval = 2
+
+    static func windows(sampleCount: Int, sampleRate: Int = sampleRate) -> [Range<Int>] {
+        guard sampleCount > 0 else { return [] }
+        guard shouldChunk(sampleCount: sampleCount, sampleRate: sampleRate) else {
+            return [0..<sampleCount]
+        }
+
+        let windowSamples = max(1, Int((windowSeconds * Double(sampleRate)).rounded()))
+        let overlapSamples = min(Int((overlapSeconds * Double(sampleRate)).rounded()), windowSamples - 1)
+        let stepSamples = windowSamples - overlapSamples
+        var result: [Range<Int>] = []
+        var start = 0
+
+        while start < sampleCount {
+            let end = min(start + windowSamples, sampleCount)
+            result.append(start..<end)
+            if end == sampleCount {
+                break
+            }
+            start += stepSamples
+        }
+
+        return result
+    }
+
+    static func shouldChunk(sampleCount: Int, sampleRate: Int = sampleRate) -> Bool {
+        Double(sampleCount) / Double(sampleRate) > passthroughThresholdSeconds
+    }
+
+    static func mergeTranscripts(_ transcripts: [String]) -> String {
+        var chunks = transcripts
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard var merged = chunks.first?.split(separator: " ").map(String.init) else {
+            return ""
+        }
+        chunks.removeFirst()
+
+        for chunk in chunks {
+            let words = chunk.split(separator: " ").map(String.init)
+            let overlap = suffixPrefixOverlap(merged, words)
+            merged.append(contentsOf: words.dropFirst(overlap))
+        }
+
+        return merged.joined(separator: " ")
+    }
+
+    private static func suffixPrefixOverlap(_ left: [String], _ right: [String]) -> Int {
+        let limit = min(40, left.count, right.count)
+        guard limit >= 2 else { return 0 }
+
+        for count in stride(from: limit, through: 2, by: -1) {
+            let leftSuffix = left.suffix(count).map(normalizedWord)
+            let rightPrefix = right.prefix(count).map(normalizedWord)
+            if !leftSuffix.contains(""), leftSuffix == rightPrefix {
+                return count
+            }
+        }
+
+        return 0
+    }
+
+    private static func normalizedWord(_ word: String) -> String {
+        word.lowercased().filter { $0.isLetter || $0.isNumber }
+    }
 }
 
 enum GigaAMV3ModelStore {
@@ -273,7 +347,9 @@ actor GigaAMV3Transcriber {
                 ])
             }
             activeDownloadTask = nil
-            let loadedRecognizer = try GigaAMRecognizer(configuration: .init(modelDirectory: directory))
+            let loadedRecognizer = try Self.withMLXErrors {
+                try GigaAMRecognizer(configuration: .init(modelDirectory: directory))
+            }
             guard generation == loadGeneration else {
                 throw NSError(domain: "GigaAMV3Transcriber", code: 3, userInfo: [
                     NSLocalizedDescriptionKey: "GigaAM v3 load was cancelled.",
@@ -304,12 +380,48 @@ actor GigaAMV3Transcriber {
         }
 
         let start = CFAbsoluteTimeGetCurrent()
-        let result = try await recognizer.transcribe(url: wavURL)
-        return GigaAMV3TranscriptionResult(
-            text: result.text,
-            duration: result.duration ?? 0,
-            processingTime: CFAbsoluteTimeGetCurrent() - start
-        )
+        do {
+            let duration = try Self.audioDuration(url: wavURL)
+            if duration <= GigaAMV3FileChunking.passthroughThresholdSeconds {
+                let result = try await Self.withMLXErrors {
+                    try await recognizer.transcribe(url: wavURL)
+                }
+                return GigaAMV3TranscriptionResult(
+                    text: result.text,
+                    duration: result.duration ?? duration,
+                    processingTime: CFAbsoluteTimeGetCurrent() - start
+                )
+            }
+
+            let audio = try AudioLoader.loadMonoFloat32(
+                url: wavURL,
+                targetSampleRate: GigaAMV3FileChunking.sampleRate
+            )
+            let windows = GigaAMV3FileChunking.windows(sampleCount: audio.samples.count, sampleRate: audio.sampleRate)
+            fputs("[muesli-native] GigaAM v3 chunked transcription: \(windows.count) windows, \(String(format: "%.1f", duration))s\n", stderr)
+
+            var transcripts: [String] = []
+            transcripts.reserveCapacity(windows.count)
+            for window in windows {
+                try Task.checkCancellation()
+                let samples = Array(audio.samples[window])
+                let result = try await Self.withMLXErrors {
+                    try await recognizer.transcribe(samples: samples, sampleRate: audio.sampleRate)
+                }
+                let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty {
+                    transcripts.append(text)
+                }
+            }
+
+            return GigaAMV3TranscriptionResult(
+                text: GigaAMV3FileChunking.mergeTranscripts(transcripts),
+                duration: Double(audio.samples.count) / Double(audio.sampleRate),
+                processingTime: CFAbsoluteTimeGetCurrent() - start
+            )
+        } catch {
+            throw Self.readableTranscriptionError(error)
+        }
     }
 
     func shutdown() {
@@ -333,5 +445,48 @@ actor GigaAMV3Transcriber {
                 waiter.resume()
             }
         }
+    }
+
+    private nonisolated static func audioDuration(url: URL) throws -> TimeInterval {
+        let file = try AVAudioFile(forReading: url)
+        let sampleRate = file.fileFormat.sampleRate
+        guard sampleRate > 0 else {
+            throw NSError(domain: "GigaAMV3Transcriber", code: 6, userInfo: [
+                NSLocalizedDescriptionKey: "GigaAM v3 could not read audio duration.",
+            ])
+        }
+        return Double(file.length) / sampleRate
+    }
+
+    private nonisolated static func withMLXErrors<T>(_ operation: () throws -> T) throws -> T {
+        do {
+            return try withError {
+                try operation()
+            }
+        } catch {
+            throw readableTranscriptionError(error)
+        }
+    }
+
+    private nonisolated static func withMLXErrors<T>(_ operation: () async throws -> T) async throws -> T {
+        do {
+            return try await withError {
+                try await operation()
+            }
+        } catch {
+            throw readableTranscriptionError(error)
+        }
+    }
+
+    private nonisolated static func readableTranscriptionError(_ error: Error) -> Error {
+        let nsError = error as NSError
+        if nsError.domain == "GigaAMV3Transcriber" {
+            return error
+        }
+
+        return NSError(domain: "GigaAMV3Transcriber", code: 5, userInfo: [
+            NSLocalizedDescriptionKey: "GigaAM v3 transcription failed: \(error.localizedDescription)",
+            NSUnderlyingErrorKey: error,
+        ])
     }
 }
