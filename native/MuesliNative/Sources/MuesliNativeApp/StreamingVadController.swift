@@ -62,6 +62,14 @@ final class StreamingVadController: @unchecked Sendable {
         self.processStreamChunk = processStreamChunk
     }
 
+    var configuredMinChunkDurationForTesting: TimeInterval {
+        minChunkDuration
+    }
+
+    var configuredMaxChunkDurationForTesting: TimeInterval {
+        maxChunkDuration
+    }
+
     func start() {
         let startGeneration = lock.withLock { state -> Int? in
             guard !state.isActive else { return nil }
