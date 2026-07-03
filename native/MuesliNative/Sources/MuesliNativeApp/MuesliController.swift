@@ -147,6 +147,63 @@ struct CompletedMeetingPersistenceResult {
     let recordingSaveError: MeetingLifecycleError?
 }
 
+enum LiveTranscriptCheckpointAssembler {
+    static func entries(
+        segments: [SpeechSegment],
+        speaker: String,
+        meetingID: Int64,
+        liveTranscriptStart: Date,
+        shouldDeduplicate: Bool,
+        overlapByMeetingSpeaker: inout [String: String]
+    ) -> [LiveTranscriptCheckpointEntry] {
+        let calendar = Calendar(identifier: .gregorian)
+        let rawEntries = segments.compactMap { segment -> LiveTranscriptCheckpointEntry? in
+            let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return nil }
+            let timestampDate = liveTranscriptStart.addingTimeInterval(segment.start)
+            let components = calendar.dateComponents([.hour, .minute, .second], from: timestampDate)
+            let timestamp = String(
+                format: "%02d:%02d:%02d",
+                components.hour ?? 0,
+                components.minute ?? 0,
+                components.second ?? 0
+            )
+            return LiveTranscriptCheckpointEntry(
+                timestampLabel: timestamp,
+                speaker: speaker,
+                startSeconds: segment.start,
+                endSeconds: segment.end,
+                text: text
+            )
+        }
+
+        return rawEntries.compactMap { entry -> LiveTranscriptCheckpointEntry? in
+            guard shouldDeduplicate else { return entry }
+            let key = "\(meetingID)|\(entry.speaker)"
+            let previous = overlapByMeetingSpeaker[key] ?? ""
+            let addition = TranscriptOverlapMerger
+                .uniqueAddition(previous: previous, next: entry.text)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            overlapByMeetingSpeaker[key] = TranscriptOverlapMerger
+                .merge([previous, entry.text])
+            guard !addition.isEmpty else { return nil }
+            return LiveTranscriptCheckpointEntry(
+                timestampLabel: entry.timestampLabel,
+                speaker: entry.speaker,
+                startSeconds: entry.startSeconds,
+                endSeconds: entry.endSeconds,
+                text: addition
+            )
+        }
+    }
+
+    static func renderedText(from entries: [LiveTranscriptCheckpointEntry]) -> String {
+        entries
+            .map { "[\($0.timestampLabel)] \($0.speaker): \($0.text)" }
+            .joined(separator: "\n")
+    }
+}
+
 struct MeetingRecordingSaveRequest: Sendable {
     let tempURL: URL
     let meetingTitle: String
@@ -1006,7 +1063,7 @@ final class MuesliController: NSObject {
         appState.searchResultMeetings = []
     }
 
-    private static func availableMeetingTranscriptionBackend(
+    nonisolated static func availableMeetingTranscriptionBackend(
         config: AppConfig,
         dictationBackend: BackendOption,
         downloadedOptions: [BackendOption] = BackendOption.downloaded
@@ -4692,54 +4749,21 @@ final class MuesliController: NSObject {
                         guard let self else { return }
                         guard self.appState.liveMeetingTranscriptOwnerID == meetingID else { return }
                         let liveTranscriptStart = meetingSession?.startTime ?? Date()
-                        let liveTranscriptCalendar = Calendar(identifier: .gregorian)
-                        let rawEntries = segments.compactMap { segment -> LiveTranscriptCheckpointEntry? in
-                            let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                            guard !text.isEmpty else { return nil }
-                            let timestampDate = liveTranscriptStart.addingTimeInterval(segment.start)
-                            let components = liveTranscriptCalendar.dateComponents([.hour, .minute, .second], from: timestampDate)
-                            let timestamp = String(
-                                format: "%02d:%02d:%02d",
-                                components.hour ?? 0,
-                                components.minute ?? 0,
-                                components.second ?? 0
-                            )
-                            return LiveTranscriptCheckpointEntry(
-                                timestampLabel: timestamp,
-                                speaker: speaker,
-                                startSeconds: segment.start,
-                                endSeconds: segment.end,
-                                text: text
-                            )
-                        }
-                        let entries = rawEntries.compactMap { entry -> LiveTranscriptCheckpointEntry? in
-                            guard shouldDeduplicateLiveTranscript else { return entry }
-                            let key = "\(meetingID)|\(entry.speaker)"
-                            let previous = self.liveTranscriptOverlapByMeetingSpeaker[key] ?? ""
-                            let addition = TranscriptOverlapMerger
-                                .uniqueAddition(previous: previous, next: entry.text)
-                                .trimmingCharacters(in: .whitespacesAndNewlines)
-                            self.liveTranscriptOverlapByMeetingSpeaker[key] = TranscriptOverlapMerger
-                                .merge([previous, entry.text])
-                            guard !addition.isEmpty else { return nil }
-                            return LiveTranscriptCheckpointEntry(
-                                timestampLabel: entry.timestampLabel,
-                                speaker: entry.speaker,
-                                startSeconds: entry.startSeconds,
-                                endSeconds: entry.endSeconds,
-                                text: addition
-                            )
-                        }
+                        let entries = LiveTranscriptCheckpointAssembler.entries(
+                            segments: segments,
+                            speaker: speaker,
+                            meetingID: meetingID,
+                            liveTranscriptStart: liveTranscriptStart,
+                            shouldDeduplicate: shouldDeduplicateLiveTranscript,
+                            overlapByMeetingSpeaker: &self.liveTranscriptOverlapByMeetingSpeaker
+                        )
                         guard !entries.isEmpty else { return }
                         do {
                             try self.dictationStore.appendLiveTranscriptCheckpoints(meetingID: meetingID, entries: entries)
                         } catch {
                             fputs("[muesli-native] failed to checkpoint live transcript for meeting \(meetingID): \(error)\n", stderr)
                         }
-                        // Live view is arrival-order closed captions. Recovery reads checkpoints sorted
-                        // by segment timestamps, so the durable fallback stays temporally ordered.
-                        let lines = entries.map { "[\($0.timestampLabel)] \($0.speaker): \($0.text)" }
-                        self.appState.liveMeetingTranscript += lines.joined(separator: "\n") + "\n"
+                        self.appState.liveMeetingTranscript += LiveTranscriptCheckpointAssembler.renderedText(from: entries) + "\n"
                     }
                 }
                 appState.liveMeetingTranscriptOwnerID = meetingID
