@@ -36,7 +36,7 @@ final class MeetingMarkdownAutoExporter: MeetingMarkdownAutoExporting {
     func exportIfConfigured(meeting: MeetingRecord, config: AppConfig) {
         guard config.autoExportMarkdownEnabled else { return }
         Task.detached(priority: .utility) { [self] in
-            performExport(meeting: meeting, config: config)
+            await performExport(meeting: meeting, config: config)
         }
     }
 
@@ -51,7 +51,7 @@ final class MeetingMarkdownAutoExporter: MeetingMarkdownAutoExporting {
     /// Builds the export payloads and writes them to disk. Returns the written URLs on
     /// success (exposed for testing); logs and returns nil on any failure.
     @discardableResult
-    func performExport(meeting: MeetingRecord, config: AppConfig) -> [URL]? {
+    func performExport(meeting: MeetingRecord, config: AppConfig) async -> [URL]? {
         let trimmedFolder = config.autoExportMarkdownFolderPath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedFolder.isEmpty else {
             writeLog("skipped: auto-export enabled but no destination folder configured")
@@ -86,7 +86,7 @@ final class MeetingMarkdownAutoExporter: MeetingMarkdownAutoExporting {
 
         if fileFormat.includesPDF {
             do {
-                let destinationURL = try writePDF(markdown, in: folderURL, meeting: meeting, content: content)
+                let destinationURL = try await writePDF(markdown, in: folderURL, meeting: meeting, content: content)
                 writtenURLs.append(destinationURL)
             } catch {
                 writeLog("export failed: id=\(meeting.id) format=pdf error=\(error.localizedDescription)")
@@ -138,24 +138,16 @@ final class MeetingMarkdownAutoExporter: MeetingMarkdownAutoExporting {
         in folder: URL,
         meeting: MeetingRecord,
         content: MeetingExportContent
-    ) throws -> URL {
-        let attributed = MeetingExporter.buildAttributedString(from: markdown)
-        return try writeReservedFile(
+    ) async throws -> URL {
+        return try await writeReservedFile(
             in: folder,
             meeting: meeting,
             content: content,
             fileExtension: "pdf"
         ) { url in
-            if Thread.isMainThread {
+            try await MainActor.run {
+                let attributed = MeetingExporter.buildAttributedString(from: markdown)
                 try MeetingExporter.writePDF(attributed: attributed, to: url)
-            } else {
-                var result: Result<Void, Error> = .success(())
-                DispatchQueue.main.sync {
-                    result = Result(catching: {
-                        try MeetingExporter.writePDF(attributed: attributed, to: url)
-                    })
-                }
-                try result.get()
             }
         }
     }
@@ -165,29 +157,29 @@ final class MeetingMarkdownAutoExporter: MeetingMarkdownAutoExporting {
         meeting: MeetingRecord,
         content: MeetingExportContent,
         fileExtension: String,
-        writer: (URL) throws -> Void
-    ) throws -> URL {
+        writer: (URL) async throws -> Void
+    ) async throws -> URL {
         let baseName = baseFilename(meeting: meeting, content: content, fileExtension: fileExtension)
         let firstCandidate = folder.appendingPathComponent("\(baseName).\(fileExtension)")
-        if try write(toReservedFileAt: firstCandidate, writer: writer) {
+        if try await write(toReservedFileAt: firstCandidate, writer: writer) {
             return firstCandidate
         }
 
         for index in 2...Self.maxCollisionAttempts {
             let candidate = folder.appendingPathComponent("\(baseName)-\(index).\(fileExtension)")
-            if try write(toReservedFileAt: candidate, writer: writer) {
+            if try await write(toReservedFileAt: candidate, writer: writer) {
                 return candidate
             }
         }
 
         let fallback = folder.appendingPathComponent("\(baseName)-\(UUID().uuidString).\(fileExtension)")
-        guard try write(toReservedFileAt: fallback, writer: writer) else {
+        guard try await write(toReservedFileAt: fallback, writer: writer) else {
             throw CocoaError(.fileWriteFileExists)
         }
         return fallback
     }
 
-    private func write(toReservedFileAt url: URL, writer: (URL) throws -> Void) throws -> Bool {
+    private func write(toReservedFileAt url: URL, writer: (URL) async throws -> Void) async throws -> Bool {
         let descriptor = open(url.path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
         guard descriptor >= 0 else {
             if errno == EEXIST { return false }
@@ -196,7 +188,7 @@ final class MeetingMarkdownAutoExporter: MeetingMarkdownAutoExporting {
         close(descriptor)
 
         do {
-            try writer(url)
+            try await writer(url)
             return true
         } catch {
             try? fileManager.removeItem(at: url)

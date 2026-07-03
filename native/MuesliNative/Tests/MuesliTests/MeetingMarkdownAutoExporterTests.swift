@@ -22,14 +22,14 @@ struct MeetingMarkdownAutoExporterTests {
     }
 
     @Test("empty folder path logs skipped and writes nothing")
-    func emptyFolderLogsSkipped() throws {
+    func emptyFolderLogsSkipped() async throws {
         let support = makeTemporaryDirectory()
         let exporter = MeetingMarkdownAutoExporter(supportDirectory: support)
         var config = AppConfig()
         config.autoExportMarkdownEnabled = true
         config.autoExportMarkdownFolderPath = "   "
 
-        let result = exporter.performExport(meeting: makeMeeting(), config: config)
+        let result = await exporter.performExport(meeting: makeMeeting(), config: config)
         exporter.waitForPendingLogWrites()
 
         #expect(result == nil)
@@ -38,14 +38,14 @@ struct MeetingMarkdownAutoExporterTests {
     }
 
     @Test("relative folder path is rejected")
-    func relativePathRejected() throws {
+    func relativePathRejected() async throws {
         let support = makeTemporaryDirectory()
         let exporter = MeetingMarkdownAutoExporter(supportDirectory: support)
         var config = AppConfig()
         config.autoExportMarkdownEnabled = true
         config.autoExportMarkdownFolderPath = "relative/notes"
 
-        let result = exporter.performExport(meeting: makeMeeting(), config: config)
+        let result = await exporter.performExport(meeting: makeMeeting(), config: config)
         exporter.waitForPendingLogWrites()
 
         #expect(result == nil)
@@ -54,7 +54,7 @@ struct MeetingMarkdownAutoExporterTests {
     }
 
     @Test("writes notes markdown file to destination folder")
-    func writesNotesFile() throws {
+    func writesNotesFile() async throws {
         let support = makeTemporaryDirectory()
         let destination = makeTemporaryDirectory()
         let exporter = MeetingMarkdownAutoExporter(supportDirectory: support)
@@ -62,7 +62,7 @@ struct MeetingMarkdownAutoExporterTests {
         config.autoExportMarkdownEnabled = true
         config.autoExportMarkdownFolderPath = destination.path
 
-        let url = exporter.performExport(meeting: makeMeeting(), config: config)?.first
+        let url = await exporter.performExport(meeting: makeMeeting(), config: config)?.first
 
         let written = try #require(url)
         #expect(written.pathExtension == "md")
@@ -73,7 +73,7 @@ struct MeetingMarkdownAutoExporterTests {
     }
 
     @Test("filename includes date prefix and -notes suffix")
-    func filenameHasDatePrefix() throws {
+    func filenameHasDatePrefix() async throws {
         let support = makeTemporaryDirectory()
         let destination = makeTemporaryDirectory()
         let exporter = MeetingMarkdownAutoExporter(supportDirectory: support)
@@ -81,13 +81,13 @@ struct MeetingMarkdownAutoExporterTests {
         config.autoExportMarkdownEnabled = true
         config.autoExportMarkdownFolderPath = destination.path
 
-        let url = try #require(exporter.performExport(meeting: makeMeeting(), config: config)?.first)
+        let url = try #require(await exporter.performExport(meeting: makeMeeting(), config: config)?.first)
 
         #expect(url.lastPathComponent == "2026-04-14-weekly-standup-notes.md")
     }
 
     @Test("transcript content option exports raw transcript")
-    func transcriptContentOption() throws {
+    func transcriptContentOption() async throws {
         let support = makeTemporaryDirectory()
         let destination = makeTemporaryDirectory()
         let exporter = MeetingMarkdownAutoExporter(supportDirectory: support)
@@ -96,7 +96,7 @@ struct MeetingMarkdownAutoExporterTests {
         config.autoExportMarkdownFolderPath = destination.path
         config.autoExportMarkdownContent = MeetingExportContent.transcript.rawValue
 
-        let url = try #require(exporter.performExport(meeting: makeMeeting(), config: config)?.first)
+        let url = try #require(await exporter.performExport(meeting: makeMeeting(), config: config)?.first)
 
         #expect(url.lastPathComponent.hasSuffix("-transcript.md"))
         let contents = try String(contentsOf: url, encoding: .utf8)
@@ -105,7 +105,7 @@ struct MeetingMarkdownAutoExporterTests {
     }
 
     @Test("repeated exports do not overwrite, append numeric suffix")
-    func collisionAppendsSuffix() throws {
+    func collisionAppendsSuffix() async throws {
         let support = makeTemporaryDirectory()
         let destination = makeTemporaryDirectory()
         let exporter = MeetingMarkdownAutoExporter(supportDirectory: support)
@@ -113,8 +113,8 @@ struct MeetingMarkdownAutoExporterTests {
         config.autoExportMarkdownEnabled = true
         config.autoExportMarkdownFolderPath = destination.path
 
-        let first = try #require(exporter.performExport(meeting: makeMeeting(), config: config)?.first)
-        let second = try #require(exporter.performExport(meeting: makeMeeting(), config: config)?.first)
+        let first = try #require(await exporter.performExport(meeting: makeMeeting(), config: config)?.first)
+        let second = try #require(await exporter.performExport(meeting: makeMeeting(), config: config)?.first)
 
         #expect(first.lastPathComponent == "2026-04-14-weekly-standup-notes.md")
         #expect(second.lastPathComponent == "2026-04-14-weekly-standup-notes-2.md")
@@ -134,7 +134,7 @@ struct MeetingMarkdownAutoExporterTests {
         let urls = await withTaskGroup(of: URL?.self) { group in
             for _ in 0..<8 {
                 group.addTask {
-                    exporter.performExport(meeting: makeMeeting(), config: config)?.first
+                    await exporter.performExport(meeting: makeMeeting(), config: config)?.first
                 }
             }
 
@@ -162,7 +162,7 @@ struct MeetingMarkdownAutoExporterTests {
     }
 
     @Test("creates destination folder when missing")
-    func createsMissingFolder() throws {
+    func createsMissingFolder() async throws {
         let support = makeTemporaryDirectory()
         let destination = makeTemporaryDirectory().appendingPathComponent("nested/notes", isDirectory: true)
         let exporter = MeetingMarkdownAutoExporter(supportDirectory: support)
@@ -170,14 +170,14 @@ struct MeetingMarkdownAutoExporterTests {
         config.autoExportMarkdownEnabled = true
         config.autoExportMarkdownFolderPath = destination.path
 
-        let url = try #require(exporter.performExport(meeting: makeMeeting(), config: config)?.first)
+        let url = try #require(await exporter.performExport(meeting: makeMeeting(), config: config)?.first)
 
         #expect(FileManager.default.fileExists(atPath: url.path))
         #expect(url.deletingLastPathComponent().path == destination.standardizedFileURL.path)
     }
 
     @Test("PDF format writes a PDF file")
-    func pdfFormatWritesPDF() throws {
+    func pdfFormatWritesPDF() async throws {
         let support = makeTemporaryDirectory()
         let destination = makeTemporaryDirectory()
         let exporter = MeetingMarkdownAutoExporter(supportDirectory: support)
@@ -186,7 +186,7 @@ struct MeetingMarkdownAutoExporterTests {
         config.autoExportMarkdownFolderPath = destination.path
         config.autoExportFileFormat = MeetingAutoExportFileFormat.pdf.rawValue
 
-        let urls = try #require(exporter.performExport(meeting: makeMeeting(), config: config))
+        let urls = try #require(await exporter.performExport(meeting: makeMeeting(), config: config))
 
         #expect(urls.count == 1)
         let url = try #require(urls.first)
@@ -195,7 +195,7 @@ struct MeetingMarkdownAutoExporterTests {
     }
 
     @Test("Markdown and PDF format writes both files")
-    func markdownAndPDFFormatWritesBothFiles() throws {
+    func markdownAndPDFFormatWritesBothFiles() async throws {
         let support = makeTemporaryDirectory()
         let destination = makeTemporaryDirectory()
         let exporter = MeetingMarkdownAutoExporter(supportDirectory: support)
@@ -204,7 +204,7 @@ struct MeetingMarkdownAutoExporterTests {
         config.autoExportMarkdownFolderPath = destination.path
         config.autoExportFileFormat = MeetingAutoExportFileFormat.markdownAndPDF.rawValue
 
-        let urls = try #require(exporter.performExport(meeting: makeMeeting(), config: config))
+        let urls = try #require(await exporter.performExport(meeting: makeMeeting(), config: config))
         let extensions = Set(urls.map(\.pathExtension))
 
         #expect(urls.count == 2)
