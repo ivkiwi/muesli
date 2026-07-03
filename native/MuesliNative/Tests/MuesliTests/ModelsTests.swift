@@ -510,6 +510,7 @@ struct AppConfigTests {
         #expect(config.preferredMeetingBrowserBundleID.isEmpty)
         #expect(config.openAIAPIKey.isEmpty)
         #expect(config.openRouterAPIKey.isEmpty)
+        #expect(config.meetingSummaryRetryCount == MeetingSummaryRetryPolicy.defaultRetryCount)
         #expect(config.ollamaURL == "http://localhost:11434")
         #expect(config.ollamaModel == "qwen3.5")
         #expect(config.lmStudioURL == "http://localhost:1234")
@@ -538,6 +539,12 @@ struct AppConfigTests {
         #expect(config.meetingHookEnabled == false)
         #expect(config.meetingHookPath.isEmpty)
         #expect(config.meetingHookTimeoutSeconds == 30)
+        #expect(config.autoExportMarkdownEnabled == false)
+        #expect(config.autoExportMarkdownFolderPath.isEmpty)
+        #expect(config.autoExportMarkdownContent == MeetingExportContent.notes.rawValue)
+        #expect(config.resolvedAutoExportMarkdownContent == .notes)
+        #expect(config.autoExportFileFormat == MeetingAutoExportFileFormat.markdown.rawValue)
+        #expect(config.resolvedAutoExportFileFormat == .markdown)
         #expect(config.contributionPromptNextWordCount == nil)
         #expect(config.contributionPromptNextMeetingCount == nil)
         #expect(config.contributionGitHubStarClicked == false)
@@ -567,6 +574,10 @@ struct AppConfigTests {
         config.meetingHookEnabled = true
         config.meetingHookPath = "/tmp/meeting-hook.sh"
         config.meetingHookTimeoutSeconds = 45
+        config.autoExportMarkdownEnabled = true
+        config.autoExportMarkdownFolderPath = "/tmp/guesli-auto-export"
+        config.autoExportMarkdownContent = MeetingExportContent.fullMeeting.rawValue
+        config.autoExportFileFormat = MeetingAutoExportFileFormat.markdownAndPDF.rawValue
         config.showScheduledMeetingNotifications = false
         config.scheduledMeetingNotificationLeadTime = .threeMinutes
         config.showMeetingDetectionNotification = false
@@ -586,6 +597,7 @@ struct AppConfigTests {
         config.customLLMAPIKey = "custom-key"
         config.customLLMModel = "custom-model"
         config.customLLMFormat = "anthropic"
+        config.meetingSummaryRetryCount = 6
         config.transcriptCleanupProvider = TranscriptCleanupProviderOption.openRouter.rawValue
         config.contributionPromptNextWordCount = 31_000
         config.contributionPromptNextMeetingCount = 75
@@ -613,6 +625,12 @@ struct AppConfigTests {
         #expect(decoded.meetingHookEnabled == true)
         #expect(decoded.meetingHookPath == "/tmp/meeting-hook.sh")
         #expect(decoded.meetingHookTimeoutSeconds == 45)
+        #expect(decoded.autoExportMarkdownEnabled == true)
+        #expect(decoded.autoExportMarkdownFolderPath == "/tmp/guesli-auto-export")
+        #expect(decoded.autoExportMarkdownContent == MeetingExportContent.fullMeeting.rawValue)
+        #expect(decoded.resolvedAutoExportMarkdownContent == .fullMeeting)
+        #expect(decoded.autoExportFileFormat == MeetingAutoExportFileFormat.markdownAndPDF.rawValue)
+        #expect(decoded.resolvedAutoExportFileFormat == .markdownAndPDF)
         #expect(decoded.showScheduledMeetingNotifications == false)
         #expect(decoded.scheduledMeetingNotificationLeadTime == .threeMinutes)
         #expect(decoded.showMeetingDetectionNotification == false)
@@ -634,6 +652,7 @@ struct AppConfigTests {
         #expect(decoded.customLLMAPIKey == "custom-key")
         #expect(decoded.customLLMModel == "custom-model")
         #expect(decoded.customLLMFormat == "anthropic")
+        #expect(decoded.meetingSummaryRetryCount == 6)
         #expect(decoded.transcriptCleanupProvider == TranscriptCleanupProviderOption.openRouter.rawValue)
         #expect(decoded.contributionPromptNextWordCount == 31_000)
         #expect(decoded.contributionPromptNextMeetingCount == 75)
@@ -680,6 +699,10 @@ struct AppConfigTests {
         #expect(json["meeting_hook_enabled"] != nil)
         #expect(json["meeting_hook_path"] != nil)
         #expect(json["meeting_hook_timeout_seconds"] != nil)
+        #expect(json["auto_export_markdown_enabled"] != nil)
+        #expect(json["auto_export_markdown_folder_path"] != nil)
+        #expect(json["auto_export_markdown_content"] != nil)
+        #expect(json["auto_export_file_format"] != nil)
         #expect(json["contribution_prompt_next_word_count"] != nil)
         #expect(json["contribution_prompt_next_meeting_count"] != nil)
         #expect(json["contribution_github_star_clicked"] != nil)
@@ -690,6 +713,7 @@ struct AppConfigTests {
         #expect(json["custom_llm_api_key"] != nil)
         #expect(json["custom_llm_model"] != nil)
         #expect(json["custom_llm_format"] != nil)
+        #expect(json["meeting_summary_retry_count"] != nil)
         #expect(json["transcript_cleanup_provider"] != nil)
     }
 
@@ -725,13 +749,35 @@ struct AppConfigTests {
         #expect(config.meetingHookEnabled == false)
         #expect(config.meetingHookPath.isEmpty)
         #expect(config.meetingHookTimeoutSeconds == 30)
+        #expect(config.autoExportMarkdownEnabled == false)
+        #expect(config.autoExportMarkdownFolderPath.isEmpty)
+        #expect(config.autoExportMarkdownContent == MeetingExportContent.notes.rawValue)
+        #expect(config.resolvedAutoExportMarkdownContent == .notes)
+        #expect(config.autoExportFileFormat == MeetingAutoExportFileFormat.markdown.rawValue)
+        #expect(config.resolvedAutoExportFileFormat == .markdown)
         #expect(config.lmStudioURL == "http://localhost:1234")
         #expect(config.lmStudioModel.isEmpty)
         #expect(config.customLLMURL.isEmpty)
         #expect(config.customLLMAPIKey.isEmpty)
         #expect(config.customLLMModel.isEmpty)
         #expect(config.customLLMFormat == "openai")
+        #expect(config.meetingSummaryRetryCount == MeetingSummaryRetryPolicy.defaultRetryCount)
         #expect(config.transcriptCleanupProvider == TranscriptCleanupProviderOption.local.rawValue)
+    }
+
+    @Test("meeting summary retry count is clamped on decode")
+    func meetingSummaryRetryCountIsClampedOnDecode() throws {
+        let negativeConfig = try JSONDecoder().decode(
+            AppConfig.self,
+            from: Data(#"{"meeting_summary_retry_count": -3}"#.utf8)
+        )
+        let excessiveConfig = try JSONDecoder().decode(
+            AppConfig.self,
+            from: Data(#"{"meeting_summary_retry_count": 99}"#.utf8)
+        )
+
+        #expect(negativeConfig.meetingSummaryRetryCount == 0)
+        #expect(excessiveConfig.meetingSummaryRetryCount == MeetingSummaryRetryPolicy.maximumRetryCount)
     }
 
     @Test("legacy completed onboarding enables meetings when use case is missing")
