@@ -898,6 +898,27 @@ struct SettingsView: View {
                     }
                 }
                 Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow("Summary retries", controlWidth: meetingControlWidth) {
+                    Stepper(
+                        value: Binding(
+                            get: {
+                                MeetingSummaryRetryPolicy.clampedRetryCount(appState.config.meetingSummaryRetryCount)
+                            },
+                            set: { newValue in
+                                controller.updateConfig {
+                                    $0.meetingSummaryRetryCount = MeetingSummaryRetryPolicy.clampedRetryCount(newValue)
+                                }
+                            }
+                        ),
+                        in: 0...MeetingSummaryRetryPolicy.maximumRetryCount
+                    ) {
+                        Text(summaryRetryLabel(appState.config.meetingSummaryRetryCount))
+                            .font(MuesliTheme.body())
+                            .foregroundStyle(MuesliTheme.textPrimary)
+                    }
+                }
+                settingsDescription("Retry transient AI summary failures before saving failed notes.")
+                Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("Templates", controlWidth: meetingControlWidth) {
                     actionButton("Manage Templates…") {
                         controller.showMeetingTemplatesManager()
@@ -1653,6 +1674,18 @@ struct SettingsView: View {
     private func clearPendingScreenContextEnable() {
         pendingScreenContextEnable = false
         pendingScreenContextRequestedAt = 0
+    }
+
+    private func summaryRetryLabel(_ retryCount: Int) -> String {
+        let clamped = MeetingSummaryRetryPolicy.clampedRetryCount(retryCount)
+        switch clamped {
+        case 0:
+            return "No retries"
+        case 1:
+            return "1 retry"
+        default:
+            return "\(clamped) retries"
+        }
     }
 
     private func refreshSystemAudioPermissionIfNeeded() {

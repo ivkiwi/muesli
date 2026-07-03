@@ -247,6 +247,80 @@ struct MeetingSummaryClientTests {
         #expect(error.localizedDescription.contains("unavailable or incompatible"))
     }
 
+    @Test("summary retries transient failures until success")
+    func summaryRetriesTransientFailuresUntilSuccess() async throws {
+        var attempts = 0
+
+        let result = try await MeetingSummaryClient.withSummaryRetries(
+            maxRetries: 3,
+            sleep: { _ in }
+        ) {
+            attempts += 1
+            if attempts < 3 {
+                throw MeetingSummaryError.requestFailed(
+                    backend: "OpenAI",
+                    underlying: URLError(.cannotConnectToHost)
+                )
+            }
+            return "Recovered summary"
+        }
+
+        #expect(result == "Recovered summary")
+        #expect(attempts == 3)
+    }
+
+    @Test("summary retries stop after configured retry count")
+    func summaryRetriesStopAfterConfiguredRetryCount() async {
+        var attempts = 0
+
+        do {
+            _ = try await MeetingSummaryClient.withSummaryRetries(
+                maxRetries: 2,
+                sleep: { _ in }
+            ) {
+                attempts += 1
+                throw MeetingSummaryError.emptyResponse(backend: "OpenRouter")
+            }
+            #expect(Bool(false), "Expected summary retries to exhaust and throw")
+        } catch {
+            #expect(attempts == 3)
+            guard case .emptyResponse(let backend) = error as? MeetingSummaryError else {
+                #expect(Bool(false), "Expected emptyResponse, got \(String(describing: error))")
+                return
+            }
+            #expect(backend == "OpenRouter")
+        }
+    }
+
+    @Test("summary retry policy skips cancellation and permanent backend failures")
+    func summaryRetryPolicySkipsCancellationAndPermanentBackendFailures() {
+        #expect(!MeetingSummaryRetryPolicy.shouldRetry(CancellationError()))
+        #expect(!MeetingSummaryRetryPolicy.shouldRetry(
+            MeetingSummaryError.requestFailed(backend: "OpenAI", underlying: URLError(.cancelled))
+        ))
+        #expect(!MeetingSummaryRetryPolicy.shouldRetry(
+            MeetingSummaryError.requestFailed(backend: "ChatGPT", underlying: ChatGPTAuthError.notAuthenticated)
+        ))
+        #expect(!MeetingSummaryRetryPolicy.shouldRetry(
+            MeetingSummaryError.requestFailed(backend: "Ollama", underlying: URLError(.unsupportedURL))
+        ))
+        #expect(!MeetingSummaryRetryPolicy.shouldRetry(
+            MeetingSummaryError.backendFailed(backend: "Custom LLM", statusCode: nil, message: "No model selected")
+        ))
+        #expect(!MeetingSummaryRetryPolicy.shouldRetry(
+            MeetingSummaryError.backendFailed(backend: "OpenRouter", statusCode: 400, message: "Bad request")
+        ))
+        #expect(MeetingSummaryRetryPolicy.shouldRetry(
+            MeetingSummaryError.requestFailed(backend: "Ollama", underlying: URLError(.cannotConnectToHost))
+        ))
+        #expect(MeetingSummaryRetryPolicy.shouldRetry(
+            MeetingSummaryError.backendFailed(backend: "OpenRouter", statusCode: 429, message: "Rate limited")
+        ))
+        #expect(MeetingSummaryRetryPolicy.shouldRetry(
+            MeetingSummaryError.backendFailed(backend: "OpenAI", statusCode: 503, message: "Unavailable")
+        ))
+    }
+
     @Test("generateTitle returns nil without API key")
     func titleWithoutKey() async {
         var config = AppConfig()
@@ -319,6 +393,7 @@ struct MeetingSummaryClientTests {
         var config = AppConfig()
         config.meetingSummaryBackend = "ollama"
         config.ollamaURL = "http://localhost:1" // invalid port to force connection failure
+        config.meetingSummaryRetryCount = 0
 
         do {
             _ = try await MeetingSummaryClient.summarize(
@@ -372,6 +447,7 @@ struct MeetingSummaryClientTests {
         config.meetingSummaryBackend = "ollama"
         config.ollamaModel = ""
         config.ollamaURL = "http://localhost:1"
+        config.meetingSummaryRetryCount = 0
 
         do {
             _ = try await MeetingSummaryClient.summarize(
@@ -529,6 +605,7 @@ struct MeetingSummaryClientTests {
         config.meetingSummaryBackend = "lmstudio"
         config.lmStudioURL = "http://localhost:1"
         config.lmStudioModel = "local-model"
+        config.meetingSummaryRetryCount = 0
 
         do {
             _ = try await MeetingSummaryClient.summarize(
@@ -556,6 +633,7 @@ struct MeetingSummaryClientTests {
         config.customLLMURL = "http://localhost:1"
         config.customLLMAPIKey = ""
         config.customLLMModel = "local-model"
+        config.meetingSummaryRetryCount = 0
 
         do {
             _ = try await MeetingSummaryClient.summarize(
