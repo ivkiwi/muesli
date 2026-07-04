@@ -406,7 +406,11 @@ struct MeetingsNavigationTests {
             templateSnapshot: MeetingTemplates.auto.snapshot
         )
 
-        let persistenceResult = try controller.persistCompletedMeetingResult(result)
+        let preparedRecordingSave = await controller.prepareMeetingRecordingSave(for: result)
+        let persistenceResult = try controller.persistCompletedMeetingResult(
+            result,
+            preparedRecordingSave: preparedRecordingSave
+        )
 
         #expect(persistenceResult.recordingSaveError != nil)
         let storedMeeting = try store.meeting(id: persistenceResult.meetingID)
@@ -449,9 +453,13 @@ struct MeetingsNavigationTests {
             templateSnapshot: MeetingTemplates.auto.snapshot
         )
 
+        let preparedRecordingSave = await controller.prepareMeetingRecordingSave(
+            for: result,
+            saveDecision: false
+        )
         let persistenceResult = try controller.persistCompletedMeetingResult(
             result,
-            recordingSaveDecision: false
+            preparedRecordingSave: preparedRecordingSave
         )
 
         let storedMeeting = try store.meeting(id: persistenceResult.meetingID)
@@ -472,7 +480,10 @@ struct MeetingsNavigationTests {
             ),
             dictationStore: store
         )
-        controller.updateConfig { $0.meetingRecordingSavePolicy = .never }
+        controller.updateConfig {
+            $0.meetingRecordingSavePolicy = .never
+            $0.meetingRecordingFileFormat = MeetingRecordingFileFormat.wav.rawValue
+        }
 
         let retainedRecordingURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("retained-policy-drift-\(UUID().uuidString)")
@@ -494,9 +505,13 @@ struct MeetingsNavigationTests {
             templateSnapshot: MeetingTemplates.auto.snapshot
         )
 
+        let preparedRecordingSave = await controller.prepareMeetingRecordingSave(
+            for: result,
+            saveDecision: true
+        )
         let persistenceResult = try controller.persistCompletedMeetingResult(
             result,
-            recordingSaveDecision: true
+            preparedRecordingSave: preparedRecordingSave
         )
 
         let storedMeeting = try #require(try store.meeting(id: persistenceResult.meetingID))
@@ -534,7 +549,11 @@ struct MeetingsNavigationTests {
             templateSnapshot: MeetingTemplates.auto.snapshot
         )
 
-        let persistenceResult = try controller.persistCompletedMeetingResult(result)
+        let preparedRecordingSave = await controller.prepareMeetingRecordingSave(for: result)
+        let persistenceResult = try controller.persistCompletedMeetingResult(
+            result,
+            preparedRecordingSave: preparedRecordingSave
+        )
 
         let storedMeeting = try #require(try store.meeting(id: persistenceResult.meetingID))
         #expect(storedMeeting.savedRecordingPath == nil)
@@ -570,9 +589,13 @@ struct MeetingsNavigationTests {
             templateSnapshot: MeetingTemplates.auto.snapshot
         )
 
+        let preparedRecordingSave = await controller.prepareMeetingRecordingSave(
+            for: result,
+            saveDecision: true
+        )
         let persistenceResult = try controller.persistCompletedMeetingResult(
             result,
-            recordingSaveDecision: true
+            preparedRecordingSave: preparedRecordingSave
         )
 
         let storedMeeting = try #require(try store.meeting(id: persistenceResult.meetingID))
@@ -611,11 +634,54 @@ struct MeetingsNavigationTests {
             templateSnapshot: MeetingTemplates.auto.snapshot
         )
 
-        _ = try controller.persistCompletedMeetingResult(result, existingMeetingID: liveID)
+        _ = try controller.persistCompletedMeetingResult(
+            result,
+            existingMeetingID: liveID,
+            preparedRecordingSave: .none
+        )
 
         let storedMeeting = try #require(try store.meeting(id: liveID))
         #expect(storedMeeting.title == "Investor Follow-up")
         #expect(storedMeeting.formattedNotes == "## Summary\nFundraising updates discussed.")
+    }
+
+    @Test("persistCompletedMeetingResult uses wall-clock duration for normal existing meetings")
+    func persistCompletedMeetingResultUsesWallClockDurationForNormalExistingMeetings() async throws {
+        let store = try makeStore()
+        let controller = MuesliController(
+            runtime: RuntimePaths(
+                repoRoot: FileManager.default.temporaryDirectory,
+                menuIcon: nil,
+                appIcon: nil,
+                bundlePath: nil
+            ),
+            dictationStore: store
+        )
+        let start = Date()
+        let liveID = try store.createLiveMeeting(title: "Meeting", calendarEventID: nil, startTime: start)
+        let result = MeetingSessionResult(
+            title: "Generated Summary Title",
+            originalTitle: "Meeting",
+            calendarEventID: nil,
+            startTime: start,
+            endTime: start.addingTimeInterval(120),
+            durationSeconds: 30,
+            rawTranscript: "Discussed regular completion.",
+            formattedNotes: "## Summary\nRegular completion.",
+            retainedRecordingURL: nil,
+            retainedRecordingError: nil,
+            systemRecordingURL: nil,
+            templateSnapshot: MeetingTemplates.auto.snapshot
+        )
+
+        _ = try controller.persistCompletedMeetingResult(
+            result,
+            existingMeetingID: liveID,
+            preparedRecordingSave: .none
+        )
+
+        let storedMeeting = try #require(try store.meeting(id: liveID))
+        #expect(storedMeeting.durationSeconds == 120)
     }
 
     @Test("persistCompletedMeetingResult preserves cached live title before debounce")
@@ -649,7 +715,11 @@ struct MeetingsNavigationTests {
             templateSnapshot: MeetingTemplates.auto.snapshot
         )
 
-        _ = try controller.persistCompletedMeetingResult(result, existingMeetingID: liveID)
+        _ = try controller.persistCompletedMeetingResult(
+            result,
+            existingMeetingID: liveID,
+            preparedRecordingSave: .none
+        )
 
         let storedMeeting = try #require(try store.meeting(id: liveID))
         #expect(storedMeeting.title == "Status Bar Stop Title")

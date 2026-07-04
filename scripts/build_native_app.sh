@@ -15,7 +15,7 @@ APP_BUNDLE_NAME="${MUESLI_APP_BUNDLE_NAME:-$APP_NAME.app}"
 APP_EXECUTABLE_NAME="${MUESLI_EXECUTABLE_NAME:-Muesli}"
 APP_SUPPORT_DIR_NAME="${MUESLI_SUPPORT_DIR_NAME:-$APP_DISPLAY_NAME}"
 BUNDLE_ID="${MUESLI_BUNDLE_ID:-com.muesli.app}"
-DEFAULT_APP_VERSION="0.7.0"
+DEFAULT_APP_VERSION="0.7.1"
 APP_VERSION="${MUESLI_BUILD_VERSION:-$DEFAULT_APP_VERSION}"
 APP_BUNDLE_VERSION="${MUESLI_BUNDLE_VERSION:-$APP_VERSION}"
 APP_SHORT_VERSION="${MUESLI_SHORT_VERSION:-$APP_VERSION}"
@@ -114,6 +114,9 @@ cp "$ROOT/assets/Nvidia_logo.svg.png" "$STAGED_APP_DIR/Contents/Resources/nvidia
 cp "$ROOT/assets/OpenAI_Logo.svg.png" "$STAGED_APP_DIR/Contents/Resources/openai-logo.png"
 cp "$ROOT/assets/cohere.png" "$STAGED_APP_DIR/Contents/Resources/cohere-logo.png"
 cp "$ROOT/assets/Qwen_logo.svg.png" "$STAGED_APP_DIR/Contents/Resources/qwen-logo.png"
+cp "$ROOT/assets/AI4Bharat_logo.png" "$STAGED_APP_DIR/Contents/Resources/ai4bharat-logo.png"
+cp "$ROOT/assets/x-logo.png" "$STAGED_APP_DIR/Contents/Resources/x-logo.png"
+cp "$ROOT/assets/linkedin-logo.png" "$STAGED_APP_DIR/Contents/Resources/linkedin-logo.png"
 if [[ -d "$ROOT/assets/fonts" ]]; then
   ditto "$ROOT/assets/fonts" "$STAGED_APP_DIR/Contents/Resources/fonts"
 fi
@@ -235,6 +238,7 @@ if [[ "$SKIP_SIGN" != "1" ]]; then
   CODESIGN_ENTITLEMENTS="$ENTITLEMENTS"
   TEMP_ENTITLEMENTS=""
   APS_ENVIRONMENT="${MUESLI_APS_ENVIRONMENT:-}"
+  ICLOUD_CONTAINER_ENVIRONMENT="${MUESLI_ICLOUD_CONTAINER_ENVIRONMENT:-}"
   PROFILE_PLIST=""
   SIGN_TEMP_FILES=()
   cleanup_sign_temp_files() {
@@ -247,12 +251,29 @@ if [[ "$SKIP_SIGN" != "1" ]]; then
   if [[ -n "$PROVISIONING_PROFILE" ]]; then
     PROFILE_PLIST="$(mktemp "${TMPDIR:-/tmp}/muesli-profile.XXXXXX")"
     SIGN_TEMP_FILES+=("$PROFILE_PLIST")
-    if security cms -D -i "$PROVISIONING_PROFILE" > "$PROFILE_PLIST" 2>/dev/null; then
+    if ! security cms -D -i "$PROVISIONING_PROFILE" > "$PROFILE_PLIST" 2>/dev/null; then
+      echo "ERROR: could not decode provisioning profile: $PROVISIONING_PROFILE" >&2
+      exit 1
+    fi
+
+    PROFILE_APP_IDENTIFIER="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.application-identifier' "$PROFILE_PLIST" 2>/dev/null || true)"
+    if [[ -z "$PROFILE_APP_IDENTIFIER" ]]; then
+      PROFILE_APP_IDENTIFIER="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$PROFILE_PLIST" 2>/dev/null || true)"
+    fi
+    if [[ -n "$PROFILE_APP_IDENTIFIER" ]]; then
+      PROFILE_BUNDLE_ID="${PROFILE_APP_IDENTIFIER#*.}"
+      # shellcheck disable=SC2053 # Intentionally glob-match wildcard App IDs such as com.muesli.*.
+      if [[ "$BUNDLE_ID" != $PROFILE_BUNDLE_ID ]]; then
+        echo "ERROR: provisioning profile app identifier '$PROFILE_APP_IDENTIFIER' does not match bundle ID '$BUNDLE_ID'." >&2
+        exit 1
+      fi
+      echo "Using provisioning profile app identifier: $PROFILE_APP_IDENTIFIER"
+    fi
+
+    if [[ -z "$APS_ENVIRONMENT" ]]; then
+      APS_ENVIRONMENT="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.developer.aps-environment' "$PROFILE_PLIST" 2>/dev/null || true)"
       if [[ -z "$APS_ENVIRONMENT" ]]; then
-        APS_ENVIRONMENT="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.developer.aps-environment' "$PROFILE_PLIST" 2>/dev/null || true)"
-        if [[ -z "$APS_ENVIRONMENT" ]]; then
-          APS_ENVIRONMENT="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:aps-environment' "$PROFILE_PLIST" 2>/dev/null || true)"
-        fi
+        APS_ENVIRONMENT="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:aps-environment' "$PROFILE_PLIST" 2>/dev/null || true)"
       fi
     fi
   fi
@@ -271,9 +292,27 @@ if [[ "$SKIP_SIGN" != "1" ]]; then
         /usr/libexec/PlistBuddy -c "Add :$key string $value" "$TEMP_ENTITLEMENTS"
       fi
     }
+    copy_explicit_icloud_container_environment_entitlement() {
+      local key="$1"
+      local value
+      [[ -n "$PROFILE_PLIST" ]] || return 0
+      [[ -n "$ICLOUD_CONTAINER_ENVIRONMENT" ]] || return 0
+      /usr/libexec/PlistBuddy -c "Print :Entitlements:$key" "$PROFILE_PLIST" >/dev/null 2>&1 || return 0
+      value="$(printf '%s' "$ICLOUD_CONTAINER_ENVIRONMENT" | tr '[:upper:]' '[:lower:]')"
+      if [[ "$value" != "development" && "$value" != "production" ]]; then
+        echo "ERROR: unsupported iCloud container environment '$value'. Expected development or production." >&2
+        exit 1
+      fi
+      /usr/libexec/PlistBuddy -c "Delete :$key" "$TEMP_ENTITLEMENTS" >/dev/null 2>&1 || true
+      /usr/libexec/PlistBuddy -c "Add :$key string $value" "$TEMP_ENTITLEMENTS"
+      echo "Using iCloud entitlement: $key=$value"
+    }
     copy_profile_string_entitlement "com.apple.application-identifier"
     copy_profile_string_entitlement "application-identifier"
     copy_profile_string_entitlement "com.apple.developer.team-identifier"
+    # Do not copy this profile entitlement by default: Apple profiles may store
+    # it as an array, while CloudKit expects a single lowercase runtime value.
+    copy_explicit_icloud_container_environment_entitlement "com.apple.developer.icloud-container-environment"
     if [[ -n "$APS_ENVIRONMENT" ]]; then
       if ! /usr/libexec/PlistBuddy -c "Set :com.apple.developer.aps-environment $APS_ENVIRONMENT" "$TEMP_ENTITLEMENTS" 2>/dev/null; then
         /usr/libexec/PlistBuddy -c "Add :com.apple.developer.aps-environment string $APS_ENVIRONMENT" "$TEMP_ENTITLEMENTS"
@@ -304,7 +343,66 @@ if [[ "$SKIP_SIGN" != "1" ]]; then
   fi
   echo "  Deep signature valid."
 else
-  echo "Skipping codesign because MUESLI_SKIP_SIGN=1"
+  # No Developer ID certificate: ad-hoc sign for local dev instead of leaving the
+  # bundle with SwiftPM's incoherent per-binary signature. An ad-hoc *bundle* signature
+  # binds Info.plist and adopts the bundle's CFBundleIdentifier (com.muesli.*) as the
+  # signing identity, which macOS TCC needs to attribute Accessibility / Input-Monitoring
+  # grants to the running process. Without it, AXIsProcessTrusted()/CGPreflightListenEventAccess()
+  # keep returning false even after the user grants permission, so onboarding stalls.
+  #
+  # Note: ad-hoc signatures have no stable designated requirement, so the cdhash changes on
+  # every rebuild and macOS privacy grants must be re-approved after each dev build. For grants
+  # that persist across rebuilds, create a self-signed code-signing certificate and pass its name
+  # via MUESLI_SIGN_IDENTITY. No hardened runtime here: ad-hoc has no Team ID, so library
+  # validation would block dlopen of the bundled frameworks/dylibs.
+  LOCAL_SIGN_IDENTITY="-"
+  if [[ -n "${MUESLI_SIGN_IDENTITY:-}" ]]; then
+    LOCAL_SIGN_IDENTITY="$MUESLI_SIGN_IDENTITY"
+    if ! security find-identity -v -p codesigning | grep -Fq "$LOCAL_SIGN_IDENTITY"; then
+      echo "Signing identity not found: $LOCAL_SIGN_IDENTITY" >&2
+      exit 1
+    fi
+    echo "Local signing with MUESLI_SIGN_IDENTITY=$LOCAL_SIGN_IDENTITY (MUESLI_SKIP_SIGN=1)..."
+  else
+    echo "Ad-hoc signing for local dev (MUESLI_SKIP_SIGN=1; no Developer ID)..."
+  fi
+  ENTITLEMENTS="${MUESLI_ENTITLEMENTS:-$ROOT/scripts/Muesli.entitlements}"
+
+  find "$APP_DIR/Contents/MacOS" -maxdepth 1 -name "*.framework" -type d | while read -r framework; do
+    # Sign every nested standalone Mach-O (e.g. Sparkle's Versions/B/Autoupdate),
+    # then nested .xpc/.app bundles, then the framework itself — mirroring the
+    # Developer-ID path so `codesign --verify --deep --strict` cannot fail on a
+    # nested executable the framework-level sign doesn't reseal.
+    find "$framework" -type f -perm +111 | while read -r binary; do
+      if file "$binary" | grep -q "Mach-O"; then
+          codesign --force --sign "$LOCAL_SIGN_IDENTITY" "$binary"
+      fi
+    done
+    find "$framework" \( -name "*.xpc" -o -name "*.app" \) -type d | while read -r nested; do
+      codesign --force --sign "$LOCAL_SIGN_IDENTITY" "$nested"
+    done
+    codesign --force --sign "$LOCAL_SIGN_IDENTITY" "$framework"
+  done
+
+  find "$APP_DIR/Contents/MacOS" -maxdepth 1 \( -name "*.dylib" -o -name "*.so" \) -type f | while read -r library; do
+    if file "$library" | grep -q "Mach-O"; then
+      codesign --force --sign "$LOCAL_SIGN_IDENTITY" "$library"
+    fi
+  done
+
+  if [[ -f "$APP_DIR/Contents/MacOS/muesli-cli" ]]; then
+    codesign --force --sign "$LOCAL_SIGN_IDENTITY" "$APP_DIR/Contents/MacOS/muesli-cli"
+  fi
+
+  # Sign the bundle last so the Info.plist binding / identity stick.
+  codesign --force --sign "$LOCAL_SIGN_IDENTITY" --entitlements "$ENTITLEMENTS" "$APP_DIR"
+
+  echo "Verifying ad-hoc signature..."
+  if ! codesign --verify --deep --strict "$APP_DIR" 2>&1; then
+    echo "ERROR: ad-hoc signature verification failed" >&2
+    exit 1
+  fi
+  echo "  Local signature valid. Re-approve macOS privacy permissions if prompted after ad-hoc rebuilds."
 fi
 
 rm -rf "$STAGED_APP_DIR"

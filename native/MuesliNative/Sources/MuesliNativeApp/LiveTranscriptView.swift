@@ -63,10 +63,11 @@ struct LiveTranscriptView: View {
     }
 
     private func mergeNewContent(from newTranscript: String) {
-        guard newTranscript.count > parsedLength else {
-            // Transcript was reset (meeting ended).
+        if newTranscript.count < parsedLength {
             groups = []
             parsedLength = 0
+        }
+        guard newTranscript.count > parsedLength else {
             return
         }
         let startIndex = newTranscript.index(newTranscript.startIndex, offsetBy: parsedLength)

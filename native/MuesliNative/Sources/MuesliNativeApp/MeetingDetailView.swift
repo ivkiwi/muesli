@@ -30,8 +30,15 @@ private enum ManualNotesSaveStatus {
 // reference and never reads liveMeetingTranscript in its own body.
 private struct LiveTranscriptSection: View {
     let appState: AppState
+    let transcriptPrefix: String
+
     var body: some View {
-        LiveTranscriptView(transcript: appState.liveMeetingTranscript)
+        LiveTranscriptView(
+            transcript: MeetingResumePolicy.combinedResumeTranscript(
+                prior: transcriptPrefix,
+                new: appState.liveMeetingTranscript
+            )
+        )
     }
 }
 
@@ -244,27 +251,44 @@ struct MeetingDetailView: View {
         if showsManualNotesEditor(for: meeting) {
             if meeting.status == .recording {
                 let isManualNotesEditable = canEditManualNotes(for: meeting)
+                let persistedNotes = Self.notesContent(for: meeting)
+                let hasPersistedNotes = !meeting.formattedNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || !meeting.rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ZStack {
                     VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                        manualNotesToolbar(for: meeting)
-                            .disabled(!isManualNotesEditable)
-                        MarkdownRichTextEditor(
-                            text: $editableManualNotes,
-                            command: $manualEditorCommand,
-                            shouldFocus: isManualNotesEditable,
-                            isEditable: isManualNotesEditable,
-                            onTextChange: { notes in
-                                guard isManualNotesEditable else { return }
-                                saveManualNotes(meetingID: meeting.id, notes: notes)
-                            }
-                        )
-                        .frame(maxWidth: 980, maxHeight: .infinity, alignment: .topLeading)
-                        .background(MuesliTheme.backgroundBase)
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
-                                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
-                        )
+                        if hasPersistedNotes {
+                            MeetingNotesView(markdown: persistedNotes)
+                                .frame(maxWidth: 980, maxHeight: .infinity, alignment: .topLeading)
+                                .background(MuesliTheme.backgroundBase)
+                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                                        .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                                )
+                        }
+
+                        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                            manualNotesToolbar(for: meeting)
+                                .disabled(!isManualNotesEditable)
+                            MarkdownRichTextEditor(
+                                text: $editableManualNotes,
+                                command: $manualEditorCommand,
+                                shouldFocus: isManualNotesEditable,
+                                isEditable: isManualNotesEditable,
+                                onTextChange: { notes in
+                                    guard isManualNotesEditable else { return }
+                                    saveManualNotes(meetingID: meeting.id, notes: notes)
+                                }
+                            )
+                            .background(MuesliTheme.backgroundBase)
+                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                                    .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                            )
+                            .frame(maxHeight: hasPersistedNotes ? 260 : .infinity)
+                        }
+                        .frame(maxWidth: 980, maxHeight: hasPersistedNotes ? nil : .infinity, alignment: .topLeading)
                     }
                     .padding(.horizontal, 40)
                     .padding(.top, 12)
@@ -274,7 +298,7 @@ struct MeetingDetailView: View {
                     .allowsHitTesting(recordingMode == .notes)
                     .accessibilityHidden(recordingMode != .notes)
 
-                    LiveTranscriptSection(appState: appState)
+                    LiveTranscriptSection(appState: appState, transcriptPrefix: meeting.rawTranscript)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(recordingMode == .live ? 1 : 0)
                         .allowsHitTesting(recordingMode == .live)
@@ -417,6 +441,7 @@ struct MeetingDetailView: View {
     private func headerActions(for meeting: MeetingRecord, appliedTemplate: MeetingTemplateSnapshot) -> some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: MuesliTheme.spacing8) {
+                resumeChooserIfAvailable(for: meeting)
                 templateMenu(for: meeting, appliedTemplate: appliedTemplate)
                 exportMenu(for: meeting)
                 summaryAction(for: meeting)
@@ -426,6 +451,7 @@ struct MeetingDetailView: View {
 
             VStack(alignment: .trailing, spacing: MuesliTheme.spacing8) {
                 HStack(spacing: MuesliTheme.spacing8) {
+                    resumeChooserIfAvailable(for: meeting)
                     templateMenu(for: meeting, appliedTemplate: appliedTemplate)
                     exportMenu(for: meeting)
                     summaryAction(for: meeting)
@@ -744,6 +770,21 @@ struct MeetingDetailView: View {
         }
     }
 
+    /// The resume control only makes sense on a finished meeting when no other
+    /// recording/editing workflow is active.
+    @ViewBuilder
+    private func resumeChooserIfAvailable(for meeting: MeetingRecord) -> some View {
+        if controller.canResumeFinishedMeeting(meeting),
+           !appState.isMeetingRecording,
+           !appState.isMeetingStarting,
+           !isEditingNotes,
+           !isEditingTranscript,
+           !isSummarizing,
+           !isRetranscribing {
+            resumeRecordingButton(for: meeting)
+        }
+    }
+
     @ViewBuilder
     private func meetingPreparationControlGroup(for meeting: MeetingRecord) -> some View {
         ViewThatFits(in: .horizontal) {
@@ -955,6 +996,34 @@ struct MeetingDetailView: View {
         .buttonStyle(.plain)
         .disabled(!appState.isMeetingRecording)
         .help(isPaused ? "Resume recording" : "Pause recording")
+    }
+
+    /// Shown on a finished meeting when no recording is active. Appends the next
+    /// recording segment to this existing meeting artifact.
+    @ViewBuilder
+    private func resumeRecordingButton(for meeting: MeetingRecord) -> some View {
+        Button {
+            controller.resumeFinishedMeeting(meetingID: meeting.id)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "record.circle")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("Resume")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundStyle(MuesliTheme.backgroundBase)
+            .padding(.horizontal, MuesliTheme.spacing12)
+            .padding(.vertical, 7)
+            .background(MuesliTheme.accent)
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            .overlay(
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                    .strokeBorder(MuesliTheme.accent.opacity(0.35), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .help("Resume recording")
     }
 
     private var stopRecordingButton: some View {

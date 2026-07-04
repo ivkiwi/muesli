@@ -221,9 +221,8 @@ final class FloatingIndicatorController: NSObject {
     func setRecordingWaveformWaiting(config: AppConfig) {
         recordingWaveformMode = .waiting
         guard state == .recording else { return }
-        if let panel {
-            ensureWaveformAnimation(in: panel.frame.size, mode: .waiting)
-        }
+        let targetSize = frameForState(.recording, config: config).size
+        ensureWaveformAnimation(in: targetSize, mode: .waiting)
     }
 
     func setRecordingWaveformLevel(config: AppConfig) {
@@ -232,9 +231,8 @@ final class FloatingIndicatorController: NSObject {
             setState(.recording, config: config)
             return
         }
-        if let panel {
-            ensureWaveformAnimation(in: panel.frame.size, mode: .level)
-        }
+        let targetSize = frameForState(.recording, config: config).size
+        ensureWaveformAnimation(in: targetSize, mode: .level)
     }
 
     func setPreparingWaveformWaiting(config: AppConfig) {

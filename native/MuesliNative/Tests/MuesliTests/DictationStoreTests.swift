@@ -212,6 +212,68 @@ struct DictationStoreTests {
         #expect(inserted.source == .audioImport)
     }
 
+    @Test("meetingRawTranscript returns the stored transcript")
+    func meetingRawTranscriptReturnsStoredTranscript() throws {
+        let store = try makeStore()
+        let id = try store.createLiveMeeting(
+            title: "Standup",
+            calendarEventID: nil,
+            startTime: Date()
+        )
+        try store.updateMeetingTranscript(id: id, rawTranscript: "Hello from the meeting")
+
+        #expect(try store.meetingRawTranscript(id: id) == "Hello from the meeting")
+    }
+
+    @Test("meetingRawTranscript returns nil for a missing meeting")
+    func meetingRawTranscriptReturnsNilForMissingMeeting() throws {
+        let store = try makeStore()
+        #expect(try store.meetingRawTranscript(id: 999_999) == nil)
+    }
+
+    @Test("meetingRawTranscript returns nil for a deleted meeting")
+    func meetingRawTranscriptReturnsNilForDeletedMeeting() throws {
+        let store = try makeStore()
+        let id = try store.createLiveMeeting(
+            title: "Deleted",
+            calendarEventID: nil,
+            startTime: Date()
+        )
+        try store.updateMeetingTranscript(id: id, rawTranscript: "Should be hidden")
+        try store.deleteMeeting(id: id)
+
+        #expect(try store.meetingRawTranscript(id: id) == nil)
+    }
+
+    @Test("completeLiveMeeting can persist explicit recorded duration")
+    func completeLiveMeetingPersistsExplicitRecordedDuration() throws {
+        let store = try makeStore()
+        let originalStart = Date(timeIntervalSince1970: 1_000_000)
+        let resumedEnd = originalStart.addingTimeInterval(21 * 24 * 60 * 60)
+        let id = try store.createLiveMeeting(
+            title: "Long-running artifact",
+            calendarEventID: nil,
+            startTime: originalStart
+        )
+
+        try store.completeLiveMeeting(
+            id: id,
+            title: "Long-running artifact",
+            calendarEventID: nil,
+            startTime: originalStart,
+            endTime: resumedEnd,
+            durationSeconds: 210,
+            rawTranscript: "old\nnew",
+            formattedNotes: "notes",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+
+        let meeting = try #require(try store.meeting(id: id))
+        #expect(meeting.startTime == ISO8601DateFormatter().string(from: originalStart))
+        #expect(meeting.durationSeconds == 210)
+    }
+
     @Test("synced iOS dictation preserves source and is clean")
     func syncedIOSDictationPreservesSource() throws {
         let store = try makeStore()
@@ -723,6 +785,37 @@ struct DictationStoreTests {
         #expect(hasPendingAfterSecondPage == false)
     }
 
+    @Test("dirty sync queue skips live meetings until completion")
+    func dirtySyncQueueSkipsLiveMeetingsUntilCompletion() throws {
+        let store = try makeStore()
+        let start = Date(timeIntervalSince1970: 1_770_000_000)
+        let id = try store.createLiveMeeting(
+            title: "Live Meeting",
+            calendarEventID: nil,
+            startTime: start
+        )
+
+        #expect(try store.textRecordsNeedingSync().isEmpty)
+        #expect(try store.hasTextRecordsNeedingSync() == false)
+
+        try store.completeLiveMeeting(
+            id: id,
+            title: "Completed Meeting",
+            calendarEventID: nil,
+            startTime: start,
+            endTime: start.addingTimeInterval(60),
+            rawTranscript: "Completed transcript",
+            formattedNotes: "## Summary\nCompleted",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+
+        let record = try #require(try store.textRecordsNeedingSync().first { $0.kind == .meeting })
+        #expect(record.title == "Completed Meeting")
+        #expect(record.meetingStatus == .completed)
+        #expect(try store.hasTextRecordsNeedingSync())
+    }
+
     @Test("soft delete tombstones purge only after sync and retention")
     func softDeleteTombstonesPurgeOnlyAfterSyncAndRetention() throws {
         let store = try makeStore()
@@ -1125,6 +1218,67 @@ struct DictationStoreTests {
         #expect(meeting.wordCount == DictationStore.countWords(in: meeting.rawTranscript) + 3)
         #expect(meeting.durationSeconds == 4)
         #expect(try store.liveTranscriptCheckpointText(meetingID: id) == nil)
+    }
+
+    @Test("resumed meeting crash recovery preserves prior transcript and appends checkpoints")
+    func resumedMeetingCrashRecoveryPreservesPriorTranscriptAndAppendsCheckpoints() throws {
+        let store = try makeStore()
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let id = try store.insertMeeting(
+            title: "Original Meeting",
+            calendarEventID: nil,
+            startTime: start,
+            endTime: start.addingTimeInterval(120),
+            rawTranscript: "Original transcript",
+            formattedNotes: "## Summary\nOriginal notes",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+
+        #expect(try store.prepareMeetingForResume(id: id) == "Original transcript")
+        try store.appendLiveTranscriptCheckpoints(meetingID: id, entries: [
+            LiveTranscriptCheckpointEntry(timestampLabel: "10:03:01", speaker: "You", startSeconds: 1, endSeconds: 3, text: "Resumed words")
+        ])
+
+        let recovered = try store.recoverLiveMeetingFromTranscriptCheckpoints(id: id)
+
+        #expect(recovered == true)
+        let meeting = try #require(try store.meeting(id: id))
+        #expect(meeting.status == .completed)
+        #expect(meeting.rawTranscript == "Original transcript\n\n— Resumed —\n\n[10:03:01] You: Resumed words")
+        #expect(meeting.formattedNotes.contains("## Summary\nOriginal notes"))
+        #expect(meeting.formattedNotes.contains("Recovered from live transcript checkpoints after a resumed meeting"))
+        #expect(meeting.durationSeconds == 123)
+        #expect(try store.liveTranscriptCheckpointText(meetingID: id) == nil)
+        #expect(try store.recoverLiveMeetingFromTranscriptCheckpoints(id: id) == false)
+    }
+
+    @Test("resumed meeting crash recovery restores prior completed row without checkpoints")
+    func resumedMeetingCrashRecoveryRestoresPriorCompletedRowWithoutCheckpoints() throws {
+        let store = try makeStore()
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let id = try store.insertMeeting(
+            title: "Original Meeting",
+            calendarEventID: nil,
+            startTime: start,
+            endTime: start.addingTimeInterval(120),
+            rawTranscript: "Original transcript",
+            formattedNotes: "## Summary\nOriginal notes",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+
+        _ = try store.prepareMeetingForResume(id: id)
+
+        let recovered = try store.recoverLiveMeetingFromTranscriptCheckpoints(id: id)
+
+        #expect(recovered == true)
+        let meeting = try #require(try store.meeting(id: id))
+        #expect(meeting.status == .completed)
+        #expect(meeting.rawTranscript == "Original transcript")
+        #expect(meeting.formattedNotes == "## Summary\nOriginal notes")
+        #expect(meeting.durationSeconds == 120)
+        #expect(try store.recoverLiveMeetingFromTranscriptCheckpoints(id: id) == false)
     }
 
     @Test("normal live meeting completion clears transcript checkpoints")
@@ -1661,9 +1815,11 @@ struct DictationStoreTests {
     func clearMeetings() throws {
         let store = try makeStore()
         let now = Date()
-        try store.insertMeeting(title: "Del", calendarEventID: nil, startTime: now, endTime: now.addingTimeInterval(60), rawTranscript: "x", formattedNotes: "", micAudioPath: nil, systemAudioPath: nil)
+        let meetingID = try store.insertMeeting(title: "Del", calendarEventID: nil, startTime: now, endTime: now.addingTimeInterval(60), rawTranscript: "x", formattedNotes: "", micAudioPath: nil, systemAudioPath: nil)
+        _ = try store.prepareMeetingForResume(id: meetingID)
         try store.clearMeetings()
         #expect(try store.recentMeetings(limit: 100).isEmpty)
+        #expect(try store.recoverLiveMeetingFromTranscriptCheckpoints(id: meetingID) == false)
     }
 
     @Test("delete meeting removes a single meeting row")

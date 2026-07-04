@@ -5,6 +5,7 @@ struct ModelsView: View {
     let appState: AppState
     let controller: MuesliController
 
+    @State private var nemotron35UpdateAvailable = false
     @State private var downloadingModels: Set<String> = []
     @State private var downloadProgress: [String: Double] = [:]
     @State private var downloadedModels: Set<String> = []
@@ -20,8 +21,6 @@ struct ModelsView: View {
     @State private var downloadedPostProcModels: Set<String> = []
     @State private var downloadTasksPostProc: [String: Task<Void, Never>] = [:]
     @State private var postProcModelToDelete: PostProcessorOption?
-    @State private var isEditingSystemPrompt: Bool = false
-    @State private var editedSystemPrompt: String
 
     init(appState: AppState, controller: MuesliController) {
         self.appState = appState
@@ -31,7 +30,6 @@ struct ModelsView: View {
         _selectedParakeetModel = State(initialValue: BackendOption.parakeetFamily.contains(active) ? active.model : BackendOption.parakeetMultilingual.model)
         _selectedWhisperModel = State(initialValue: BackendOption.whisperFamily.contains(active) ? active.model : BackendOption.whisperSmall.model)
         _showExperimental = State(initialValue: false)
-        _editedSystemPrompt = State(initialValue: appState.config.postProcessorSystemPrompt)
     }
 
     var body: some View {
@@ -65,6 +63,8 @@ struct ModelsView: View {
 
                 modelCard(option: .cohereTranscribe, logo: "cohere-logo")
 
+                modelCard(option: .nemotron35Multilingual, logo: "nvidia-logo")
+
                 experimentalSection
 
                 postProcessorSection
@@ -94,6 +94,7 @@ struct ModelsView: View {
             checkDownloadedModels()
             checkDownloadedPostProcModels()
             syncSelectionsFromActiveBackend()
+            checkNemotron35Update()
         }
         .onChange(of: appState.selectedBackend.model) { _, _ in
             syncSelectionsFromActiveBackend()
@@ -153,7 +154,7 @@ struct ModelsView: View {
                                 .foregroundStyle(MuesliTheme.textSecondary)
                         }
 
-                        Text("SenseVoice, Qwen, and streaming backends. Hidden by default because these are still slower and less polished.")
+                        Text("SenseVoice, Qwen, Canary, and legacy streaming backends. Hidden by default because these are still slower and less polished.")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(MuesliTheme.textPrimary)
                             .opacity(0.8)
@@ -197,6 +198,22 @@ struct ModelsView: View {
         )
     }
 
+    private var indicASRLanguageSelection: Binding<IndicASRLanguage> {
+        Binding(
+            get: { appState.config.resolvedIndicASRLanguage },
+            set: { controller.selectIndicASRLanguage($0) }
+        )
+    }
+
+    private var nemotron35LanguageSelection: Binding<Nemotron35Language> {
+        Binding(
+            get: { appState.config.resolvedNemotron35Language },
+            set: { language in
+                Task { await controller.setNemotron35Language(language) }
+            }
+        )
+    }
+
     private var postProcessorSection: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
@@ -218,8 +235,6 @@ struct ModelsView: View {
                     postProcModelCard(option)
                 }
             }
-
-            systemPromptCard
         }
     }
 
@@ -334,101 +349,6 @@ struct ModelsView: View {
         .overlay(
             RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
                 .strokeBorder(isActive ? MuesliTheme.accent.opacity(0.5) : MuesliTheme.surfaceBorder, lineWidth: isActive ? 1.5 : 1)
-        )
-    }
-
-    private var systemPromptCard: some View {
-        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-            HStack {
-                VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                    Text("System Prompt")
-                        .font(MuesliTheme.headline())
-                        .foregroundStyle(MuesliTheme.textPrimary)
-                    Text("Controls how the model cleans up transcriptions. Applies to the active post-processor model.")
-                        .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.textSecondary)
-                }
-                Spacer()
-                if !isEditingSystemPrompt {
-                    Button("Edit") {
-                        editedSystemPrompt = appState.config.postProcessorSystemPrompt
-                        isEditingSystemPrompt = true
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(MuesliTheme.accent)
-                    .padding(.horizontal, MuesliTheme.spacing12)
-                    .padding(.vertical, 4)
-                    .background(MuesliTheme.accentSubtle)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                }
-            }
-
-            if isEditingSystemPrompt {
-                TextEditor(text: $editedSystemPrompt)
-                    .font(.system(size: 12, design: .monospaced))
-                    .frame(minHeight: 120)
-                    .scrollContentBackground(.hidden)
-                    .padding(8)
-                    .background(MuesliTheme.surfacePrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
-                            .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
-                    )
-
-                HStack(spacing: MuesliTheme.spacing8) {
-                    Button("Save") {
-                        controller.updatePostProcessorSystemPrompt(editedSystemPrompt)
-                        isEditingSystemPrompt = false
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(MuesliTheme.accent)
-                    .padding(.horizontal, MuesliTheme.spacing12)
-                    .padding(.vertical, 4)
-                    .background(MuesliTheme.accentSubtle)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-
-                    Button("Cancel") {
-                        isEditingSystemPrompt = false
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(MuesliTheme.textSecondary)
-                    .padding(.horizontal, MuesliTheme.spacing12)
-                    .padding(.vertical, 4)
-                    .background(MuesliTheme.surfacePrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-
-                    Button("Reset to Default") {
-                        editedSystemPrompt = PostProcessorOption.defaultSystemPrompt
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(MuesliTheme.textTertiary)
-                    .padding(.horizontal, MuesliTheme.spacing12)
-                    .padding(.vertical, 4)
-                    .background(MuesliTheme.surfacePrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                }
-            } else {
-                Text(appState.config.postProcessorSystemPrompt)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(MuesliTheme.textSecondary)
-                    .lineLimit(6)
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(MuesliTheme.surfacePrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-            }
-        }
-        .padding(MuesliTheme.spacing16)
-        .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
-        .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
-                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
     }
 
@@ -560,8 +480,9 @@ struct ModelsView: View {
         case "whisper": return "openai-logo"
         case "cohere": return "cohere-logo"
         case "qwen": return "qwen-logo"
-        case "nemotron": return "nvidia-logo"
+        case "nemotron35": return "nvidia-logo"
         case "canary": return "qwen-logo"
+        case "indicasr": return "ai4bharat-logo"
         case "sensevoice": return "qwen-logo"
         default: return nil
         }
@@ -691,6 +612,57 @@ struct ModelsView: View {
                     .labelsHidden()
                     .pickerStyle(.menu)
                     .frame(maxWidth: 220, alignment: .leading)
+                }
+            }
+
+            if option.backend == BackendOption.indicASR.backend {
+                HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
+                    Text("Language")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .frame(width: 64, alignment: .leading)
+
+                    Picker("", selection: indicASRLanguageSelection) {
+                        ForEach(IndicASRLanguage.allCases, id: \.self) { language in
+                            Text(language.label).tag(language)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 220, alignment: .leading)
+                }
+            }
+
+            if option.backend == BackendOption.nemotron35Multilingual.backend {
+                HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
+                    Text("Language")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .frame(width: 64, alignment: .leading)
+
+                    Picker("", selection: nemotron35LanguageSelection) {
+                        ForEach(Nemotron35Language.allCases, id: \.self) { language in
+                            Text(language.label).tag(language)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 220, alignment: .leading)
+                }
+
+                if isDownloaded && nemotron35UpdateAvailable && !isDownloading {
+                    HStack(spacing: MuesliTheme.spacing8) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 11))
+                            .foregroundStyle(MuesliTheme.accent)
+                        Text("A newer model build is available.")
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textSecondary)
+                        Button("Update") { updateNemotron35(option) }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(MuesliTheme.accent)
+                    }
                 }
             }
 
@@ -978,6 +950,24 @@ struct ModelsView: View {
         }
     }
 
+    /// Re-download Nemotron 3.5 to pick up a newer upstream build: delete the cached
+    /// files (so the download isn't skipped), then start a fresh download.
+    private func updateNemotron35(_ option: BackendOption) {
+        Task {
+            do {
+                await controller.transcriptionCoordinator.unloadNemotron35Transcriber()
+                try await deleteModelFiles(option)
+                await MainActor.run {
+                    downloadedModels.remove(option.model)
+                    nemotron35UpdateAvailable = false
+                    startDownload(option)
+                }
+            } catch {
+                fputs("[muesli-native] model update cleanup failed for \(option.backend)/\(option.model): \(error)\n", stderr)
+            }
+        }
+    }
+
     private func deleteModel(_ option: BackendOption) {
         if appState.selectedBackend == option {
             let fallback = downloadedModels
@@ -987,26 +977,34 @@ struct ModelsView: View {
         }
         // Remove cached model files
         Task {
-            await deleteModelFiles(option)
-            await MainActor.run {
-                _ = downloadedModels.remove(option.model)
+            do {
+                try await deleteModelFiles(option)
+                await MainActor.run {
+                    _ = downloadedModels.remove(option.model)
+                }
+            } catch {
+                fputs("[muesli-native] model delete failed for \(option.backend)/\(option.model): \(error)\n", stderr)
             }
         }
     }
 
-    private func deleteModelFiles(_ option: BackendOption) async {
+    private func deleteModelFiles(_ option: BackendOption) async throws {
         let fm = FileManager.default
         switch option.backend {
         case "whisper":
             WhisperKitTranscriber.deleteModel(option.model)
-        case "nemotron":
+        case "nemotron35":
             let path = fm.homeDirectoryForCurrentUser
-                .appendingPathComponent(".cache/muesli/models/nemotron-560ms")
-            try? fm.removeItem(at: path)
+                .appendingPathComponent(".cache/muesli/models/nemotron35-multilingual-2240ms")
+            try removeItemIfPresent(at: path, fileManager: fm)
         case "canary":
-            try? fm.removeItem(at: CanaryQwenModelStore.cacheDirectory())
+            try removeItemIfPresent(at: CanaryQwenModelStore.cacheDirectory(), fileManager: fm)
         case "cohere":
-            try? fm.removeItem(at: CohereTranscribeModelStore.cacheDirectory())
+            try removeItemIfPresent(at: CohereTranscribeModelStore.cacheDirectory(), fileManager: fm)
+        case "indicasr":
+            if IndicASRModelStore.localOverrideDirectory() == nil {
+                try removeItemIfPresent(at: IndicASRModelStore.cacheDirectory(), fileManager: fm)
+            }
         case "sensevoice":
             SenseVoiceTranscriber.deleteModelFiles(fileManager: fm)
         case "fluidaudio":
@@ -1017,17 +1015,22 @@ struct ModelsView: View {
                 let version = option.model.contains("v2") ? "v2" : "v3"
                 if let contents = try? fm.contentsOfDirectory(at: supportDir, includingPropertiesForKeys: nil) {
                     for dir in contents where dir.lastPathComponent.contains("parakeet") && dir.lastPathComponent.contains(version) {
-                        try? fm.removeItem(at: dir)
+                        try removeItemIfPresent(at: dir, fileManager: fm)
                     }
                 }
             }
         case "qwen":
             let path = fm.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/Application Support/FluidAudio/Models/qwen3-asr-0.6b-coreml")
-            try? fm.removeItem(at: path)
+            try removeItemIfPresent(at: path, fileManager: fm)
         default:
             break
         }
+    }
+
+    private func removeItemIfPresent(at url: URL, fileManager: FileManager) throws {
+        guard fileManager.fileExists(atPath: url.path) else { return }
+        try fileManager.removeItem(at: url)
     }
 
     // MARK: - Check Downloaded Status
@@ -1038,6 +1041,17 @@ struct ModelsView: View {
             if isModelDownloaded(option, fm: fm) {
                 downloadedModels.insert(option.model)
             }
+        }
+    }
+
+    /// Background check: does FluidInference's repo have a newer commit than what's
+    /// installed for Nemotron 3.5? Never auto-downloads — just surfaces a badge.
+    private func checkNemotron35Update() {
+        guard #available(macOS 15, *),
+              isModelDownloaded(.nemotron35Multilingual, fm: FileManager.default) else { return }
+        Task {
+            let available = await Nemotron35StreamingTranscriber.updateAvailable()
+            await MainActor.run { nemotron35UpdateAvailable = available }
         }
     }
 
@@ -1058,9 +1072,9 @@ struct ModelsView: View {
         switch option.backend {
         case "whisper":
             return WhisperKitTranscriber.isModelDownloaded(option.model)
-        case "nemotron":
+        case "nemotron35":
             let path = fm.homeDirectoryForCurrentUser
-                .appendingPathComponent(".cache/muesli/models/nemotron-560ms/encoder/encoder_int8.mlmodelc")
+                .appendingPathComponent(".cache/muesli/models/nemotron35-multilingual-2240ms/encoder.mlmodelc/coremldata.bin")
             return fm.fileExists(atPath: path.path)
         case "fluidaudio":
             // Check FluidAudio's cache
@@ -1082,6 +1096,8 @@ struct ModelsView: View {
             return CanaryQwenModelStore.isAvailableLocally()
         case "cohere":
             return CohereTranscribeModelStore.isAvailableLocally()
+        case "indicasr":
+            return IndicASRModelStore.isAvailableLocally()
         case "sensevoice":
             return SenseVoiceTranscriber.isModelDownloaded()
         default:

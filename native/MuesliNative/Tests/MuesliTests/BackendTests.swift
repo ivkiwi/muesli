@@ -76,22 +76,6 @@ struct SenseVoiceTranscriberTests {
     }
 }
 
-@Suite("NemotronStreamingTranscriber")
-struct NemotronStreamingTranscriberTests {
-
-    @Test("nemotron model references coreml repo")
-    func nemotronModel() {
-        #expect(BackendOption.nemotronStreaming.model.contains("coreml"))
-        #expect(BackendOption.nemotronStreaming.model.contains("FluidInference"))
-        #expect(BackendOption.nemotronStreaming.model.contains("nemotron"))
-    }
-
-    @Test("nemotron uses streaming in label")
-    func nemotronLabel() {
-        #expect(BackendOption.nemotronStreaming.label.lowercased().contains("streaming"))
-    }
-}
-
 @Suite("Backend coverage")
 struct BackendCoverageTests {
 
@@ -102,8 +86,7 @@ struct BackendCoverageTests {
         #expect(backendCounts["fluidaudio"]! >= 2, "FluidAudio should have at least 2 models")
         #expect(backendCounts["whisper"]! >= 1, "Whisper should have at least 1 model")
         #expect(backendCounts["sensevoice"]! >= 1, "SenseVoice should have at least 1 model")
-        // Nemotron excluded from .all until RNNT decode is validated
-        // #expect(backendCounts["nemotron"]! >= 1)
+        #expect(backendCounts["nemotron35"]! == 1, "Nemotron 3.5 should be the only Nemotron backend")
     }
 
     @Test("size labels are human-readable")
