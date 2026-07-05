@@ -282,8 +282,12 @@ struct MeetingChunkCollectorTests {
     @Test("collector releases live chunks in registration order")
     func collectorReleasesLiveChunksInRegistrationOrder() {
         let collector = MeetingChunkCollector()
-        let first = collector.add(Task { [SpeechSegment(start: 1, end: 2, text: "first")] })
-        let second = collector.add(Task { [SpeechSegment(start: 2, end: 3, text: "second")] })
+        let firstTask = Task { [SpeechSegment(start: 1, end: 2, text: "first")] }
+        let secondTask = Task { [SpeechSegment(start: 2, end: 3, text: "second")] }
+        let first = collector.add(firstTask)
+        let second = collector.add(secondTask)
+        firstTask.cancel()
+        secondTask.cancel()
 
         let early = collector.retire(id: second.retireID, segments: [SpeechSegment(start: 2, end: 3, text: "second")])
         let ready = collector.retire(id: first.retireID, segments: [SpeechSegment(start: 1, end: 2, text: "first")])
@@ -297,8 +301,12 @@ struct MeetingChunkCollectorTests {
     @Test("collector empty chunks advance live release sequence")
     func collectorEmptyChunksAdvanceLiveReleaseSequence() {
         let collector = MeetingChunkCollector()
-        let first = collector.add(Task { [] })
-        let second = collector.add(Task { [SpeechSegment(start: 2, end: 3, text: "second")] })
+        let firstTask = Task<[SpeechSegment], Never> { [] }
+        let secondTask = Task { [SpeechSegment(start: 2, end: 3, text: "second")] }
+        let first = collector.add(firstTask)
+        let second = collector.add(secondTask)
+        firstTask.cancel()
+        secondTask.cancel()
 
         let early = collector.retire(id: second.retireID, segments: [SpeechSegment(start: 2, end: 3, text: "second")])
         let ready = collector.retire(id: first.retireID, segments: [])
@@ -313,10 +321,18 @@ struct MeetingChunkCollectorTests {
     func collectorLiveReleaseStateIsIndependentPerTrack() {
         let mic = MeetingChunkCollector()
         let system = MeetingChunkCollector()
-        let micFirst = mic.add(Task { [SpeechSegment(start: 1, end: 2, text: "mic first")] })
-        let micSecond = mic.add(Task { [SpeechSegment(start: 2, end: 3, text: "mic second")] })
-        let systemFirst = system.add(Task { [SpeechSegment(start: 1, end: 2, text: "system first")] })
-        let systemSecond = system.add(Task { [SpeechSegment(start: 2, end: 3, text: "system second")] })
+        let micFirstTask = Task { [SpeechSegment(start: 1, end: 2, text: "mic first")] }
+        let micSecondTask = Task { [SpeechSegment(start: 2, end: 3, text: "mic second")] }
+        let systemFirstTask = Task { [SpeechSegment(start: 1, end: 2, text: "system first")] }
+        let systemSecondTask = Task { [SpeechSegment(start: 2, end: 3, text: "system second")] }
+        let micFirst = mic.add(micFirstTask)
+        let micSecond = mic.add(micSecondTask)
+        let systemFirst = system.add(systemFirstTask)
+        let systemSecond = system.add(systemSecondTask)
+        micFirstTask.cancel()
+        micSecondTask.cancel()
+        systemFirstTask.cancel()
+        systemSecondTask.cancel()
 
         let blockedMic = mic.retire(id: micSecond.retireID, segments: [SpeechSegment(start: 2, end: 3, text: "mic second")])
         let readySystem = system.retire(id: systemFirst.retireID, segments: [SpeechSegment(start: 1, end: 2, text: "system first")])
@@ -331,6 +347,27 @@ struct MeetingChunkCollectorTests {
         #expect(readySystem?.map { $0.map(\.text) } == [["system first"]])
         #expect(readyMic?.map { $0.map(\.text) } == [["mic first"], ["mic second"]])
         #expect(laterSystem?.map { $0.map(\.text) } == [["system second"]])
+    }
+
+    @Test("collector treats unknown retire IDs as stale callbacks")
+    func collectorTreatsUnknownRetireIDsAsStaleCallbacks() {
+        let collector = MeetingChunkCollector()
+        let firstTask = Task { [SpeechSegment(start: 1, end: 2, text: "first")] }
+        let secondTask = Task { [SpeechSegment(start: 2, end: 3, text: "second")] }
+        let first = collector.add(firstTask)
+        let second = collector.add(secondTask)
+        firstTask.cancel()
+        secondTask.cancel()
+
+        let blocked = collector.retire(id: second.retireID, segments: [SpeechSegment(start: 2, end: 3, text: "second")])
+        let stale = collector.retire(id: UUID(), segments: [SpeechSegment(start: 0, end: 1, text: "stale")])
+        let ready = collector.retire(id: first.retireID, segments: [SpeechSegment(start: 1, end: 2, text: "first")])
+
+        #expect(first.registered)
+        #expect(second.registered)
+        #expect(blocked?.isEmpty == true)
+        #expect(stale == nil)
+        #expect(ready?.map { $0.map(\.text) } == [["first"], ["second"]])
     }
 
     @Test("collector rejects tasks after closing")
@@ -365,6 +402,24 @@ struct MeetingChunkCollectorTests {
         let retired = collector.retire(id: registration.retireID, segments: await task.value)
 
         #expect(drained.map(\.text) == ["first"])
+        #expect(retired == nil)
+    }
+
+    @Test("collector retire returns nil after cancel closes collector")
+    func collectorRetireReturnsNilAfterCancel() async {
+        let collector = MeetingChunkCollector()
+        let task = Task<[SpeechSegment], Never> {
+            while !Task.isCancelled {
+                await Task.yield()
+            }
+            return [SpeechSegment(start: 1, end: 2, text: "first")]
+        }
+        let registration = collector.add(task)
+        #expect(registration.registered)
+
+        collector.cancelAll()
+        let retired = collector.retire(id: registration.retireID, segments: await task.value)
+
         #expect(retired == nil)
     }
 

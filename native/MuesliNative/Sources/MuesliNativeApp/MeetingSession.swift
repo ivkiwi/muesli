@@ -45,7 +45,7 @@ final class MeetingChunkCollector {
         lock.withLock { state in
             guard !state.isClosed else { return nil }
             guard let pendingIndex = state.pendingTasks.firstIndex(where: { $0.id == id }) else {
-                return []
+                return nil
             }
             let sequence = state.pendingTasks[pendingIndex].sequence
             state.completedSegments.append(contentsOf: segments)
