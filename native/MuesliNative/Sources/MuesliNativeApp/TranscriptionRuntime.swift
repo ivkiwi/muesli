@@ -15,7 +15,7 @@ struct SpeechTranscriptionResult: Sendable {
 
 actor TranscriptionCoordinator {
     static let explicitlyRoutedBackendIdentifiers: Set<String> = [
-        "whisper", "nemotron35", "qwen", "canary", "cohere", "indicasr", "sensevoice",
+        "whisper", "nemotron35", "gigaam_v3", "qwen", "canary", "cohere", "indicasr", "sensevoice",
     ]
 
     private let fluidTranscriber = FluidAudioTranscriber()
@@ -25,6 +25,7 @@ actor TranscriptionCoordinator {
     private var _canaryQwenTranscriber: Any?
     private var _cohereTranscriber: Any?
     private var _indicASRTranscriber: Any?
+    private let gigaAMV3Transcriber = GigaAMV3Transcriber()
     private let senseVoiceTranscriber = SenseVoiceTranscriber()
     private var vadManager: VadManager?
     private var diarizerManager: DiarizerManager?
@@ -272,6 +273,8 @@ actor TranscriptionCoordinator {
                     NSLocalizedDescriptionKey: "Nemotron 3.5 requires macOS 15 or later.",
                 ])
             }
+        case "gigaam_v3":
+            try await gigaAMV3Transcriber.loadModels(progress: progress)
         case "qwen":
             if #available(macOS 15, *) {
                 try await qwen3Transcriber.loadModels(progress: progress)
@@ -435,6 +438,7 @@ actor TranscriptionCoordinator {
     func shutdown() async {
         await fluidTranscriber.shutdown()
         await whisperTranscriber.shutdown()
+        await gigaAMV3Transcriber.shutdown()
         await senseVoiceTranscriber.shutdown()
         if #available(macOS 15, *) {
             if let nemotron35 = _nemotron35Transcriber as? Nemotron35StreamingTranscriber {
@@ -664,6 +668,8 @@ actor TranscriptionCoordinator {
             return try await transcribeWithWhisperKit(url: url)
         case "nemotron35":
             return try await transcribeWithNemotron35(url: url)
+        case "gigaam_v3":
+            return try await transcribeWithGigaAMV3(url: url)
         case "qwen":
             return try await transcribeWithQwen3(url: url)
         case "canary":
@@ -705,6 +711,19 @@ actor TranscriptionCoordinator {
         return SpeechTranscriptionResult(
             text: text,
             segments: text.isEmpty ? [] : [SpeechSegment(start: 0, end: 0, text: text)]
+        )
+    }
+
+    // MARK: - GigaAM v3 Russian ASR (CoreML)
+
+    private func transcribeWithGigaAMV3(url: URL) async throws -> SpeechTranscriptionResult {
+        fputs("[muesli-native] transcribing with GigaAM v3: \(url.lastPathComponent)\n", stderr)
+        let result = try await gigaAMV3Transcriber.transcribe(wavURL: url)
+        fputs("[muesli-native] GigaAM v3 result: \(result.text.prefix(80)) (took \(String(format: "%.3f", result.processingTime))s)\n", stderr)
+        let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return SpeechTranscriptionResult(
+            text: text,
+            segments: text.isEmpty ? [] : [SpeechSegment(start: 0, end: result.duration, text: text)]
         )
     }
 

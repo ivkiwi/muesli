@@ -25,7 +25,7 @@ struct BackendOptionTests {
 
     @Test("backend field is one of the known backends")
     func knownBackends() {
-        let known: Set<String> = ["fluidaudio", "whisper", "qwen", "nemotron35", "canary", "cohere", "indicasr", "sensevoice"]
+        let known: Set<String> = ["fluidaudio", "whisper", "qwen", "nemotron35", "gigaam_v3", "canary", "cohere", "indicasr", "sensevoice"]
         for option in BackendOption.all {
             #expect(known.contains(option.backend), "Unknown backend: \(option.backend)")
         }
@@ -72,6 +72,7 @@ struct BackendOptionTests {
         #expect(BackendOption.all.contains(.indicASR))
         #expect(BackendOption.all.contains(.senseVoiceSmall))
         #expect(BackendOption.all.contains(.nemotron35Multilingual))
+        #expect(BackendOption.all.contains(.gigaAMV3Russian))
     }
 
     @Test("Cohere uses cohere backend")

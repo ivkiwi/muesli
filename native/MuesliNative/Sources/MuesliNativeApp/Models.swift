@@ -73,6 +73,15 @@ struct BackendOption: Equatable {
         recommended: false
     )
 
+    static let gigaAMV3Russian = BackendOption(
+        backend: "gigaam_v3",
+        model: "huggingfinger0/gigaam-v3-coreml",
+        label: "GigaAM v3 (Russian)",
+        sizeLabel: GigaAMV3ModelStore.downloadedModelSizeLabel,
+        description: "Russian-first offline ASR via precompiled CoreML. Runs locally on Apple Silicon; no Python server or cloud.",
+        recommended: false
+    )
+
     static let canaryQwen = BackendOption(
         backend: "canary",
         model: "phequals/canary-qwen-2.5b-coreml-int8",
@@ -134,7 +143,7 @@ struct BackendOption: Equatable {
     ]
 
     /// Models available for download and use.
-    static let all: [BackendOption] = parakeetFamily + whisperFamily + [.cohereTranscribe, .nemotron35Multilingual] + experimental
+    static let all: [BackendOption] = parakeetFamily + whisperFamily + [.cohereTranscribe, .nemotron35Multilingual, .gigaAMV3Russian] + experimental
 
     /// Curated first-run choices shown in onboarding's "Other models" section.
     /// This is a deliberate hand-picked list, not a derived rule. Experimental models
@@ -198,6 +207,8 @@ struct BackendOption: Equatable {
             let path = fm.homeDirectoryForCurrentUser
                 .appendingPathComponent(".cache/muesli/models/nemotron35-multilingual-2240ms/encoder.mlmodelc/coremldata.bin")
             return fm.fileExists(atPath: path.path)
+        case "gigaam_v3":
+            return GigaAMV3ModelStore.isAvailableLocally()
         case "canary":
             return CanaryQwenModelStore.isAvailableLocally()
         case "cohere":
