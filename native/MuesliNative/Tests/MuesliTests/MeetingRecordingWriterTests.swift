@@ -167,6 +167,57 @@ struct MeetingRecordingWriterTests {
         #expect(try store.meeting(id: migratedID)?.savedRecordingPath == migratedPath)
     }
 
+    @Test("legacy wav orphan cleanup continues after one delete failure")
+    func legacyWAVMigrationContinuesAfterOrphanDeleteFailure() async throws {
+        let store = try makeStore()
+        let recordingsDirectory = makeTemporaryDirectory()
+        let legacyWAVURL = recordingsDirectory.appendingPathComponent("legacy.wav")
+        let failedStubURL = recordingsDirectory.appendingPathComponent("failing-stub.wav")
+        let smallStubURL = recordingsDirectory.appendingPathComponent("small-stub.wav")
+        let migratedStubURL = recordingsDirectory.appendingPathComponent("migrated-stub.wav")
+        let migratedSiblingURL = recordingsDirectory.appendingPathComponent("migrated-stub.m4a")
+        try Data(repeating: 1, count: 2_048).write(to: legacyWAVURL)
+        try Data([0]).write(to: failedStubURL)
+        try Data([1]).write(to: smallStubURL)
+        try Data(repeating: 2, count: 2_048).write(to: migratedStubURL)
+        try Data("m4a".utf8).write(to: migratedSiblingURL)
+
+        let now = Date(timeIntervalSince1970: 1_711_000_000)
+        let meetingID = try store.insertMeeting(
+            title: "Legacy",
+            calendarEventID: nil,
+            startTime: now,
+            endTime: now.addingTimeInterval(60),
+            rawTranscript: "legacy",
+            formattedNotes: "",
+            micAudioPath: nil,
+            systemAudioPath: nil,
+            savedRecordingPath: legacyWAVURL.path
+        )
+        let fileManager = StubDeleteFailureFileManager(failingURL: failedStubURL)
+
+        let summary = try await MeetingRecordingWriter.migrateLegacyWAVRecordings(
+            store: store,
+            recordingsDirectory: recordingsDirectory,
+            fileManager: fileManager,
+            encode: { _, destinationURL in
+                try Data("m4a".utf8).write(to: destinationURL)
+            }
+        )
+
+        let meeting = try #require(try store.meeting(id: meetingID))
+        let migratedPath = try #require(meeting.savedRecordingPath)
+        #expect(summary.migrated == 1)
+        #expect(summary.deletedOrphanStubs == 2)
+        #expect(migratedPath.hasSuffix(".m4a"))
+        #expect(fileManager.failedRemoveAttempts == 1)
+        #expect(FileManager.default.fileExists(atPath: legacyWAVURL.path) == false)
+        #expect(FileManager.default.fileExists(atPath: failedStubURL.path))
+        #expect(FileManager.default.fileExists(atPath: smallStubURL.path) == false)
+        #expect(FileManager.default.fileExists(atPath: migratedStubURL.path) == false)
+        #expect(FileManager.default.fileExists(atPath: migratedSiblingURL.path))
+    }
+
     @Test("legacy wav migration deletes shared wav only after last reference migrates")
     func legacyWAVMigrationDeletesSharedWAVAfterLastReferenceMigrates() async throws {
         let store = try makeStore()
@@ -275,8 +326,8 @@ struct MeetingRecordingWriterTests {
             savedRecordingPath: legacyWAVURL.path
         )
 
-        do {
-            _ = try await MeetingRecordingWriter.migrateLegacyWAVRecordings(
+        await #expect(throws: CancellationError.self) {
+            try await MeetingRecordingWriter.migrateLegacyWAVRecordings(
                 store: store,
                 recordingsDirectory: recordingsDirectory,
                 encode: { _, destinationURL in
@@ -284,8 +335,6 @@ struct MeetingRecordingWriterTests {
                     throw CancellationError()
                 }
             )
-            Issue.record("Migration should rethrow cancellation")
-        } catch is CancellationError {
         }
 
         let meeting = try #require(try store.meeting(id: meetingID))
@@ -323,5 +372,36 @@ struct MeetingRecordingWriterTests {
             let buffer = rawBuffer.bindMemory(to: Int16.self)
             return Array(buffer.prefix(count)).map(Int16.init(littleEndian:))
         }
+    }
+}
+
+private final class StubDeleteFailureFileManager: FileManager {
+    private let failingPath: String
+    private(set) var failedRemoveAttempts = 0
+
+    init(failingURL: URL) {
+        self.failingPath = failingURL.standardizedFileURL.path
+        super.init()
+    }
+
+    override func contentsOfDirectory(
+        at url: URL,
+        includingPropertiesForKeys keys: [URLResourceKey]?,
+        options mask: FileManager.DirectoryEnumerationOptions
+    ) throws -> [URL] {
+        try super.contentsOfDirectory(at: url, includingPropertiesForKeys: keys, options: mask)
+            .sorted { lhs, rhs in
+                if lhs.standardizedFileURL.path == failingPath { return true }
+                if rhs.standardizedFileURL.path == failingPath { return false }
+                return lhs.lastPathComponent < rhs.lastPathComponent
+            }
+    }
+
+    override func removeItem(at URL: URL) throws {
+        guard URL.standardizedFileURL.path != failingPath else {
+            failedRemoveAttempts += 1
+            throw NSError(domain: "MeetingRecordingWriterTests", code: 2)
+        }
+        try super.removeItem(at: URL)
     }
 }
