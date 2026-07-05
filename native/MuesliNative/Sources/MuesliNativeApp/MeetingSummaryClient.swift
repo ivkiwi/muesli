@@ -402,7 +402,13 @@ enum MeetingSummaryClient {
         let marker = "\n\n[Transcript truncated: middle omitted to fit \(maxCharacters)-character summary prompt budget.]\n\n"
         let contentBudget = max(maxCharacters - marker.count, 0)
         guard contentBudget > 0 else {
-            return String(marker.prefix(maxCharacters))
+            // Tiny budgets cannot fit the marker; avoid returning a misleading partial marker.
+            let boundedTranscript = String(transcript.prefix(maxCharacters))
+            logSummaryTranscriptTruncated(
+                originalCharacters: transcript.count,
+                omittedCharacters: transcript.count - boundedTranscript.count
+            )
+            return boundedTranscript
         }
 
         let openingBudget = contentBudget / 2
@@ -411,9 +417,18 @@ enum MeetingSummaryClient {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let closing = String(lastChunk.suffix(closingBudget))
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        logSummaryTranscriptTruncated(
+            originalCharacters: transcript.count,
+            omittedCharacters: max(transcript.count - opening.count - closing.count, 0)
+        )
 
         return "\(opening)\(marker)\(closing)"
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func logSummaryTranscriptTruncated(originalCharacters: Int, omittedCharacters: Int) {
+        logger.info("summary transcript truncated originalChars=\(originalCharacters) omittedChars=\(omittedCharacters)")
+        DiagnosticsLog.write("[summary] transcript truncated originalChars=\(originalCharacters) omittedChars=\(omittedCharacters)")
     }
 
     static func notesByRetainingManualNotes(generatedNotes: String, manualNotes: String?) -> String {
