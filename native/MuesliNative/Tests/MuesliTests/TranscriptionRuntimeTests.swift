@@ -306,6 +306,7 @@ struct GigaAMV3FileChunkingTests {
             (36 * sampleRate)..<(56 * sampleRate),
             (54 * sampleRate)..<(61 * sampleRate),
         ])
+        #expect(GigaAMV3FileChunking.shouldChunk(sampleCount: sampleCount))
     }
 
     @Test("empty audio produces no windows")
@@ -322,6 +323,21 @@ struct GigaAMV3FileChunkingTests {
         ])
 
         #expect(result == "alpha beta gamma delta epsilon zeta eta theta iota")
+    }
+
+    @Test("merge deduplicates single word overlap")
+    func mergeDeduplicatesSingleWordOverlap() {
+        let result = GigaAMV3FileChunking.mergeTranscripts([
+            "alpha beta",
+            "beta gamma",
+        ])
+
+        #expect(result == "alpha beta gamma")
+    }
+
+    @Test("gigaam cache path stays under app support")
+    func gigaAMCachePath() {
+        #expect(GigaAMV3ModelStore.cacheDirectory().path.hasSuffix("Library/Application Support/Guesli/Models/gigaam-v3-coreml"))
     }
 }
 
