@@ -71,7 +71,7 @@ func nemotronValidateArray(
     dataType: MLMultiArrayDataType,
     shape expectedShape: [Int?],
     failure: (String) -> NemotronRNNTError = NemotronRNNTError.decodingFailed
-) throws -> (shape: [Int], strides: [Int]) {
+) throws -> (shape: [Int], strides: [Int], storageSpan: Int) {
     let shape = array.shape.map(\.intValue)
     let strides = array.strides.map(\.intValue)
     let expected = "[" + expectedShape.map { $0.map(String.init) ?? "*" }.joined(separator: ", ") + "]"
@@ -107,11 +107,14 @@ func nemotronValidateArray(
         }
         maxOffset = newMaxOffset
     }
-    guard maxOffset < array.count else {
-        throw failure("\(name) shape \(shape) and strides \(strides) exceed backing count \(array.count)")
+    // MLMultiArray.count is the logical element count. CoreML may return padded
+    // layouts whose last addressable stride offset is greater than that count.
+    let (storageSpan, spanOverflow) = maxOffset.addingReportingOverflow(1)
+    guard !spanOverflow else {
+        throw failure("\(name) shape \(shape) and strides \(strides) overflow storage-span validation")
     }
 
-    return (shape, strides)
+    return (shape, strides, storageSpan)
 }
 
 /// Create a fresh streaming state with zero-initialized caches sized for `config`.
@@ -215,7 +218,7 @@ func nemotronTranscribeChunk(
         )
     }
     let encoderMel = try MLMultiArray(shape: [1, 128, NSNumber(value: totalMelFrames)], dataType: .float32)
-    let melSrcPtr = mel.dataPointer.bindMemory(to: Float.self, capacity: mel.count)
+    let melSrcPtr = mel.dataPointer.bindMemory(to: Float.self, capacity: melLayout.storageSpan)
     let melDstPtr = encoderMel.dataPointer.bindMemory(to: Float.self, capacity: encoderMel.count)
     memset(melDstPtr, 0, encoderMel.count * MemoryLayout<Float>.size)
 
@@ -272,7 +275,7 @@ func nemotronTranscribeChunk(
             "encoded_length value \(numFrames) outside valid range 0...\(encodedLayout.shape[2]) for encoded shape \(encodedLayout.shape)"
         )
     }
-    let encodedPtr = encoded.dataPointer.bindMemory(to: Float.self, capacity: encoded.count)
+    let encodedPtr = encoded.dataPointer.bindMemory(to: Float.self, capacity: encodedLayout.storageSpan)
     let encoderDim = config.encoderDim
 
     for t in 0..<numFrames {

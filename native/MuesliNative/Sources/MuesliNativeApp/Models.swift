@@ -75,10 +75,10 @@ struct BackendOption: Equatable {
 
     static let gigaAMV3Russian = BackendOption(
         backend: "gigaam_v3",
-        model: "kruatech/gigaam-v3-mlx",
+        model: "huggingfinger0/gigaam-v3-coreml",
         label: "GigaAM v3 Russian",
         sizeLabel: GigaAMV3ModelStore.downloadedModelSizeLabel,
-        description: "Russian-first offline ASR via MLX Swift. Runs locally on Apple Silicon; no Python server or cloud.",
+        description: "Russian-first offline ASR via precompiled CoreML. Runs locally on Apple Silicon; no Python server or cloud.",
         recommended: false
     )
 
@@ -150,7 +150,10 @@ struct BackendOption: Equatable {
     }
 
     static func resolve(backend: String, model: String) -> BackendOption? {
-        all.first { $0.backend == backend && $0.model == model }
+        if backend == gigaAMV3Russian.backend, model == "kruatech/gigaam-v3-mlx" {
+            return .gigaAMV3Russian
+        }
+        return all.first { $0.backend == backend && $0.model == model }
     }
 
     var isStreamingDictationBackend: Bool {

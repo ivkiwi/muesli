@@ -53,13 +53,13 @@ struct BackendOptionTests {
         #expect(BackendOption.all.contains(.nemotron35Multilingual))
     }
 
-    @Test("GigaAM v3 uses MLX Russian backend")
+    @Test("GigaAM v3 uses CoreML Russian backend")
     func gigaAMV3Backend() {
         #expect(BackendOption.gigaAMV3Russian.backend == "gigaam_v3")
-        #expect(BackendOption.gigaAMV3Russian.model == "kruatech/gigaam-v3-mlx")
+        #expect(BackendOption.gigaAMV3Russian.model == "huggingfinger0/gigaam-v3-coreml")
         #expect(BackendOption.gigaAMV3Russian.label.contains("GigaAM v3"))
         #expect(BackendOption.gigaAMV3Russian.description.contains("Russian"))
-        #expect(BackendOption.gigaAMV3Russian.description.contains("MLX"))
+        #expect(BackendOption.gigaAMV3Russian.description.contains("CoreML"))
         #expect(!BackendOption.gigaAMV3Russian.recommended)
         #expect(BackendOption.all.contains(.gigaAMV3Russian))
         #expect(BackendOption.all.first == .gigaAMV3Russian)
@@ -77,6 +77,7 @@ struct BackendOptionTests {
 
         for file in gigaAMV3RequiredFiles {
             let url = root.appendingPathComponent(file.path)
+            try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             _ = fm.createFile(atPath: url.path, contents: nil)
             let handle = try FileHandle(forWritingTo: url)
             try handle.truncate(atOffset: UInt64(max(file.minimumBytes - 1, 0)))
@@ -93,6 +94,11 @@ struct BackendOptionTests {
         }
 
         #expect(GigaAMV3ModelStore.isCompleteModelDirectory(root, fileManager: fm))
+    }
+
+    @Test("GigaAM v3 resolves legacy MLX model id to CoreML backend")
+    func gigaAMV3LegacyMLXModelIDResolves() {
+        #expect(BackendOption.resolve(backend: "gigaam_v3", model: "kruatech/gigaam-v3-mlx") == .gigaAMV3Russian)
     }
 
     @Test("whisper alias points to parakeetMultilingual")
@@ -160,12 +166,21 @@ struct BackendOptionTests {
 
     private var gigaAMV3RequiredFiles: [(path: String, minimumBytes: Int64)] {
         [
-            ("manifest.json", 1_269),
+            ("Encoder.mlmodelc/weights/weight.bin", 221_625_000),
+            ("Encoder.mlmodelc/model.mil", 590_000),
+            ("Encoder.mlmodelc/metadata.json", 2_000),
+            ("Encoder.mlmodelc/coremldata.bin", 400),
+            ("Predictor.mlmodelc/weights/weight.bin", 1_160_000),
+            ("Predictor.mlmodelc/model.mil", 9_000),
+            ("Predictor.mlmodelc/metadata.json", 3_000),
+            ("Predictor.mlmodelc/coremldata.bin", 400),
+            ("JointDecision.mlmodelc/weights/weight.bin", 685_000),
+            ("JointDecision.mlmodelc/model.mil", 6_000),
+            ("JointDecision.mlmodelc/metadata.json", 2_000),
+            ("JointDecision.mlmodelc/coremldata.bin", 400),
+            ("vocab.txt", 13_000),
             ("hann_window.f32.bin", 1_280),
             ("mel_filterbank_mel_freq.f32.bin", 41_216),
-            ("tokenizer.model", 255_336),
-            ("tokenizer_vocab.json", 16_691),
-            ("weights.fp16.safetensors", 445_105_914),
         ]
     }
 

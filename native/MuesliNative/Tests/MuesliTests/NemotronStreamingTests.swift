@@ -873,6 +873,38 @@ struct NemotronRNNTShapeGuardTests {
             #expect(description.contains("got 2"))
         }
     }
+
+    @Test("encoded validation accepts CoreML padded strides")
+    func encodedValidationAcceptsPaddedStrides() throws {
+        let elementCount = 16
+        let byteCount = elementCount * MemoryLayout<Float>.stride
+        let raw = UnsafeMutableRawPointer.allocate(
+            byteCount: byteCount,
+            alignment: MemoryLayout<Float>.alignment
+        )
+        raw.bindMemory(to: Float.self, capacity: elementCount)
+            .initialize(repeating: 0, count: elementCount)
+
+        let encoded = try MLMultiArray(
+            dataPointer: raw,
+            shape: [1, 4, 3],
+            dataType: .float32,
+            strides: [64, 4, 1],
+            deallocator: { pointer in pointer.deallocate() }
+        )
+
+        let layout = try nemotronValidateArray(
+            encoded,
+            name: "encoded",
+            dataType: .float32,
+            shape: [1, 4, nil]
+        )
+
+        #expect(encoded.count == 12)
+        #expect(layout.shape == [1, 4, 3])
+        #expect(layout.strides == [64, 4, 1])
+        #expect(layout.storageSpan == 15)
+    }
 }
 
 @Suite("Nemotron35 backend metadata")

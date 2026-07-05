@@ -592,7 +592,7 @@ actor TranscriptionCoordinator {
         )
     }
 
-    // MARK: - GigaAM v3 Russian ASR (MLX)
+    // MARK: - GigaAM v3 Russian ASR (CoreML)
 
     private func transcribeWithGigaAMV3(url: URL, samples: [Float]? = nil) async throws -> SpeechTranscriptionResult {
         fputs("[muesli-native] transcribing with GigaAM v3: \(url.lastPathComponent)\n", stderr)
