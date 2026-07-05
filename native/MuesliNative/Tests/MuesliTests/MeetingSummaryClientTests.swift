@@ -227,6 +227,18 @@ struct MeetingSummaryClientTests {
         #expect(prompt.contains("CLOSING-END"))
     }
 
+    @Test("summary transcript uses raw prefix when marker cannot fit")
+    func summaryTranscriptUsesRawPrefixWhenMarkerCannotFit() {
+        let transcript = "abcdef"
+
+        let bounded = MeetingSummaryClient.summaryTranscriptForPrompt(
+            transcript,
+            maxCharacters: 3
+        )
+
+        #expect(bounded == "abc")
+    }
+
     @Test("summarize routes to OpenRouter when configured")
     func routesToOpenRouter() async throws {
         var config = AppConfig()

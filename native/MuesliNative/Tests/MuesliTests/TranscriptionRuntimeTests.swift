@@ -483,6 +483,8 @@ struct Qwen3PostProcessingOutputCleanerTests {
         #expect(Qwen3PostProcessorOutputCleaner.appendSentenceFinalPeriodIfNeeded("\"so.\"") == "\"so.\"")
         // Closing quote after a word gets an outside period; moving it inside would rewrite dictated text.
         #expect(Qwen3PostProcessorOutputCleaner.appendSentenceFinalPeriodIfNeeded("\"so\"") == "\"so\".")
+        #expect(Qwen3PostProcessorOutputCleaner.appendSentenceFinalPeriodIfNeeded("“so”") == "“so”.")
+        #expect(Qwen3PostProcessorOutputCleaner.appendSentenceFinalPeriodIfNeeded("‘so’") == "‘so’.")
     }
 
     @Test("rejects assistant-style analysis output")
