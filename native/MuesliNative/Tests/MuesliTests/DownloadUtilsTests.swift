@@ -20,7 +20,7 @@ struct DownloadUtilsTests {
             try moveDownloadedTemporaryFile(tempURL, to: destination)
         }
 
-        #expect(!fm.fileExists(atPath: tempURL.path))
+        #expect(try fm.contentsOfDirectory(atPath: root.path).isEmpty)
         #expect(!fm.fileExists(atPath: destination.path))
     }
 
@@ -39,7 +39,7 @@ struct DownloadUtilsTests {
         try moveDownloadedTemporaryFile(tempURL, to: destination)
 
         #expect(fm.fileExists(atPath: destination.path))
-        #expect(!fm.fileExists(atPath: tempURL.path))
+        #expect(try fm.contentsOfDirectory(atPath: root.path) == ["model.bin"])
         let movedPayload = try Data(contentsOf: destination)
         #expect(movedPayload == payload)
     }
