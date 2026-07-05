@@ -8,8 +8,7 @@ struct DownloadUtilsTests {
     @Test("failed move removes downloaded temp file")
     func failedMoveRemovesDownloadedTempFile() async throws {
         let tempDirectory = makeTemporaryDirectory()
-        let tempURL = tempDirectory.appendingPathComponent("download.tmp")
-        try Data("payload".utf8).write(to: tempURL)
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
         let destination = tempDirectory
             .appendingPathComponent("missing", isDirectory: true)
             .appendingPathComponent("model.bin")
@@ -19,49 +18,47 @@ struct DownloadUtilsTests {
                 from: requestURL,
                 to: destination,
                 maxRetries: 1,
-                download: { _ in (tempURL, okResponse) }
+                download: downloadPayload(in: tempDirectory, response: okResponse)
             )
         }
 
-        #expect(FileManager.default.fileExists(atPath: tempURL.path) == false)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: tempDirectory.path).isEmpty)
         #expect(FileManager.default.fileExists(atPath: destination.path) == false)
     }
 
     @Test("successful move leaves no temp file")
     func successfulMoveLeavesNoTempFile() async throws {
         let tempDirectory = makeTemporaryDirectory()
-        let tempURL = tempDirectory.appendingPathComponent("download.tmp")
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
         let destination = tempDirectory.appendingPathComponent("model.bin")
-        try Data("payload".utf8).write(to: tempURL)
 
         try await downloadWithRetry(
             from: requestURL,
             to: destination,
             maxRetries: 1,
-            download: { _ in (tempURL, okResponse) }
+            download: downloadPayload(in: tempDirectory, response: okResponse)
         )
 
-        #expect(FileManager.default.fileExists(atPath: tempURL.path) == false)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: tempDirectory.path) == ["model.bin"])
         #expect(try Data(contentsOf: destination) == Data("payload".utf8))
     }
 
     @Test("HTTP error removes downloaded temp file")
     func httpErrorRemovesDownloadedTempFile() async throws {
         let tempDirectory = makeTemporaryDirectory()
-        let tempURL = tempDirectory.appendingPathComponent("download.tmp")
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
         let destination = tempDirectory.appendingPathComponent("model.bin")
-        try Data("payload".utf8).write(to: tempURL)
 
         await #expect(throws: DownloadError.self) {
             try await downloadWithRetry(
                 from: requestURL,
                 to: destination,
                 maxRetries: 1,
-                download: { _ in (tempURL, errorResponse) }
+                download: downloadPayload(in: tempDirectory, response: errorResponse)
             )
         }
 
-        #expect(FileManager.default.fileExists(atPath: tempURL.path) == false)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: tempDirectory.path).isEmpty)
         #expect(FileManager.default.fileExists(atPath: destination.path) == false)
     }
 
@@ -82,5 +79,16 @@ struct DownloadUtilsTests {
             .appendingPathComponent("download-utils-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+
+    private func downloadPayload(
+        in directory: URL,
+        response: HTTPURLResponse
+    ) -> (URL) async throws -> (URL, URLResponse) {
+        { _ in
+            let tempURL = directory.appendingPathComponent("download-\(UUID().uuidString).tmp")
+            try Data("payload".utf8).write(to: tempURL)
+            return (tempURL, response)
+        }
     }
 }
