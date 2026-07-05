@@ -22,6 +22,20 @@ func downloadWithRetry(
     maxRetries: Int = 3,
     session: URLSession = .shared
 ) async throws {
+    try await downloadWithRetry(
+        from: url,
+        to: destination,
+        maxRetries: maxRetries,
+        download: { try await session.download(from: $0) }
+    )
+}
+
+func downloadWithRetry(
+    from url: URL,
+    to destination: URL,
+    maxRetries: Int = 3,
+    download: (URL) async throws -> (URL, URLResponse)
+) async throws {
     var lastError: Error?
     for attempt in 0..<maxRetries {
         if attempt > 0 {
@@ -31,14 +45,13 @@ func downloadWithRetry(
         }
         do {
             try Task.checkCancellation()
-            let (tempURL, response) = try await session.download(from: url)
+            let (tempURL, response) = try await download(url)
             guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
                 let code = (response as? HTTPURLResponse)?.statusCode ?? -1
                 try? FileManager.default.removeItem(at: tempURL)
                 throw DownloadError.httpError(code, url.lastPathComponent)
             }
-            try? FileManager.default.removeItem(at: destination)
-            try FileManager.default.moveItem(at: tempURL, to: destination)
+            try moveDownloadedTemporaryFile(tempURL, to: destination)
             return
         } catch is CancellationError {
             throw CancellationError()
@@ -50,4 +63,17 @@ func downloadWithRetry(
         NSLocalizedDescriptionKey: "No download attempts were made",
     ])
     throw DownloadError.retriesExhausted(url.lastPathComponent, underlying)
+}
+
+func moveDownloadedTemporaryFile(_ tempURL: URL, to destination: URL) throws {
+    var movedToDestination = false
+    defer {
+        if !movedToDestination {
+            try? FileManager.default.removeItem(at: tempURL)
+        }
+    }
+
+    try? FileManager.default.removeItem(at: destination)
+    try FileManager.default.moveItem(at: tempURL, to: destination)
+    movedToDestination = true
 }
