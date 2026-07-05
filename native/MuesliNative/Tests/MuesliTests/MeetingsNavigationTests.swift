@@ -214,6 +214,51 @@ struct MeetingsNavigationTests {
         #expect(FileManager.default.fileExists(atPath: cacheURL.path) == false)
     }
 
+    @Test("deleteMeeting removes saved recording when waveform cache removal fails")
+    func deleteMeetingRemovesSavedRecordingWhenWaveformCacheRemovalFails() throws {
+        let store = try makeStore()
+        let configStore = makeConfigStore()
+        let supportRoot = configStore.supportDirectory().deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: supportRoot) }
+
+        let recordingsDirectory = MeetingRecordingStorage.directory(
+            config: AppConfig(),
+            supportDirectory: configStore.supportDirectory()
+        )
+        try FileManager.default.createDirectory(at: recordingsDirectory, withIntermediateDirectories: true)
+        let savedRecordingURL = recordingsDirectory.appendingPathComponent("meeting.wav")
+        try Data("recording".utf8).write(to: savedRecordingURL)
+        let cacheURL = try RecordingWaveformCacheFiles.cacheURL(
+            for: savedRecordingURL,
+            supportDirectory: configStore.supportDirectory()
+        )
+        try Data("cache".utf8).write(to: cacheURL)
+        let cacheDirectory = cacheURL.deletingLastPathComponent()
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: cacheDirectory.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cacheDirectory.path) }
+
+        let now = Date()
+        try store.insertMeeting(
+            title: "Delete Cache Failure Target",
+            calendarEventID: nil,
+            startTime: now,
+            endTime: now.addingTimeInterval(60),
+            rawTranscript: "Transcript",
+            formattedNotes: "## Notes",
+            micAudioPath: nil,
+            systemAudioPath: nil,
+            savedRecordingPath: savedRecordingURL.path
+        )
+        let controller = makeController(configStore: configStore, dictationStore: store)
+        let meetingID = try store.recentMeetings(limit: 1).first!.id
+
+        controller.deleteMeeting(id: meetingID)
+
+        #expect(try store.meeting(id: meetingID) == nil)
+        #expect(FileManager.default.fileExists(atPath: savedRecordingURL.path) == false)
+        #expect(FileManager.default.fileExists(atPath: cacheURL.path))
+    }
+
     @Test("clearMeetingHistory removes saved recordings and waveform cache")
     func clearMeetingHistoryRemovesSavedRecordingsAndWaveformCache() throws {
         let store = try makeStore()
