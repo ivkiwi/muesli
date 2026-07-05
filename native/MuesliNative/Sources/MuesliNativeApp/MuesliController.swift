@@ -415,7 +415,7 @@ final class MuesliController: NSObject {
     private var latestMeetingActivityCandidateObservedAt: Date?
     private var activeMeetingAutoStop = MeetingAutoStopTracker()
     private var activeMeetingSignalLossResponse: MeetingSignalLossResponse = .none
-    private var isMeetingSignalLossPromptSuppressed = false
+    private var meetingSignalLossPromptState = MeetingSignalLossPromptState()
     private let meetingAutoStopGracePeriod: TimeInterval = 20
     private var meetingActivity: NSObjectProtocol?
     private var isStoppingMeetingRecording = false
@@ -6008,7 +6008,7 @@ final class MuesliController: NSObject {
     ) {
         activeMeetingAutoStop.arm(source: source)
         activeMeetingSignalLossResponse = source == nil ? .none : response
-        isMeetingSignalLossPromptSuppressed = false
+        meetingSignalLossPromptState.resetForRecording()
         syncMeetingDetectionMonitor()
     }
 
@@ -6038,7 +6038,7 @@ final class MuesliController: NSObject {
     private func disarmMeetingAutoStop() {
         activeMeetingAutoStop.disarm()
         activeMeetingSignalLossResponse = .none
-        isMeetingSignalLossPromptSuppressed = false
+        meetingSignalLossPromptState.resetForRecording()
         latestMeetingActivityCandidate = nil
         latestMeetingActivityCandidateObservedAt = nil
         syncMeetingDetectionMonitor()
@@ -6083,7 +6083,7 @@ final class MuesliController: NSObject {
             }
         } ?? false
         if matchedSource {
-            isMeetingSignalLossPromptSuppressed = false
+            meetingSignalLossPromptState.markSourceRecovered()
             dismissMeetingSignalLossPromptIfVisible(for: activeMeetingID)
         }
         if activeMeetingAutoStop.observe(
@@ -6109,7 +6109,7 @@ final class MuesliController: NSObject {
 
     private func presentMeetingSignalLossPromptIfNeeded() {
         guard activeMeetingSignalLossResponse != .none,
-              !isMeetingSignalLossPromptSuppressed,
+              meetingSignalLossPromptState.canPresentPrompt,
               activeMeetingSession?.isRecording == true,
               !isStoppingMeetingRecording else { return }
 
@@ -6117,7 +6117,7 @@ final class MuesliController: NSObject {
         let promptID = meetingSignalLossPromptID(for: meetingID)
         guard meetingNotification.currentPromptID != promptID || !meetingNotification.isVisible else { return }
 
-        isMeetingSignalLossPromptSuppressed = true
+        meetingSignalLossPromptState.markPromptPresented()
         let response = activeMeetingSignalLossResponse
         let didShow = meetingNotification.show(
             promptID: promptID,
@@ -6132,13 +6132,14 @@ final class MuesliController: NSObject {
                 self.stopMeetingRecording()
             },
             onDismiss: { [weak self] in
-                self?.isMeetingSignalLossPromptSuppressed = true
+                guard let self, self.activeMeetingID == meetingID else { return }
+                self.meetingSignalLossPromptState.markDismissedByUser()
             },
             onAutoDismiss: { [weak self] in
                 guard let self else { return }
-                self.isMeetingSignalLossPromptSuppressed = true
-                guard response == .autoStopAfterWarning else { return }
                 guard self.activeMeetingID == meetingID else { return }
+                self.meetingSignalLossPromptState.markAutoDismissed()
+                guard response == .autoStopAfterWarning else { return }
                 fputs("[meeting] auto-stopping recording after meeting source disappeared and warning timed out\n", stderr)
                 self.stopMeetingRecording()
             }
