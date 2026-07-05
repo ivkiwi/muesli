@@ -59,3 +59,28 @@ For direct SwiftPM test runs, pass the scratch path yourself:
 ```bash
 swift test --package-path native/MuesliNative --scratch-path "/Volumes/MuesliBuildCache/muesli-spm/test"
 ```
+
+## Production Build & Install (Guesli) — canonical flow
+
+This machine has NO Apple Developer ID certificate. The only correct production build command is:
+
+```bash
+MUESLI_SKIP_SIGN=1 MUESLI_SIGN_IDENTITY="Guesli Dev" ./scripts/build_native_app.sh
+```
+
+Rules (violating any of these produces a broken install):
+
+1. ALWAYS pass both `MUESLI_SKIP_SIGN=1` and `MUESLI_SIGN_IDENTITY="Guesli Dev"`. The "Guesli Dev" self-signed identity lives in the login keychain; it gives a stable designated requirement so macOS TCC grants (Accessibility, Input Monitoring, Screen Recording, Microphone) survive rebuilds. Running the script with no env vars fails on the upstream Developer ID check; plain ad-hoc (`MUESLI_SKIP_SIGN=1` alone) signs with a changing cdhash and silently resets the user's permission grants — never do it unless explicitly instructed.
+2. Never modify source, `Package.swift`, or entitlements as part of a build task. Build tasks build.
+3. Never touch `~/Library/Application Support/Guesli/` (user data: database, OAuth tokens, recordings).
+4. `/Volumes/MuesliBuildCache` may be unmounted — the script falls back to `~/Library/Caches/muesli-spm` automatically. Do not create other scratch paths for production builds.
+5. After the script installs `/Applications/Guesli.app`, verify and relaunch:
+
+```bash
+codesign -dvv /Applications/Guesli.app 2>&1 | grep Authority   # must print: Authority=Guesli Dev
+codesign --verify --deep --strict /Applications/Guesli.app     # must exit 0, no output
+osascript -e 'tell application "Guesli" to quit' 2>/dev/null; sleep 2
+open /Applications/Guesli.app && sleep 3 && pgrep -x Guesli    # must print a PID
+```
+
+6. Report all four results (Authority, deep verify, relaunch PID, app version from Info.plist). A build task is NOT done until the freshly built app is running.
