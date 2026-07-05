@@ -8,14 +8,19 @@ import MuesliCore
 @Suite("Meetings navigation")
 struct MeetingsNavigationTests {
 
-    private func makeController() -> MuesliController {
+    private func makeController(
+        dictationStore: DictationStore? = nil,
+        configStore: ConfigStore? = nil
+    ) -> MuesliController {
         MuesliController(
             runtime: RuntimePaths(
                 repoRoot: FileManager.default.temporaryDirectory,
                 menuIcon: nil,
                 appIcon: nil,
                 bundlePath: nil
-            )
+            ),
+            dictationStore: dictationStore,
+            configStore: configStore ?? ConfigStore(supportDirectory: makeSupportDirectory())
         )
     }
 
@@ -25,6 +30,31 @@ struct MeetingsNavigationTests {
         let store = DictationStore(databaseURL: url)
         try store.migrateIfNeeded()
         return store
+    }
+
+    private func makeSupportDirectory() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-nav-support-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    @discardableResult
+    private func insertMeeting(
+        in store: DictationStore,
+        title: String,
+        savedRecordingPath: String?
+    ) throws -> Int64 {
+        let now = Date()
+        return try store.insertMeeting(
+            title: title,
+            calendarEventID: nil,
+            startTime: now,
+            endTime: now.addingTimeInterval(60),
+            rawTranscript: "Transcript",
+            formattedNotes: "## Notes",
+            micAudioPath: nil,
+            systemAudioPath: nil,
+            savedRecordingPath: savedRecordingPath
+        )
     }
 
     @Test("app state defaults meetings to browser mode")
@@ -174,6 +204,123 @@ struct MeetingsNavigationTests {
         #expect(controller.appState.selectedMeetingRecord == nil)
         #expect(controller.appState.meetingsNavigationState == .browser)
         #expect(FileManager.default.fileExists(atPath: savedRecordingURL.path) == false)
+    }
+
+    @Test("deleteMeeting removes saved recording waveform cache")
+    func deleteMeetingRemovesSavedRecordingWaveformCache() throws {
+        let store = try makeStore()
+        let supportDirectory = makeSupportDirectory()
+        defer { try? FileManager.default.removeItem(at: supportDirectory) }
+        let configStore = ConfigStore(supportDirectory: supportDirectory)
+        let recordingsDirectory = supportDirectory.appendingPathComponent("meeting-recordings", isDirectory: true)
+        try FileManager.default.createDirectory(at: recordingsDirectory, withIntermediateDirectories: true)
+        let savedRecordingURL = recordingsDirectory.appendingPathComponent("meeting.m4a")
+        try Data("recording".utf8).write(to: savedRecordingURL)
+        let cacheURL = try RecordingWaveformCacheFiles.cacheURL(
+            for: savedRecordingURL,
+            supportDirectory: supportDirectory
+        )
+        try Data("cache".utf8).write(to: cacheURL)
+        let meetingID = try insertMeeting(
+            in: store,
+            title: "Delete Cache Target",
+            savedRecordingPath: savedRecordingURL.path
+        )
+        let controller = makeController(dictationStore: store, configStore: configStore)
+
+        controller.deleteMeeting(id: meetingID)
+
+        #expect(try store.meeting(id: meetingID) == nil)
+        #expect(FileManager.default.fileExists(atPath: savedRecordingURL.path) == false)
+        #expect(FileManager.default.fileExists(atPath: cacheURL.path) == false)
+    }
+
+    @Test("clearMeetingHistory removes saved recordings and waveform cache")
+    func clearMeetingHistoryRemovesSavedRecordingsAndWaveformCache() throws {
+        let store = try makeStore()
+        let supportDirectory = makeSupportDirectory()
+        defer { try? FileManager.default.removeItem(at: supportDirectory) }
+        let configStore = ConfigStore(supportDirectory: supportDirectory)
+        let recordingsDirectory = supportDirectory.appendingPathComponent("meeting-recordings", isDirectory: true)
+        try FileManager.default.createDirectory(at: recordingsDirectory, withIntermediateDirectories: true)
+        let savedRecordingURL = recordingsDirectory.appendingPathComponent("meeting.m4a")
+        try Data("recording".utf8).write(to: savedRecordingURL)
+        let cacheURL = try RecordingWaveformCacheFiles.cacheURL(
+            for: savedRecordingURL,
+            supportDirectory: supportDirectory
+        )
+        try Data("cache".utf8).write(to: cacheURL)
+        let strandedCacheURL = RecordingWaveformCacheFiles
+            .cacheDirectory(supportDirectory: supportDirectory)
+            .appendingPathComponent("stranded.mwf")
+        try Data("old-cache".utf8).write(to: strandedCacheURL)
+        try insertMeeting(in: store, title: "Clear Target", savedRecordingPath: savedRecordingURL.path)
+        let controller = makeController(dictationStore: store, configStore: configStore)
+
+        controller.clearMeetingHistory()
+
+        #expect(try store.recentMeetings(limit: 10).isEmpty)
+        #expect(FileManager.default.fileExists(atPath: recordingsDirectory.path) == false)
+        #expect(FileManager.default.fileExists(atPath: cacheURL.path) == false)
+        #expect(FileManager.default.fileExists(atPath: strandedCacheURL.path) == false)
+    }
+
+    @Test("deleteMeeting keeps shared saved recording and waveform cache")
+    func deleteMeetingKeepsSharedSavedRecordingAndWaveformCache() throws {
+        let store = try makeStore()
+        let supportDirectory = makeSupportDirectory()
+        defer { try? FileManager.default.removeItem(at: supportDirectory) }
+        let configStore = ConfigStore(supportDirectory: supportDirectory)
+        try FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
+        let savedRecordingURL = supportDirectory.appendingPathComponent("shared.m4a")
+        try Data("recording".utf8).write(to: savedRecordingURL)
+        let cacheURL = try RecordingWaveformCacheFiles.cacheURL(
+            for: savedRecordingURL,
+            supportDirectory: supportDirectory
+        )
+        try Data("cache".utf8).write(to: cacheURL)
+        let firstID = try insertMeeting(in: store, title: "Shared A", savedRecordingPath: savedRecordingURL.path)
+        let secondID = try insertMeeting(in: store, title: "Shared B", savedRecordingPath: savedRecordingURL.path)
+        let controller = makeController(dictationStore: store, configStore: configStore)
+
+        controller.deleteMeeting(id: firstID)
+
+        #expect(try store.meeting(id: firstID) == nil)
+        #expect(try store.meeting(id: secondID) != nil)
+        #expect(FileManager.default.fileExists(atPath: savedRecordingURL.path))
+        #expect(FileManager.default.fileExists(atPath: cacheURL.path))
+    }
+
+    @Test("orphan sweep removes waveform cache when source recording is gone")
+    func orphanSweepRemovesCacheWhenSourceRecordingIsGone() throws {
+        let supportDirectory = makeSupportDirectory()
+        defer { try? FileManager.default.removeItem(at: supportDirectory) }
+        try FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
+        let liveRecordingURL = supportDirectory.appendingPathComponent("live.m4a")
+        let missingRecordingURL = supportDirectory.appendingPathComponent("missing.m4a")
+        try Data("live".utf8).write(to: liveRecordingURL)
+        try Data("missing".utf8).write(to: missingRecordingURL)
+        let liveCacheURL = try RecordingWaveformCacheFiles.cacheURL(
+            for: liveRecordingURL,
+            supportDirectory: supportDirectory
+        )
+        let missingCacheURL = try RecordingWaveformCacheFiles.cacheURL(
+            for: missingRecordingURL,
+            supportDirectory: supportDirectory
+        )
+        try Data("live-cache".utf8).write(to: liveCacheURL)
+        try Data("missing-cache".utf8).write(to: missingCacheURL)
+        try FileManager.default.removeItem(at: missingRecordingURL)
+
+        let removed = RecordingWaveformCacheFiles.sweepOrphanedCachedWaveforms(
+            retainedRecordingURLs: [liveRecordingURL, missingRecordingURL],
+            supportDirectory: supportDirectory,
+            logger: nil
+        )
+
+        #expect(removed == 1)
+        #expect(FileManager.default.fileExists(atPath: liveCacheURL.path))
+        #expect(FileManager.default.fileExists(atPath: missingCacheURL.path) == false)
     }
 
     @Test("deleteMeeting refuses live meeting rows")
