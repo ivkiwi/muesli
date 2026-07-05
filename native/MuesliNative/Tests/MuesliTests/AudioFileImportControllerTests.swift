@@ -96,6 +96,28 @@ struct AudioFileImportControllerTests {
         #expect(!AudioFileImportController.isSupportedFileURL(URL(fileURLWithPath: "/tmp/test.txt")))
     }
 
+    @Test("persistRecording stores imported audio as M4A")
+    func persistRecordingStoresImportedAudioAsM4A() async throws {
+        let wavURL = try createTestAudioFile(duration: 1.0, sampleRate: 16000, channels: 1)
+        let supportDirectory = makeTemporaryDirectory()
+
+        let savedPath = try await AudioFileImportController.persistRecording(
+            wavURL: wavURL,
+            title: "Imported Recording",
+            startedAt: Date(timeIntervalSince1970: 1_711_000_000),
+            supportDirectory: supportDirectory
+        )
+
+        let savedURL = URL(fileURLWithPath: savedPath)
+        #expect(FileManager.default.fileExists(atPath: wavURL.path) == false)
+        #expect(savedURL.pathExtension == "m4a")
+        #expect(savedURL.deletingLastPathComponent().lastPathComponent == "meeting-recordings")
+        #expect(savedURL.lastPathComponent.hasSuffix("-imported-recording.m4a"))
+
+        let file = try AVAudioFile(forReading: savedURL)
+        #expect(file.length > 0)
+    }
+
     // MARK: - Speaker Formatting Tests
 
     @Test("formatTranscriptWithSpeakers returns raw text when no segments")
@@ -274,6 +296,13 @@ struct AudioFileImportControllerTests {
         let file = try AVAudioFile(forWriting: url, settings: format.settings, commonFormat: .pcmFormatInt16, interleaved: false)
         try file.write(from: buffer)
 
+        return url
+    }
+
+    private func makeTemporaryDirectory() -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("audio-import-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
 

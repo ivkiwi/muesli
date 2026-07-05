@@ -361,6 +361,7 @@ final class MuesliController: NSObject {
     /// Present only while a resume is in flight; consumed at stop to merge old + new
     /// transcript, and cleared on success or restored-on-failure.
     private var pendingResumePriorTranscript: [Int64: String] = [:]
+    private var legacyRecordingMigrationTask: Task<Void, Never>?
     private var iCloudSyncTask: Task<Void, Never>?
     private var iCloudSyncGeneration = 0
     private var iCloudSyncDebounceTask: Task<Void, Never>?
@@ -437,6 +438,7 @@ final class MuesliController: NSObject {
         } catch {
             fputs("[muesli-native] startup error: \(error)\n", stderr)
         }
+        startLegacyRecordingMigration()
         recoverStaleLiveMeetings()
         normalizeMeetingTranscriptionSelectionForAvailability()
         SoundController.prewarmLifecycleSounds()
@@ -690,6 +692,8 @@ final class MuesliController: NSObject {
             NSWorkspace.shared.notificationCenter.removeObserver(iCloudWakeObserver)
             self.iCloudWakeObserver = nil
         }
+        legacyRecordingMigrationTask?.cancel()
+        legacyRecordingMigrationTask = nil
         cancelActiveICloudSyncTask()
         iCloudSyncDebounceTask?.cancel()
         iCloudSyncDebounceTask = nil
@@ -745,6 +749,31 @@ final class MuesliController: NSObject {
             return row
         }
         return try? dictationStore.meeting(id: id)
+    }
+
+    private func startLegacyRecordingMigration() {
+        legacyRecordingMigrationTask?.cancel()
+        let store = dictationStore
+        let recordingsDirectory = AppIdentity.supportDirectoryURL
+            .appendingPathComponent("meeting-recordings", isDirectory: true)
+        legacyRecordingMigrationTask = Task.detached(priority: .utility) {
+            do {
+                let summary = try await MeetingRecordingWriter.migrateLegacyWAVRecordings(
+                    store: store,
+                    recordingsDirectory: recordingsDirectory
+                )
+                guard summary.migrated > 0 || summary.deletedOrphanStubs > 0 else { return }
+                fputs(
+                    "[muesli-native] migrated \(summary.migrated) legacy wav recordings, deleted \(summary.deletedOrphanStubs) orphan stubs\n",
+                    stderr
+                )
+                MuesliNotifications.postDataDidChange()
+            } catch is CancellationError {
+                return
+            } catch {
+                fputs("[muesli-native] legacy recording migration failed: \(error)\n", stderr)
+            }
+        }
     }
 
     func dictationStats() -> DictationStats {

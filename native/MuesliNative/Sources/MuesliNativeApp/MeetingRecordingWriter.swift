@@ -1,5 +1,7 @@
 import AVFoundation
+import Darwin
 import Foundation
+import MuesliCore
 import os
 
 enum MeetingRecordingFileFormat: String, CaseIterable, Sendable {
@@ -30,6 +32,8 @@ enum MeetingRecordingFileFormat: String, CaseIterable, Sendable {
 }
 
 final class MeetingRecordingWriter {
+    typealias M4AEncoder = (_ sourceURL: URL, _ destinationURL: URL) async throws -> Void
+
     private final class ExportSessionBox: @unchecked Sendable {
         let session: AVAssetExportSession
 
@@ -136,7 +140,7 @@ final class MeetingRecordingWriter {
         switch fileFormat {
         case .m4a:
             do {
-                try await transcodeWAVToM4AAsync(sourceURL: tempURL, destinationURL: destinationURL)
+                try await encodeWAVToM4AAsync(sourceURL: tempURL, destinationURL: destinationURL)
                 try FileManager.default.removeItem(at: tempURL)
             } catch {
                 try? FileManager.default.removeItem(at: destinationURL)
@@ -146,6 +150,56 @@ final class MeetingRecordingWriter {
             try FileManager.default.moveItem(at: tempURL, to: destinationURL)
         }
         return destinationURL
+    }
+
+    @discardableResult
+    static func migrateLegacyWAVRecordings(
+        store: DictationStore,
+        recordingsDirectory: URL,
+        fileManager: FileManager = .default,
+        encode: M4AEncoder = MeetingRecordingWriter.encodeWAVToM4AAsync
+    ) async throws -> (migrated: Int, deletedOrphanStubs: Int) {
+        var migrated = 0
+        for candidate in try store.legacyWAVMeetingRecordingPaths() {
+            try Task.checkCancellation()
+            let sourceURL = URL(fileURLWithPath: candidate.path).standardizedFileURL
+            guard sourceURL.pathExtension.lowercased() == "wav",
+                  fileManager.fileExists(atPath: sourceURL.path) else { continue }
+            let attributes = try fileManager.attributesOfItem(atPath: sourceURL.path)
+            let fileSize = (attributes[.size] as? NSNumber)?.uint64Value ?? 0
+            guard fileSize >= 1024 else { continue }
+
+            let destinationURL = sourceURL.deletingPathExtension().appendingPathExtension("m4a")
+            let temporaryURL = sourceURL
+                .deletingLastPathComponent()
+                .appendingPathComponent(".\(destinationURL.lastPathComponent).migrating")
+            do {
+                try? fileManager.removeItem(at: temporaryURL)
+                try await encode(sourceURL, temporaryURL)
+                try Task.checkCancellation()
+                try atomicallyRenameItem(at: temporaryURL, to: destinationURL)
+                try store.updateMeetingSavedRecordingPath(id: candidate.id, path: destinationURL.path)
+                do {
+                    try fileManager.removeItem(at: sourceURL)
+                } catch {
+                    fputs("[muesli-native] failed to delete migrated wav \(sourceURL.path): \(error)\n", stderr)
+                }
+                migrated += 1
+            } catch is CancellationError {
+                try? fileManager.removeItem(at: temporaryURL)
+                throw CancellationError()
+            } catch {
+                try? fileManager.removeItem(at: temporaryURL)
+                fputs("[muesli-native] failed to migrate legacy wav \(sourceURL.path): \(error)\n", stderr)
+            }
+        }
+
+        let deletedOrphanStubs = try deleteOrphanedWAVStubs(
+            in: recordingsDirectory,
+            store: store,
+            fileManager: fileManager
+        )
+        return (migrated, deletedOrphanStubs)
     }
 
     private func append(_ samples: [Int16], toMic: Bool) {
@@ -214,7 +268,7 @@ final class MeetingRecordingWriter {
         return output
     }
 
-    private static func transcodeWAVToM4AAsync(sourceURL: URL, destinationURL: URL) async throws {
+    static func encodeWAVToM4AAsync(sourceURL: URL, destinationURL: URL) async throws {
         let asset = AVURLAsset(url: sourceURL)
         guard let exportSession = AVAssetExportSession(
             asset: asset,
@@ -243,6 +297,45 @@ final class MeetingRecordingWriter {
                 }
                 continuation.resume(returning: ())
             }
+        }
+    }
+
+    private static func deleteOrphanedWAVStubs(
+        in recordingsDirectory: URL,
+        store: DictationStore,
+        fileManager: FileManager
+    ) throws -> Int {
+        guard fileManager.fileExists(atPath: recordingsDirectory.path) else { return 0 }
+        let files = try fileManager.contentsOfDirectory(
+            at: recordingsDirectory,
+            includingPropertiesForKeys: [.fileSizeKey],
+            options: [.skipsHiddenFiles]
+        )
+
+        var deleted = 0
+        for file in files where file.pathExtension.lowercased() == "wav" {
+            let values = try file.resourceValues(forKeys: [.fileSizeKey])
+            guard (values.fileSize ?? 0) < 1024,
+                  try store.savedRecordingReferenceCount(path: file.path) == 0 else { continue }
+            try fileManager.removeItem(at: file)
+            deleted += 1
+        }
+        return deleted
+    }
+
+    private static func atomicallyRenameItem(at sourceURL: URL, to destinationURL: URL) throws {
+        let result = sourceURL.withUnsafeFileSystemRepresentation { sourcePath in
+            destinationURL.withUnsafeFileSystemRepresentation { destinationPath -> Int32 in
+                guard let sourcePath, let destinationPath else {
+                    errno = EINVAL
+                    return -1
+                }
+                return Darwin.rename(sourcePath, destinationPath)
+            }
+        }
+        guard result == 0 else {
+            let code = POSIXErrorCode(rawValue: errno) ?? .EIO
+            throw POSIXError(code)
         }
     }
 
