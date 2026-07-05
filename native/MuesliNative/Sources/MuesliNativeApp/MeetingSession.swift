@@ -199,7 +199,7 @@ final class MeetingSession {
     private let backendLock = OSAllocatedUnfairLock(initialState: BackendOption.whisper)
     private let runtime: RuntimePaths
     private let config: AppConfig
-    private let liveChunkingConfiguration: LiveMeetingChunkingConfiguration
+    private var liveChunkingConfiguration: LiveMeetingChunkingConfiguration
     private let templateSnapshot: MeetingTemplateSnapshot
     private let transcriptionCoordinator: TranscriptionCoordinator
     private let systemAudioRecorder: SystemAudioCapturing
@@ -275,8 +275,14 @@ final class MeetingSession {
         }
     }
 
-    func updateBackend(_ backend: BackendOption) {
-        backendLock.withLock { $0 = backend }
+    @discardableResult
+    func updateBackend(_ backend: BackendOption) -> Bool {
+        chunkRotationQueue.sync {
+            guard !isRecording else { return false }
+            backendLock.withLock { $0 = backend }
+            liveChunkingConfiguration = Self.liveChunkingConfiguration(for: backend)
+            return true
+        }
     }
 
     private func currentBackend() -> BackendOption {
@@ -300,11 +306,23 @@ final class MeetingSession {
             let addition = TranscriptOverlapMerger
                 .uniqueAddition(previous: previousText, next: text)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            previousText = TranscriptOverlapMerger.merge([previousText, text])
+            previousText = TranscriptOverlapMerger.retainedContextAfterAppending(addition, to: previousText)
             guard !addition.isEmpty else { return nil }
             return SpeechSegment(start: segment.start, end: segment.end, text: addition)
         }
     }
+
+#if DEBUG
+    func setRecordingForTesting(_ recording: Bool) {
+        chunkRotationQueue.sync {
+            isRecording = recording
+        }
+    }
+
+    func currentBackendForTesting() -> BackendOption {
+        currentBackend()
+    }
+#endif
 
     func start() async throws {
         let vadManager = await transcriptionCoordinator.getVadManager()

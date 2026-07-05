@@ -1,3 +1,4 @@
+import CoreAudio
 import FluidAudio
 import Foundation
 import Testing
@@ -83,6 +84,63 @@ struct MeetingLiveChunkingTests {
         #expect(disabledPrevious.isEmpty)
     }
 
+    @Test("live overlap context stays bounded")
+    func liveOverlapContextStaysBounded() {
+        var previous = (0..<100).map { "p\($0)" }.joined(separator: " ")
+
+        let segments = MeetingSession.deduplicateLiveSegments(
+            [SpeechSegment(start: 8, end: 18, text: "p97 p98 p99 fresh words")],
+            enabled: true,
+            previousText: &previous
+        )
+
+        #expect(segments.map(\.text) == ["fresh words"])
+        #expect(previous.split(separator: " ").count <= 80)
+        #expect(previous.hasSuffix("fresh words"))
+    }
+
+    @Test("late repeated trigram does not drop new words")
+    func lateRepeatedTrigramDoesNotDropNewWords() {
+        let filler = (0..<16).map { "fresh\($0)" }.joined(separator: " ")
+        let next = "\(filler) alpha beta gamma still new"
+
+        let addition = TranscriptOverlapMerger.uniqueAddition(
+            previous: "alpha beta gamma",
+            next: next
+        )
+
+        #expect(addition == next)
+    }
+
+#if DEBUG
+    @Test("backend update is rejected while recording")
+    func backendUpdateIsRejectedWhileRecording() {
+        let session = MeetingSession(
+            title: "Test",
+            calendarEventID: nil,
+            backend: .whisper,
+            runtime: RuntimePaths(
+                repoRoot: FileManager.default.temporaryDirectory,
+                menuIcon: nil,
+                appIcon: nil,
+                bundlePath: nil
+            ),
+            config: AppConfig(),
+            templateSnapshot: MeetingTemplates.auto.snapshot,
+            transcriptionCoordinator: TranscriptionCoordinator(),
+            meetingMicRecorder: FakeMeetingMicRecorder()
+        )
+
+        #expect(session.updateBackend(.gigaAMV3Russian))
+        #expect(session.currentBackendForTesting() == .gigaAMV3Russian)
+
+        session.setRecordingForTesting(true)
+
+        #expect(!session.updateBackend(.whisper))
+        #expect(session.currentBackendForTesting() == .gigaAMV3Russian)
+    }
+#endif
+
     @Test("chunk collector releases live chunks in registration order")
     func chunkCollectorReleasesLiveChunksInRegistrationOrder() async {
         let collector = MeetingChunkCollector()
@@ -101,3 +159,27 @@ struct MeetingLiveChunkingTests {
         #expect(ready?.map { $0.map(\.text) } == [["first"], ["second"]])
     }
 }
+
+#if DEBUG
+private final class FakeMeetingMicRecorder: MeetingMicRecording {
+    var preferredInputDeviceID: AudioObjectID?
+    var onRawPCMSamples: (([Int16]) -> Void)?
+    var onRecordingFailed: ((Error) -> Void)?
+
+    func prepare() throws {}
+    func start() throws {}
+    func pause() {}
+    func resume() {}
+    func stop() -> URL? { nil }
+    func cancel() {}
+    func currentPower() -> Float { -80 }
+
+    func diagnosticsSnapshot() -> MeetingMicRecorderDiagnosticsSnapshot {
+        MeetingMicRecorderDiagnosticsSnapshot(
+            recorderKind: .systemDefaultStreaming,
+            preferredInputDeviceID: preferredInputDeviceID,
+            route: nil
+        )
+    }
+}
+#endif

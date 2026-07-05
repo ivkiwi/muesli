@@ -31,23 +31,40 @@ final class PCMChunkRecorder {
             state.bytesWritten += pcmData.count
             state.freshBytesWritten += pcmData.count
             guard overlapSampleCount > 0 else { return }
-            state.tailSamples = Array((state.tailSamples + samples).suffix(overlapSampleCount))
+            let combinedCount = state.tailSamples.count + samples.count
+            if combinedCount > overlapSampleCount {
+                let excess = combinedCount - overlapSampleCount
+                if excess >= state.tailSamples.count {
+                    state.tailSamples = Array(samples.suffix(overlapSampleCount))
+                } else {
+                    state.tailSamples.removeFirst(excess)
+                    state.tailSamples.append(contentsOf: samples)
+                }
+            } else {
+                state.tailSamples.append(contentsOf: samples)
+            }
         }
     }
 
     func rotateFile() -> URL? {
-        let completedState = lock.withLock { state -> State? in
-            let oldState = state
-            do {
-                state = try createFileState(carryoverSamples: oldState.tailSamples)
-                return oldState
-            } catch {
-                fputs("[pcm-chunk-recorder] failed to rotate file: \(error)\n", stderr)
-                return nil
-            }
+        let carryoverSamples = lock.withLock { state in
+            state.tailSamples
         }
 
-        guard let completedState else { return nil }
+        let newState: State
+        do {
+            newState = try createFileState(carryoverSamples: carryoverSamples)
+        } catch {
+            fputs("[pcm-chunk-recorder] failed to rotate file: \(error)\n", stderr)
+            return nil
+        }
+
+        let completedState = lock.withLock { state -> State in
+            let oldState = state
+            state = newState
+            return oldState
+        }
+
         return finalizeFile(completedState)
     }
 
