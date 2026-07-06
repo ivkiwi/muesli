@@ -31,21 +31,35 @@ final class MeetingChunkCollector {
         let bufferedLiveChunkCount: Int
     }
 
+    private enum DrainPoll {
+        case ready([(Int, [SpeechSegment])])
+        case waiting
+        case timedOut
+    }
+
     private final class DrainResults: @unchecked Sendable {
         private let lock = NSLock()
         private var chunks: [(Int, [SpeechSegment])] = []
+        private var lastProgress = Date()
 
         func append(sequence: Int, segments: [SpeechSegment]) {
             lock.withLock {
                 chunks.append((sequence, segments))
+                lastProgress = Date()
             }
         }
 
-        func takeAll() -> [(Int, [SpeechSegment])] {
+        func poll(inactivityTimeout: TimeInterval) -> DrainPoll {
             lock.withLock {
-                let result = chunks
-                chunks.removeAll(keepingCapacity: true)
-                return result
+                if !chunks.isEmpty {
+                    let result = chunks.sorted { $0.0 < $1.0 }
+                    chunks.removeAll(keepingCapacity: true)
+                    return .ready(result)
+                }
+                if Date().timeIntervalSince(lastProgress) >= inactivityTimeout {
+                    return .timedOut
+                }
+                return .waiting
             }
         }
     }
@@ -126,30 +140,27 @@ final class MeetingChunkCollector {
 
         var remainingTaskCount = tasksToAwait.count
         var pendingSequences = Set(tasksToAwait.map(\.sequence))
-        var lastProgress = Date()
-        while remainingTaskCount > 0 {
-            let ready = drainResults.takeAll().sorted { $0.0 < $1.0 }
-            if !ready.isEmpty {
+        drainLoop: while remainingTaskCount > 0 {
+            switch drainResults.poll(inactivityTimeout: inactivityTimeout) {
+            case .ready(let ready):
                 for (sequence, chunkSegments) in ready {
                     segments.append(contentsOf: chunkSegments)
                     pendingSequences.remove(sequence)
                 }
                 remainingTaskCount -= ready.count
-                lastProgress = Date()
-                continue
-            }
 
-            if Date().timeIntervalSince(lastProgress) >= inactivityTimeout {
+            case .timedOut:
                 tasksToAwait.forEach { $0.task.cancel() }
                 watcherTasks.forEach { $0.cancel() }
                 logger?("[live-collector] drain timeout pending=\(remainingTaskCount) flushedSegments=\(segments.count)")
                 for sequence in pendingSequences.sorted() {
                     logger?("[live-collector] dropped pending chunk sequence=\(sequence) reason=drain_timeout")
                 }
-                break
-            }
+                break drainLoop
 
-            try? await Task.sleep(for: .milliseconds(20))
+            case .waiting:
+                try? await Task.sleep(for: .milliseconds(20))
+            }
         }
 
         return Self.sorted(segments)

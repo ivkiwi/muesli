@@ -395,16 +395,29 @@ struct MeetingChunkCollectorTests {
     @Test("collector drain keeps slow backlog while chunks keep completing")
     func collectorDrainKeepsProgressingBacklog() async {
         let collector = MeetingChunkCollector()
+        let chunks = ControlledSpeechChunks()
         for index in 0..<4 {
             _ = collector.add(
                 Task {
-                    try? await Task.sleep(for: .milliseconds(100 * (index + 1)))
-                    return [SpeechSegment(start: Double(index), end: Double(index + 1), text: "chunk \(index)")]
+                    await chunks.wait(for: index)
                 }
             )
         }
 
-        let drained = await collector.closeAndDrainSortedSegments(inactivityTimeout: 0.25)
+        while await chunks.readyCount() < 4 {
+            await Task.yield()
+        }
+        let drainTask = Task {
+            await collector.closeAndDrainSortedSegments(inactivityTimeout: 0.25)
+        }
+        for index in 0..<4 {
+            await chunks.resume(
+                index: index,
+                with: [SpeechSegment(start: Double(index), end: Double(index + 1), text: "chunk \(index)")]
+            )
+            await Task.yield()
+        }
+        let drained = await drainTask.value
 
         #expect(drained.map(\.text) == (0..<4).map { "chunk \($0)" })
     }
@@ -444,6 +457,24 @@ struct MeetingChunkCollectorTests {
 
         #expect(segments.map(\.text) == ["first", "second"])
         #expect(segments.map(\.start) == [11, 12])
+    }
+}
+
+private actor ControlledSpeechChunks {
+    private var continuations: [Int: CheckedContinuation<[SpeechSegment], Never>] = [:]
+
+    func wait(for index: Int) async -> [SpeechSegment] {
+        await withCheckedContinuation { continuation in
+            continuations[index] = continuation
+        }
+    }
+
+    func readyCount() -> Int {
+        continuations.count
+    }
+
+    func resume(index: Int, with segments: [SpeechSegment]) {
+        continuations.removeValue(forKey: index)?.resume(returning: segments)
     }
 }
 
