@@ -85,3 +85,7 @@ open /Applications/Guesli.app && sleep 3 && pgrep -x Guesli    # must print a PI
 
 6. Relaunch verification is strict: capture the running PID BEFORE the quit; after `open`, the new PID must DIFFER from the old one AND `ps -o lstart= -p <pid>` must be LATER than the new binary's mtime (`stat -f %m /Applications/Guesli.app/Contents/MacOS/Guesli`). If the old PID survived the AppleScript quit, `pkill -x Guesli`, wait, and relaunch — reporting the old PID as success is a task failure.
 7. Report all four results (Authority, deep verify, relaunch PID + its start time vs binary mtime, app version from Info.plist). A build task is NOT done until the FRESH binary is the one running.
+
+## Scratch Path Hygiene
+
+Every distinct `--scratch-path` costs ~3 GB. Agents and orchestrators MUST reuse one scratch per worktree (e.g. `/private/tmp/muesli-spm-<worktree-name>`) instead of minting new suffixed paths per task or per retry, and MUST delete the scratch when the worktree/PR is done. Do not create `-2`/`-r2`/`.bad` variants — clean and reuse. Long-lived exceptions: `/private/tmp/muesli-spm-tests` (fork main testing) and `~/Library/Caches/muesli-spm/release` (production builds).
