@@ -200,11 +200,17 @@ final class MeetingRecordingWriter {
             }
         }
 
-        let deletedOrphanStubs = try deleteOrphanedWAVStubs(
-            in: recordingsDirectory,
-            store: store,
-            fileManager: fileManager
-        )
+        let deletedOrphanStubs: Int
+        do {
+            deletedOrphanStubs = try deleteOrphanedWAVStubs(
+                in: recordingsDirectory,
+                store: store,
+                fileManager: fileManager
+            )
+        } catch {
+            fputs("[muesli-native] failed to sweep orphan wav stubs: \(error)\n", stderr)
+            deletedOrphanStubs = 0
+        }
         return (migrated, deletedOrphanStubs)
     }
 

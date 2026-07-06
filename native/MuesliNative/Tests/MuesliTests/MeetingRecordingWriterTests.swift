@@ -218,6 +218,46 @@ struct MeetingRecordingWriterTests {
         #expect(FileManager.default.fileExists(atPath: migratedSiblingURL.path))
     }
 
+    @Test("legacy wav migration returns after orphan directory listing failure")
+    func legacyWAVMigrationReturnsAfterOrphanDirectoryListingFailure() async throws {
+        let store = try makeStore()
+        let recordingsDirectory = makeTemporaryDirectory()
+        let legacyWAVURL = recordingsDirectory.appendingPathComponent("legacy.wav")
+        try Data(repeating: 1, count: 2_048).write(to: legacyWAVURL)
+
+        let now = Date(timeIntervalSince1970: 1_711_000_000)
+        let meetingID = try store.insertMeeting(
+            title: "Legacy",
+            calendarEventID: nil,
+            startTime: now,
+            endTime: now.addingTimeInterval(60),
+            rawTranscript: "legacy",
+            formattedNotes: "",
+            micAudioPath: nil,
+            systemAudioPath: nil,
+            savedRecordingPath: legacyWAVURL.path
+        )
+        let fileManager = OrphanListingFailureFileManager(failingURL: recordingsDirectory)
+
+        let summary = try await MeetingRecordingWriter.migrateLegacyWAVRecordings(
+            store: store,
+            recordingsDirectory: recordingsDirectory,
+            fileManager: fileManager,
+            encode: { _, destinationURL in
+                try Data("m4a".utf8).write(to: destinationURL)
+            }
+        )
+
+        let meeting = try #require(try store.meeting(id: meetingID))
+        let migratedPath = try #require(meeting.savedRecordingPath)
+        #expect(summary.migrated == 1)
+        #expect(summary.deletedOrphanStubs == 0)
+        #expect(fileManager.failedListingAttempts == 1)
+        #expect(migratedPath.hasSuffix(".m4a"))
+        #expect(FileManager.default.fileExists(atPath: legacyWAVURL.path) == false)
+        #expect(try Data(contentsOf: URL(fileURLWithPath: migratedPath)) == Data("m4a".utf8))
+    }
+
     @Test("legacy wav migration continues after one attributes failure")
     func legacyWAVMigrationContinuesAfterAttributesFailure() async throws {
         let store = try makeStore()
@@ -513,6 +553,28 @@ private final class StubDeleteFailureFileManager: FileManager {
             throw NSError(domain: "MeetingRecordingWriterTests", code: 2)
         }
         try super.removeItem(at: URL)
+    }
+}
+
+private final class OrphanListingFailureFileManager: FileManager {
+    private let failingPath: String
+    private(set) var failedListingAttempts = 0
+
+    init(failingURL: URL) {
+        self.failingPath = failingURL.standardizedFileURL.path
+        super.init()
+    }
+
+    override func contentsOfDirectory(
+        at url: URL,
+        includingPropertiesForKeys keys: [URLResourceKey]?,
+        options mask: FileManager.DirectoryEnumerationOptions
+    ) throws -> [URL] {
+        guard url.standardizedFileURL.path != failingPath else {
+            failedListingAttempts += 1
+            throw NSError(domain: "MeetingRecordingWriterTests", code: 4)
+        }
+        return try super.contentsOfDirectory(at: url, includingPropertiesForKeys: keys, options: mask)
     }
 }
 
