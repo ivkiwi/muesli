@@ -6894,7 +6894,8 @@ final class MuesliController: NSObject {
         dictationAudioSessionManager.beginRecording(
             mode: "hold-start",
             duckingEnabled: config.muteSystemAudioDuringDictation,
-            mediaPauseEnabled: config.pauseMediaDuringDictation
+            mediaPauseEnabled: config.pauseMediaDuringDictation,
+            requiresExistingSession: !isStreamingDictationBackend
         )
     }
 

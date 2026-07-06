@@ -61,7 +61,13 @@ struct DictationAudioSessionManagerTests {
         harness.recorder.activateError = NSError(domain: "DictationAudioSessionManagerTests", code: 1)
 
         harness.manager.arm(source: "hotkey")
-        harness.manager.beginRecording(mode: "hold-start", duckingEnabled: true, mediaPauseEnabled: false)
+        harness.wait()
+        harness.manager.beginRecording(
+            mode: "hold-start",
+            duckingEnabled: true,
+            mediaPauseEnabled: false,
+            requiresExistingSession: true
+        )
         harness.wait()
 
         #expect(harness.recorder.activateCalls == 1)
@@ -79,6 +85,22 @@ struct DictationAudioSessionManagerTests {
             }
             return false
         })
+    }
+
+    @Test("hold start can cold start when no existing session is required")
+    func holdStartCanColdStartWhenSessionNotRequired() {
+        let harness = Harness(routeKind: .speakerLike)
+
+        harness.manager.beginRecording(
+            mode: "hold-start",
+            duckingEnabled: true,
+            mediaPauseEnabled: false,
+            requiresExistingSession: false
+        )
+        harness.wait()
+
+        #expect(harness.recorder.activateCalls == 1)
+        #expect(harness.recorder.startCalls == 1)
     }
 
     @Test("headphone route skips ducking and selects built-in mic app-locally")
@@ -188,7 +210,12 @@ struct DictationAudioSessionManagerTests {
 
         harness.manager.arm(source: "hotkey")
         harness.wait()
-        harness.manager.beginRecording(mode: "hold-start", duckingEnabled: false, mediaPauseEnabled: false)
+        harness.manager.beginRecording(
+            mode: "hold-start",
+            duckingEnabled: false,
+            mediaPauseEnabled: false,
+            requiresExistingSession: true
+        )
         harness.wait()
 
         #expect(harness.route.preferredInputCalls == 2)
@@ -540,7 +567,12 @@ struct DictationAudioSessionManagerTests {
         harness.wait()
         #expect(harness.media.beginCalls.isEmpty)
 
-        harness.manager.beginRecording(mode: "hold-start", duckingEnabled: false, mediaPauseEnabled: true)
+        harness.manager.beginRecording(
+            mode: "hold-start",
+            duckingEnabled: false,
+            mediaPauseEnabled: true,
+            requiresExistingSession: true
+        )
         harness.wait()
 
         #expect(harness.media.beginCalls == [
@@ -557,7 +589,12 @@ struct DictationAudioSessionManagerTests {
         #expect(harness.media.beginCalls.isEmpty)
         #expect(harness.ducking.beginCalls.isEmpty)
 
-        harness.manager.beginRecording(mode: "hold-start", duckingEnabled: true, mediaPauseEnabled: true)
+        harness.manager.beginRecording(
+            mode: "hold-start",
+            duckingEnabled: true,
+            mediaPauseEnabled: true,
+            requiresExistingSession: true
+        )
         harness.wait()
 
         #expect(harness.media.beginCalls.count == 1)

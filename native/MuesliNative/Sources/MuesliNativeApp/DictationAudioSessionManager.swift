@@ -242,8 +242,22 @@ final class DictationAudioSessionManager: @unchecked Sendable {
         }
     }
 
-    func beginRecording(mode: String, duckingEnabled: Bool, mediaPauseEnabled: Bool) {
-        let sessionID = ensureSession()
+    func beginRecording(
+        mode: String,
+        duckingEnabled: Bool,
+        mediaPauseEnabled: Bool,
+        requiresExistingSession: Bool = false
+    ) {
+        let sessionID: UUID
+        if requiresExistingSession {
+            guard let existingSessionID = currentSessionID else {
+                emitLatency("stale_session_ignored:\(mode)")
+                return
+            }
+            sessionID = existingSessionID
+        } else {
+            sessionID = ensureSession()
+        }
         queue.async { [self] in
             self.cancelPendingRouteRefreshLocked()
             guard self.sessionHintMatches(sessionID) else {
