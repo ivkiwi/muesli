@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import CoreAudio
+import CoreML
 @testable import MuesliNativeApp
 
 @Suite("StreamingDictationController")
@@ -825,6 +826,131 @@ struct Nemotron35StreamStateTests {
         let _ = StreamingDictationController(
             transcriber: transcriber as NemotronStreamingTranscribing,
             chunkSamples: 35840
+        )
+    }
+}
+
+@Suite("Nemotron RNNT shape guards")
+struct NemotronRNNTShapeGuardTests {
+
+    @Test("mel validation rejects wrong rank with descriptive error")
+    func melValidationRejectsWrongRank() throws {
+        let mel = try MLMultiArray(shape: [1, 128], dataType: .float32)
+
+        do {
+            _ = try nemotronValidateArray(
+                mel,
+                name: "mel",
+                dataType: .float32,
+                shape: [1, 128, nil],
+                failure: NemotronRNNTError.preprocessingFailed
+            )
+            Issue.record("Expected mel shape validation to throw")
+        } catch let error as NemotronRNNTError {
+            let description = error.localizedDescription
+            #expect(description.contains("mel"))
+            #expect(description.contains("expected shape [1, 128, *]"))
+            #expect(description.contains("got shape [1, 128]"))
+        }
+    }
+
+    @Test("mel validation rejects wrong data type with descriptive error")
+    func melValidationRejectsWrongDataType() throws {
+        let mel = try MLMultiArray(shape: [1, 128, 1], dataType: .float16)
+
+        do {
+            _ = try nemotronValidateArray(
+                mel,
+                name: "mel",
+                dataType: .float32,
+                shape: [1, 128, nil],
+                failure: NemotronRNNTError.preprocessingFailed
+            )
+            Issue.record("Expected mel data type validation to throw")
+        } catch let error as NemotronRNNTError {
+            let description = error.localizedDescription
+            #expect(description.contains("mel"))
+            #expect(description.contains("expected"))
+            #expect(description.contains("got"))
+        }
+    }
+
+    @Test("encoded validation rejects mismatched encoder dimension")
+    func encodedValidationRejectsBadShape() throws {
+        let encoded = try MLMultiArray(shape: [1, 2, 3], dataType: .float32)
+
+        do {
+            _ = try nemotronValidateArray(
+                encoded,
+                name: "encoded",
+                dataType: .float32,
+                shape: [1, 4, nil]
+            )
+            Issue.record("Expected encoded shape validation to throw")
+        } catch let error as NemotronRNNTError {
+            let description = error.localizedDescription
+            #expect(description.contains("encoded"))
+            #expect(description.contains("dimension 1 expected 4"))
+            #expect(description.contains("got 2"))
+        }
+    }
+
+    @Test("encoded validation accepts padded CoreML strides")
+    func encodedValidationAcceptsPaddedStrides() throws {
+        let encoded = try makeStridedFloatArray(
+            shape: [1, 1024, 28],
+            strides: [32768, 32, 1],
+            storageSpan: 32764
+        )
+
+        let layout = try nemotronValidateArray(
+            encoded,
+            name: "encoded",
+            dataType: .float32,
+            shape: [1, 1024, nil]
+        )
+
+        #expect(encoded.count == 28672)
+        #expect(layout.shape == [1, 1024, 28])
+        #expect(layout.strides == [32768, 32, 1])
+        #expect(layout.storageSpan == 32764)
+        #expect(layout.storageSpan > encoded.count)
+    }
+
+    @Test("storage span uses maximum stride offset")
+    func storageSpanUsesMaximumStrideOffset() throws {
+        let array = try makeStridedFloatArray(
+            shape: [2, 3, 4],
+            strides: [20, 5, 1],
+            storageSpan: 34
+        )
+
+        let layout = try nemotronValidateArray(
+            array,
+            name: "fixture",
+            dataType: .float32,
+            shape: [2, 3, 4]
+        )
+
+        #expect(array.count == 24)
+        #expect(layout.storageSpan == 34)
+    }
+
+    private func makeStridedFloatArray(shape: [Int], strides: [Int], storageSpan: Int) throws -> MLMultiArray {
+        let pointer = UnsafeMutableRawPointer.allocate(
+            byteCount: storageSpan * MemoryLayout<Float>.stride,
+            alignment: MemoryLayout<Float>.alignment
+        )
+        pointer.initializeMemory(as: Float.self, repeating: 0, count: storageSpan)
+
+        return try MLMultiArray(
+            dataPointer: pointer,
+            shape: shape.map(NSNumber.init(value:)),
+            dataType: .float32,
+            strides: strides.map(NSNumber.init(value:)),
+            deallocator: { pointer in
+                pointer.deallocate()
+            }
         )
     }
 }
