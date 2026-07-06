@@ -176,11 +176,17 @@ enum MeetingRecordingStorage {
             }
         }
 
-        let deletedOrphanStubs = try deleteOrphanedWAVStubs(
-            in: recordingsDirectory,
-            store: store,
-            fileManager: fileManager
-        )
+        let deletedOrphanStubs: Int
+        do {
+            deletedOrphanStubs = try deleteOrphanedWAVStubs(
+                in: recordingsDirectory,
+                store: store,
+                fileManager: fileManager
+            )
+        } catch {
+            deletedOrphanStubs = 0
+            fputs("[meeting-recording-storage] failed to delete orphan wav stubs in \(recordingsDirectory.path): \(error)\n", stderr)
+        }
         return (migrated, deletedOrphanStubs)
     }
 
