@@ -247,27 +247,16 @@ struct MeetingNotificationControllerTests {
     }
 
     @Test("Scheduled prompt user actions cancel starting-now timers")
-    func scheduledPromptUserActionsCancelStartingNowTimers() throws {
-        let source = try muesliControllerSource()
-        let scheduledPrompt = try sourceSection(
-            in: source,
-            from: "private func handleUpcomingMeeting",
-            to: "private func cancelMeetingStartingNowTimer"
-        )
-        let cancelCall = "self.cancelMeetingStartingNowTimer(notificationKey: notificationKey)"
-        let startRecording = try sourceSection(in: scheduledPrompt, from: "onStartRecording:", to: "onJoinAndRecord:")
-        let joinAndRecord = try sourceSection(in: scheduledPrompt, from: "onJoinAndRecord:", to: "onJoinOnly:")
-        let joinOnly = try sourceSection(in: scheduledPrompt, from: "onJoinOnly:", to: "onDismiss:")
-        let dismiss = try sourceSection(in: scheduledPrompt, from: "onDismiss:", to: "onClose:")
+    func scheduledPromptUserActionsCancelStartingNowTimers() {
+        var events: [String] = []
 
-        #expect(try index(of: cancelCall, in: startRecording) <
-            index(of: "self.startForegroundMeetingRecording", in: startRecording))
-        #expect(try index(of: cancelCall, in: joinAndRecord) <
-            index(of: "self.joinAndRecord", in: joinAndRecord))
-        #expect(try index(of: cancelCall, in: joinOnly) <
-            index(of: "self.joinOnly", in: joinOnly))
-        #expect(try index(of: cancelCall, in: dismiss) <
-            index(of: "self.meetingMonitor.suppress", in: dismiss))
+        ScheduledPromptActionPolicy.performUserAction(
+            notificationKey: "calendar-event|1234",
+            cancelStartingNowTimer: { events.append("cancel:\($0)") },
+            action: { events.append("action") }
+        )
+
+        #expect(events == ["cancel:calendar-event|1234", "action"])
     }
 
     private func unifiedCalendarEvent(
@@ -287,39 +276,4 @@ struct MeetingNotificationControllerTests {
         )
     }
 
-    private func muesliControllerSource() throws -> String {
-        let testFileURL = URL(fileURLWithPath: #filePath)
-        let packageRoot = testFileURL
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let controllerURL = packageRoot
-            .appendingPathComponent("Sources")
-            .appendingPathComponent("MuesliNativeApp")
-            .appendingPathComponent("MuesliController.swift")
-        return try String(contentsOf: controllerURL, encoding: .utf8)
-    }
-
-    private func sourceSection(in source: String, from start: String, to end: String) throws -> String {
-        guard let startRange = source.range(of: start),
-              let endRange = source[startRange.upperBound...].range(of: end) else {
-            throw TestFailure("Could not find source section from \(start) to \(end)")
-        }
-        return String(source[startRange.lowerBound..<endRange.lowerBound])
-    }
-
-    private func index(of needle: String, in haystack: String) throws -> String.Index {
-        guard let range = haystack.range(of: needle) else {
-            throw TestFailure("Could not find \(needle)")
-        }
-        return range.lowerBound
-    }
-}
-
-private struct TestFailure: Error, CustomStringConvertible {
-    let description: String
-
-    init(_ description: String) {
-        self.description = description
-    }
 }

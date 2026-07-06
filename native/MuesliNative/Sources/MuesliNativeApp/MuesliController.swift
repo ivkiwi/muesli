@@ -85,6 +85,17 @@ enum MeetingCompletionNotificationPolicy {
     }
 }
 
+enum ScheduledPromptActionPolicy {
+    static func performUserAction(
+        notificationKey: String,
+        cancelStartingNowTimer: (String) -> Void,
+        action: () -> Void
+    ) {
+        cancelStartingNowTimer(notificationKey)
+        action()
+    }
+}
+
 enum MuesliBridgeDeviceRefreshPolicy {
     static func shouldForceRefresh(
         userInitiated: Bool,
@@ -7479,7 +7490,7 @@ final class MuesliController: NSObject {
         }
     }
 
-    private func handleUpcomingMeeting(_ event: UpcomingMeetingEvent, notificationKey: String? = nil) {
+    private func handleUpcomingMeeting(_ event: UpcomingMeetingEvent, notificationKey: String) {
         // Look up end date and meeting URL from unified calendar events
         let calendarEvent = appState.upcomingCalendarEvents
             .first(where: { $0.id == event.id })
@@ -7514,34 +7525,50 @@ final class MuesliController: NSObject {
             onStartRecording: { [weak self] in
                 guard let self else { return }
                 self.isShowingCalendarNotification = false
-                self.cancelMeetingStartingNowTimer(notificationKey: notificationKey)
-                self.startForegroundMeetingRecording(
-                    title: title,
-                    calendarEventID: event.id,
-                    endDate: calendarEndDate,
-                    autoStopSource: autoStopSource,
-                    startOrigin: .scheduledMeetingPrompt
-                )
+                ScheduledPromptActionPolicy.performUserAction(
+                    notificationKey: notificationKey,
+                    cancelStartingNowTimer: { self.cancelMeetingStartingNowTimer(notificationKey: $0) }
+                ) {
+                    self.startForegroundMeetingRecording(
+                        title: title,
+                        calendarEventID: event.id,
+                        endDate: calendarEndDate,
+                        autoStopSource: autoStopSource,
+                        startOrigin: .scheduledMeetingPrompt
+                    )
+                }
             },
             onJoinAndRecord: meetingURL != nil ? { [weak self] in
                 guard let self else { return }
                 self.isShowingCalendarNotification = false
-                self.cancelMeetingStartingNowTimer(notificationKey: notificationKey)
-                self.joinAndRecord(title: title, meetingURL: meetingURL!, endDate: calendarEndDate, calendarEventID: event.id)
+                ScheduledPromptActionPolicy.performUserAction(
+                    notificationKey: notificationKey,
+                    cancelStartingNowTimer: { self.cancelMeetingStartingNowTimer(notificationKey: $0) }
+                ) {
+                    self.joinAndRecord(title: title, meetingURL: meetingURL!, endDate: calendarEndDate, calendarEventID: event.id)
+                }
             } : nil,
             onJoinOnly: meetingURL != nil ? { [weak self] in
                 guard let self else { return }
                 self.isShowingCalendarNotification = false
-                self.cancelMeetingStartingNowTimer(notificationKey: notificationKey)
-                self.joinOnly(meetingURL: meetingURL!, endDate: calendarEndDate)
+                ScheduledPromptActionPolicy.performUserAction(
+                    notificationKey: notificationKey,
+                    cancelStartingNowTimer: { self.cancelMeetingStartingNowTimer(notificationKey: $0) }
+                ) {
+                    self.joinOnly(meetingURL: meetingURL!, endDate: calendarEndDate)
+                }
             } : nil,
             onDismiss: { [weak self] in
                 guard let self else { return }
                 self.isShowingCalendarNotification = false
-                self.cancelMeetingStartingNowTimer(notificationKey: notificationKey)
-                let remaining = calendarEndDate.map { max($0.timeIntervalSinceNow, 120) } ?? 120
-                self.meetingMonitor.suppress(for: remaining)
-                self.meetingMonitor.refreshState()
+                ScheduledPromptActionPolicy.performUserAction(
+                    notificationKey: notificationKey,
+                    cancelStartingNowTimer: { self.cancelMeetingStartingNowTimer(notificationKey: $0) }
+                ) {
+                    let remaining = calendarEndDate.map { max($0.timeIntervalSinceNow, 120) } ?? 120
+                    self.meetingMonitor.suppress(for: remaining)
+                    self.meetingMonitor.refreshState()
+                }
             },
             onClose: { [weak self] in
                 self?.isShowingCalendarNotification = false
@@ -7550,8 +7577,7 @@ final class MuesliController: NSObject {
         )
     }
 
-    private func cancelMeetingStartingNowTimer(notificationKey: String?) {
-        guard let notificationKey else { return }
+    private func cancelMeetingStartingNowTimer(notificationKey: String) {
         meetingStartingNowTimers[notificationKey]?.invalidate()
         meetingStartingNowTimers.removeValue(forKey: notificationKey)
     }
