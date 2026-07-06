@@ -21,6 +21,7 @@ struct LiveTranscriptView: View {
     // On each onChange we only parse the new suffix, keeping updates O(k)
     // where k = lines in the new chunk rather than O(n) for the full history.
     @State private var parsedLength: Int = 0
+    @State private var parsedTranscript: String = ""
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -63,15 +64,17 @@ struct LiveTranscriptView: View {
     }
 
     private func mergeNewContent(from newTranscript: String) {
-        if newTranscript.count < parsedLength {
+        if newTranscript.count < parsedLength || !newTranscript.hasPrefix(parsedTranscript) {
             groups = []
             parsedLength = 0
+            parsedTranscript = ""
         }
         guard newTranscript.count > parsedLength else {
             return
         }
         let startIndex = newTranscript.index(newTranscript.startIndex, offsetBy: parsedLength)
         parsedLength = newTranscript.count
+        parsedTranscript = newTranscript
 
         let newMessages = TranscriptChatMessage.messages(from: String(newTranscript[startIndex...]))
         for msg in newMessages {

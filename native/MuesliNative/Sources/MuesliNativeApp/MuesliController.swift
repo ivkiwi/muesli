@@ -4708,6 +4708,7 @@ final class MuesliController: NSObject {
                         return self.liveMeetingTitle(id: meetingID)
                     }
                 }
+                let liveTranscriptBuffer = LiveTranscriptBuffer()
                 meetingSession.onChunkTranscribed = { [weak self, weak meetingSession] segments, speaker in
                     Task { @MainActor [weak self, weak meetingSession] in
                         guard let self else { return }
@@ -4739,10 +4740,7 @@ final class MuesliController: NSObject {
                         } catch {
                             fputs("[muesli-native] failed to checkpoint live transcript for meeting \(meetingID): \(error)\n", stderr)
                         }
-                        // Live view is arrival-order closed captions. Recovery reads checkpoints sorted
-                        // by segment timestamps, so the durable fallback stays temporally ordered.
-                        let lines = entries.map { "[\($0.timestampLabel)] \($0.speaker): \($0.text)" }
-                        self.appState.liveMeetingTranscript += lines.joined(separator: "\n") + "\n"
+                        self.appState.liveMeetingTranscript = liveTranscriptBuffer.appendAndRender(entries)
                     }
                 }
                 appState.liveMeetingTranscriptOwnerID = meetingID
@@ -7588,6 +7586,40 @@ final class MuesliController: NSObject {
             dict["matchingThreshold"] = word.matchingThreshold
             return dict
         }
+    }
+}
+
+@MainActor
+final class LiveTranscriptBuffer {
+    private struct BufferedEntry {
+        let index: Int
+        let entry: LiveTranscriptCheckpointEntry
+    }
+
+    private var entries: [BufferedEntry] = []
+    private var nextIndex = 0
+
+    func appendAndRender(_ newEntries: [LiveTranscriptCheckpointEntry]) -> String {
+        for entry in newEntries {
+            entries.append(BufferedEntry(index: nextIndex, entry: entry))
+            nextIndex += 1
+        }
+        guard !entries.isEmpty else { return "" }
+
+        return entries
+            .sorted(by: Self.isInDisplayOrder)
+            .map { "[\($0.entry.timestampLabel)] \($0.entry.speaker): \($0.entry.text)" }
+            .joined(separator: "\n") + "\n"
+    }
+
+    private static func isInDisplayOrder(_ lhs: BufferedEntry, _ rhs: BufferedEntry) -> Bool {
+        if lhs.entry.startSeconds != rhs.entry.startSeconds {
+            return lhs.entry.startSeconds < rhs.entry.startSeconds
+        }
+        if lhs.entry.endSeconds != rhs.entry.endSeconds {
+            return lhs.entry.endSeconds < rhs.entry.endSeconds
+        }
+        return lhs.index < rhs.index
     }
 }
 

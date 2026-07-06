@@ -390,23 +390,35 @@ struct MeetingChunkCollectorTests {
     @Test("collector drain flushes buffered chunks when an earlier slot stalls")
     func collectorDrainFlushesBufferedChunksPastStalledSlot() async {
         let collector = MeetingChunkCollector()
+        let chunks = ControlledSpeechChunks()
         let stalled = Task<[SpeechSegment], Never> {
             while !Task.isCancelled {
                 await Task.yield()
             }
             return []
         }
-        let tailChunk = Task { [SpeechSegment(start: 3, end: 4, text: "tail")] }
+        let tailChunk = Task {
+            await chunks.wait(for: 0)
+        }
 
         let stalledRegistration = collector.add(stalled)
         let tailRegistration = collector.add(tailChunk)
 
         #expect(stalledRegistration.registered)
         #expect(tailRegistration.registered)
-        #expect(collector.retire(id: tailRegistration.retireID, segments: await tailChunk.value)?.isEmpty == true)
+        while await chunks.readyCount() < 1 {
+            await Task.yield()
+        }
 
         var logs: [String] = []
-        let drained = await collector.closeAndDrainSortedSegments(inactivityTimeout: 0.05) { logs.append($0) }
+        let drainTask = Task {
+            await collector.closeAndDrainSortedSegments(inactivityTimeout: 0.25) { logs.append($0) }
+        }
+        while collector.snapshot().pendingChunkCount > 0 {
+            await Task.yield()
+        }
+        await chunks.resume(index: 0, with: [SpeechSegment(start: 3, end: 4, text: "tail")])
+        let drained = await drainTask.value
 
         #expect(drained.map(\.text) == ["tail"])
         #expect(logs.contains { $0.contains("[live-collector] dropped pending chunk sequence=0 reason=drain_timeout") })
@@ -464,9 +476,11 @@ struct MeetingChunkCollectorTests {
                 await Task.yield()
             }
             let drainTask = Task {
-                await collector.closeAndDrainSortedSegments(inactivityTimeout: 0.05)
+                await collector.closeAndDrainSortedSegments(inactivityTimeout: 0.25)
             }
-            await Task.yield()
+            while collector.snapshot().pendingChunkCount > 0 {
+                await Task.yield()
+            }
             await chunks.resume(
                 index: iteration,
                 with: [SpeechSegment(start: Double(iteration), end: Double(iteration + 1), text: "chunk \(iteration)")]
@@ -547,6 +561,37 @@ struct MeetingChunkCollectorTests {
 
         #expect(segments.map(\.text) == ["first", "second"])
         #expect(segments.map(\.start) == [11, 12])
+    }
+}
+
+@Suite("Live transcript buffering")
+struct LiveTranscriptBufferTests {
+    @Test("live transcript renders by segment start")
+    @MainActor
+    func liveTranscriptRendersBySegmentStart() {
+        let buffer = LiveTranscriptBuffer()
+
+        let firstRender = buffer.appendAndRender([
+            LiveTranscriptCheckpointEntry(
+                timestampLabel: "10:00:05",
+                speaker: "Others",
+                startSeconds: 5,
+                endSeconds: 6,
+                text: "later"
+            )
+        ])
+        let sortedRender = buffer.appendAndRender([
+            LiveTranscriptCheckpointEntry(
+                timestampLabel: "10:00:01",
+                speaker: "You",
+                startSeconds: 1,
+                endSeconds: 2,
+                text: "earlier"
+            )
+        ])
+
+        #expect(firstRender == "[10:00:05] Others: later\n")
+        #expect(sortedRender == "[10:00:01] You: earlier\n[10:00:05] Others: later\n")
     }
 }
 
