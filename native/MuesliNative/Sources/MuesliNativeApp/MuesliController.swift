@@ -258,6 +258,7 @@ final class MuesliController: NSObject {
     private let dictationLatencyLogWriter = DictationLatencyLogWriter(
         url: AppIdentity.supportDirectoryURL.appendingPathComponent("dictation-latency.log")
     )
+    private lazy var diagnosticIncidentReporter = DiagnosticIncidentReporter(appState: appState)
     private let dictationLatencyTimestampFormatter = ISO8601DateFormatter()
     private let indicator: FloatingIndicatorController
     private let calendarMonitor = CalendarMonitor()
@@ -4259,6 +4260,12 @@ final class MuesliController: NSObject {
             }
         } catch {
             fputs("[muesli-native] failed to create live meeting: \(error)\n", stderr)
+            recordDiagnosticIncident(
+                kind: .meetingStartFailed,
+                stage: "create_live_meeting",
+                backend: meetingBackend,
+                error: error
+            )
             presentErrorAlert(title: "Meeting failed to start", message: error.localizedDescription)
             return false
         }
@@ -4310,6 +4317,12 @@ final class MuesliController: NSObject {
             } catch {
                 if self.meetingStartMeetingID == meetingID {
                     fputs("[muesli-native] failed to start meeting: \(error)\n", stderr)
+                    _ = self.recordDiagnosticIncident(
+                        kind: .meetingStartFailed,
+                        stage: "start_meeting_recording",
+                        backend: meetingBackend,
+                        error: error
+                    )
                     self.disarmMeetingAutoStop()
                     self.resolveLiveMeetingAfterStartFailure(id: meetingID)
                     self.cancelMeetingRecordingHotkeyToggleAfterFailedStart(meetingID: meetingID)
@@ -5170,6 +5183,50 @@ final class MuesliController: NSObject {
         scheduleICloudSyncAfterLocalChange()
     }
 
+    func openManualDiagnosticReport() {
+        diagnosticIncidentReporter.recordManualReport()
+    }
+
+    func dismissDiagnosticIncidentPrompt() {
+        diagnosticIncidentReporter.dismissCurrentPrompt()
+    }
+
+    func openDiagnosticIncidentIssue(_ incident: DiagnosticIncident) {
+        if let url = incident.githubIssueURL {
+            NSWorkspace.shared.open(url)
+        }
+        diagnosticIncidentReporter.dismissCurrentPrompt()
+    }
+
+    func simulateDiagnosticIncidentForDevelopment() {
+        guard AppIdentity.isDevelopmentBuild else { return }
+        _ = recordDiagnosticIncident(
+            kind: .dictationTranscriptionFailed,
+            stage: "simulated_standard_dictation_transcribe",
+            backend: selectedBackend,
+            error: NSError(domain: "MuesliDiagnosticsSimulation", code: 9001)
+        )
+    }
+
+    @discardableResult
+    private func recordDiagnosticIncident(
+        kind: DiagnosticIncidentKind,
+        severity: DiagnosticIncidentSeverity = .error,
+        stage: String,
+        backend: BackendOption? = nil,
+        error: Error? = nil,
+        promptUser: Bool = true
+    ) -> DiagnosticIncident {
+        diagnosticIncidentReporter.record(
+            kind: kind,
+            severity: severity,
+            stage: stage,
+            backend: backend,
+            error: error,
+            promptUser: promptUser
+        )
+    }
+
     private func updateActiveMeetingAudioWarning(meetingID: Int64, health: MeetingMicHealthSnapshot) {
         let nextWarning = health.warningMessage.map {
             ActiveMeetingAudioWarning(meetingID: meetingID, message: $0)
@@ -5266,11 +5323,25 @@ final class MuesliController: NSObject {
                 completedMeetingID = persistenceResult.meetingID
                 if let recordingSaveError = persistenceResult.recordingSaveError {
                     await MainActor.run {
+                        self.recordDiagnosticIncident(
+                            kind: .meetingRecordingSaveFailed,
+                            stage: "save_meeting_recording",
+                            backend: self.selectedMeetingTranscriptionBackend,
+                            error: recordingSaveError
+                        )
                         self.presentErrorAlert(title: "Meeting Recording", message: recordingSaveError.localizedDescription)
                     }
                 }
             } catch {
                 fputs("[muesli-native] meeting transcription failed: \(error)\n", stderr)
+                await MainActor.run {
+                    _ = self.recordDiagnosticIncident(
+                        kind: .meetingProcessingFailed,
+                        stage: "meeting_stop_processing",
+                        backend: self.selectedMeetingTranscriptionBackend,
+                        error: error
+                    )
+                }
                 let message: String
                 if let lifecycleError = error as? MeetingLifecycleError {
                     message = lifecycleError.localizedDescription
@@ -6747,6 +6818,12 @@ final class MuesliController: NSObject {
             break
         case .failed(_, let error):
             fputs("[muesli-native] recorder start failed: \(error)\n", stderr)
+            recordDiagnosticIncident(
+                kind: .dictationAudioFailed,
+                stage: "dictation_audio_session",
+                backend: selectedBackend,
+                error: error
+            )
             resetDictationOutputMode()
             dictationStartedAt = nil
             pendingDictationStopSessionID = nil
@@ -6967,6 +7044,12 @@ final class MuesliController: NSObject {
     @MainActor
     private func handleNemotronStreamingStartFailure() {
         fputs("[muesli-native] Nemotron streaming controller failed to start\n", stderr)
+        recordDiagnosticIncident(
+            kind: .streamingDictationStartFailed,
+            stage: "nemotron_streaming_start",
+            backend: selectedBackend,
+            error: nil
+        )
         isNemotron35Streaming = false
         _streamingDictationController = nil
         nemotron35StreamingSessionID = nil
@@ -6987,6 +7070,12 @@ final class MuesliController: NSObject {
     private func handleNemotronStreamingRuntimeFailure(error: Error, sessionID: UUID) {
         guard isNemotron35Streaming, nemotron35StreamingSessionID == sessionID else { return }
         fputs("[muesli-native] Nemotron streaming failed: \(error)\n", stderr)
+        recordDiagnosticIncident(
+            kind: .streamingDictationRuntimeFailed,
+            stage: "nemotron_streaming_runtime",
+            backend: selectedBackend,
+            error: error
+        )
         isNemotron35Streaming = false
         _streamingDictationController = nil
         nemotron35StreamingSessionID = nil
@@ -7353,6 +7442,12 @@ final class MuesliController: NSObject {
             } catch {
                 fputs("[muesli-native] transcription failed: \(error)\n", stderr)
                 await MainActor.run {
+                    self.recordDiagnosticIncident(
+                        kind: .dictationTranscriptionFailed,
+                        stage: "standard_dictation_transcribe",
+                        backend: transcriptionBackend,
+                        error: error
+                    )
                     if self.isDictationTestMode {
                         self.dictationTestFailureCallback?(self.userFacingDictationTestError(error))
                     }
@@ -7375,8 +7470,6 @@ final class MuesliController: NSObject {
                 return "Nemotron requires macOS 15 or later. Choose another model to test dictation."
             case 2:
                 return "Qwen3 ASR requires macOS 15 or later. Choose another model to test dictation."
-            case 3:
-                return "Canary Qwen requires macOS 15 or later. Choose another model to test dictation."
             case 4:
                 return "Cohere Transcribe requires macOS 15 or later. Choose another model to test dictation."
             default:

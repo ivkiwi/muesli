@@ -3,9 +3,11 @@ import MuesliCore
 
 struct AboutView: View {
     let appState: AppState
+    let controller: MuesliController
 
     private let githubURL = "https://github.com/Muesli-HQ/muesli"
     private let donateURL = "https://buymeacoffee.com/phequals7"
+    private let actionButtonWidth: CGFloat = 136
 
     private var version: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.2.0"
@@ -62,6 +64,7 @@ struct AboutView: View {
                             .foregroundStyle(.white)
                             .padding(.horizontal, MuesliTheme.spacing20)
                             .padding(.vertical, MuesliTheme.spacing8)
+                            .frame(width: actionButtonWidth)
                             .background(MuesliTheme.success)
                             .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                         }
@@ -71,8 +74,26 @@ struct AboutView: View {
                     Divider().background(MuesliTheme.surfaceBorder)
 
                     aboutRow("Source Code") {
-                        actionButton("View on GitHub", icon: "arrow.up.right.square") {
+                        actionButton("GitHub", icon: "arrow.up.right.square") {
                             if let url = URL(string: githubURL) { NSWorkspace.shared.open(url) }
+                        }
+                    }
+
+                    Divider().background(MuesliTheme.surfaceBorder)
+
+                    aboutRow("Report a Problem") {
+                        actionButton("Open Report", icon: "exclamationmark.bubble") {
+                            controller.openManualDiagnosticReport()
+                        }
+                    }
+
+                    if AppIdentity.isDevelopmentBuild {
+                        Divider().background(MuesliTheme.surfaceBorder)
+
+                        aboutRow("Simulate Diagnostic Failure") {
+                            actionButton("Simulate", icon: "exclamationmark.triangle") {
+                                controller.simulateDiagnosticIncidentForDevelopment()
+                            }
                         }
                     }
                 }
@@ -306,6 +327,7 @@ struct AboutView: View {
             .foregroundStyle(MuesliTheme.textPrimary)
             .padding(.horizontal, MuesliTheme.spacing16)
             .padding(.vertical, MuesliTheme.spacing8)
+            .frame(width: actionButtonWidth)
             .background(MuesliTheme.surfacePrimary)
             .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             .overlay(
