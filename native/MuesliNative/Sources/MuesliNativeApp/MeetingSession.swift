@@ -20,7 +20,48 @@ final class MeetingChunkCollector {
         var nextSequence = 0
         var nextLiveSequenceToEmit = 0
         var completedLiveChunks: [Int: [SpeechSegment]] = [:]
+        var retiredChunkCount = 0
         var isClosed = false
+    }
+
+    struct Snapshot: Equatable {
+        let registeredChunkCount: Int
+        let retiredChunkCount: Int
+        let pendingChunkCount: Int
+        let bufferedLiveChunkCount: Int
+    }
+
+    private enum DrainPoll {
+        case ready([(Int, [SpeechSegment])])
+        case waiting
+        case timedOut
+    }
+
+    private final class DrainResults: @unchecked Sendable {
+        private let lock = NSLock()
+        private var chunks: [(Int, [SpeechSegment])] = []
+        private var lastProgress = Date()
+
+        func append(sequence: Int, segments: [SpeechSegment]) {
+            lock.withLock {
+                chunks.append((sequence, segments))
+                lastProgress = Date()
+            }
+        }
+
+        func poll(inactivityTimeout: TimeInterval) -> DrainPoll {
+            lock.withLock {
+                if !chunks.isEmpty {
+                    let result = chunks.sorted { $0.0 < $1.0 }
+                    chunks.removeAll(keepingCapacity: true)
+                    return .ready(result)
+                }
+                if Date().timeIntervalSince(lastProgress) >= inactivityTimeout {
+                    return .timedOut
+                }
+                return .waiting
+            }
+        }
     }
 
     private let lock = OSAllocatedUnfairLock(initialState: State())
@@ -50,6 +91,7 @@ final class MeetingChunkCollector {
             let sequence = state.pendingTasks[pendingIndex].sequence
             state.completedSegments.append(contentsOf: segments)
             state.pendingTasks.remove(at: pendingIndex)
+            state.retiredChunkCount += 1
 
             state.completedLiveChunks[sequence] = segments
             var readyChunks: [[SpeechSegment]] = []
@@ -61,10 +103,24 @@ final class MeetingChunkCollector {
         }
     }
 
-    func closeAndDrainSortedSegments() async -> [SpeechSegment] {
+    func snapshot() -> Snapshot {
+        lock.withLock { state in
+            Snapshot(
+                registeredChunkCount: state.nextSequence,
+                retiredChunkCount: state.retiredChunkCount,
+                pendingChunkCount: state.pendingTasks.count,
+                bufferedLiveChunkCount: state.completedLiveChunks.count
+            )
+        }
+    }
+
+    func closeAndDrainSortedSegments(
+        inactivityTimeout: TimeInterval = 120,
+        logger: ((String) -> Void)? = nil
+    ) async -> [SpeechSegment] {
         let (tasksToAwait, alreadyCompleted) = lock.withLock { state in
             state.isClosed = true
-            let tasks = state.pendingTasks.map { $0.task }
+            let tasks = state.pendingTasks
             let completed = state.completedSegments
             state.pendingTasks.removeAll()
             state.completedSegments.removeAll()
@@ -73,11 +129,46 @@ final class MeetingChunkCollector {
         }
 
         var segments = alreadyCompleted
-        for task in tasksToAwait {
-            segments.append(contentsOf: await task.value)
+        guard !tasksToAwait.isEmpty else { return Self.sorted(segments) }
+
+        let drainResults = DrainResults()
+        let watcherTasks = tasksToAwait.map { pending in
+            Task {
+                let chunkSegments = await pending.task.value
+                drainResults.append(sequence: pending.sequence, segments: chunkSegments)
+            }
         }
 
-        return segments.sorted { lhs, rhs in
+        var remainingTaskCount = tasksToAwait.count
+        var pendingSequences = Set(tasksToAwait.map(\.sequence))
+        drainLoop: while remainingTaskCount > 0 {
+            switch drainResults.poll(inactivityTimeout: inactivityTimeout) {
+            case .ready(let ready):
+                for (sequence, chunkSegments) in ready {
+                    segments.append(contentsOf: chunkSegments)
+                    pendingSequences.remove(sequence)
+                }
+                remainingTaskCount -= ready.count
+
+            case .timedOut:
+                tasksToAwait.forEach { $0.task.cancel() }
+                watcherTasks.forEach { $0.cancel() }
+                logger?("[live-collector] drain timeout pending=\(remainingTaskCount) flushedSegments=\(segments.count)")
+                for sequence in pendingSequences.sorted() {
+                    logger?("[live-collector] dropped pending chunk sequence=\(sequence) reason=drain_timeout")
+                }
+                break drainLoop
+
+            case .waiting:
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+        }
+
+        return Self.sorted(segments)
+    }
+
+    private static func sorted(_ segments: [SpeechSegment]) -> [SpeechSegment] {
+        segments.sorted { lhs, rhs in
             if lhs.start == rhs.start {
                 return lhs.text < rhs.text
             }
@@ -444,6 +535,7 @@ final class MeetingSession {
                 systemSegments.append(contentsOf: normalizedSegments)
             } catch {
                 systemChunkHealthTracker.noteFailedChunk()
+                fputs("[live-collector] final system chunk failed offset=\(String(format: "%.1f", chunkOffset)) duration=\(String(format: "%.1f", chunkDuration)) error=\(error.localizedDescription)\n", stderr)
                 fputs("[meeting] final system chunk transcription failed: \(error)\n", stderr)
             }
             try? FileManager.default.removeItem(at: lastSystemChunkURL)
@@ -457,7 +549,16 @@ final class MeetingSession {
             }
         }
 
-        micSegments.append(contentsOf: await micChunkCollector.closeAndDrainSortedSegments())
+        let micCollectorSnapshot = micChunkCollector.snapshot()
+        let systemCollectorSnapshot = systemChunkCollector.snapshot()
+        let micHealthSnapshot = micChunkHealthTracker.snapshot()
+        let systemHealthSnapshot = systemChunkHealthTracker.snapshot()
+        fputs(
+            "[live-collector] stop mic registered=\(micCollectorSnapshot.registeredChunkCount) retired=\(micCollectorSnapshot.retiredChunkCount) pending=\(micCollectorSnapshot.pendingChunkCount) buffered=\(micCollectorSnapshot.bufferedLiveChunkCount) failed=\(micHealthSnapshot.failedChunkCount); system registered=\(systemCollectorSnapshot.registeredChunkCount) retired=\(systemCollectorSnapshot.retiredChunkCount) pending=\(systemCollectorSnapshot.pendingChunkCount) buffered=\(systemCollectorSnapshot.bufferedLiveChunkCount) failed=\(systemHealthSnapshot.failedChunkCount)\n",
+            stderr
+        )
+
+        micSegments.append(contentsOf: await micChunkCollector.closeAndDrainSortedSegments(logger: { fputs("\($0)\n", stderr) }))
         micSegments.sort { lhs, rhs in
             if lhs.start == rhs.start {
                 return lhs.text < rhs.text
@@ -465,7 +566,7 @@ final class MeetingSession {
             return lhs.start < rhs.start
         }
 
-        systemSegments.append(contentsOf: await systemChunkCollector.closeAndDrainSortedSegments())
+        systemSegments.append(contentsOf: await systemChunkCollector.closeAndDrainSortedSegments(logger: { fputs("\($0)\n", stderr) }))
         systemSegments.sort { lhs, rhs in
             if lhs.start == rhs.start {
                 return lhs.text < rhs.text
@@ -717,6 +818,7 @@ final class MeetingSession {
                 self.systemChunkHealthTracker.noteEmptyChunk()
             } catch {
                 self.systemChunkHealthTracker.noteFailedChunk()
+                fputs("[live-collector] system chunk failed offset=\(String(format: "%.1f", chunkOffset)) duration=\(String(format: "%.1f", chunkDuration)) error=\(error.localizedDescription)\n", stderr)
                 fputs("[meeting] system chunk transcription failed: \(error)\n", stderr)
             }
             return []
@@ -906,6 +1008,7 @@ final class MeetingSession {
             return []
         } catch {
             micChunkHealthTracker.noteFailedChunk()
+            fputs("[live-collector] mic chunk failed offset=\(String(format: "%.1f", chunkOffset)) duration=\(String(format: "%.1f", chunkDuration)) error=\(error.localizedDescription)\n", stderr)
             fputs("[meeting] mic chunk transcription failed (raw): \(error)\n", stderr)
             return nil
         }
