@@ -46,20 +46,54 @@ enum SenseVoiceFileChunking {
 
 private enum SenseVoiceTranscriptMerger {
     private static let maxOverlapWords = 40
+    private static let maxOverlapCharacters = 120
 
     static func merge(_ transcripts: [String]) -> String {
+        if transcripts.contains(where: containsUnspacedCJKScript) {
+            return mergeCharacters(transcripts)
+        }
+        return mergeWords(transcripts)
+    }
+
+    private static func mergeWords(_ transcripts: [String]) -> String {
         var words: [String] = []
         for transcript in transcripts {
             let next = transcript.split(whereSeparator: \.isWhitespace).map(String.init)
             guard !next.isEmpty else { continue }
-            let overlap = suffixPrefixOverlap(words, next)
+            let overlap = suffixPrefixWordOverlap(words, next)
             words.append(contentsOf: next.dropFirst(overlap))
         }
         return words.joined(separator: " ")
     }
 
-    private static func suffixPrefixOverlap(_ left: [String], _ right: [String]) -> Int {
+    private static func mergeCharacters(_ transcripts: [String]) -> String {
+        var characters: [Character] = []
+        for transcript in transcripts {
+            let next = Array(transcript.trimmingCharacters(in: .whitespacesAndNewlines))
+            guard !next.isEmpty else { continue }
+            let overlap = suffixPrefixCharacterOverlap(characters, next)
+            characters.append(contentsOf: next.dropFirst(overlap))
+        }
+        return String(characters)
+    }
+
+    private static func suffixPrefixWordOverlap(_ left: [String], _ right: [String]) -> Int {
         let limit = min(maxOverlapWords, left.count, right.count)
+        guard limit >= 2 else { return 0 }
+
+        let normalizedLeft = left.map(normalize)
+        let normalizedRight = right.map(normalize)
+        for count in stride(from: limit, through: 2, by: -1) {
+            let suffix = normalizedLeft.suffix(count)
+            if !suffix.contains(""), Array(suffix) == Array(normalizedRight.prefix(count)) {
+                return count
+            }
+        }
+        return 0
+    }
+
+    private static func suffixPrefixCharacterOverlap(_ left: [Character], _ right: [Character]) -> Int {
+        let limit = min(maxOverlapCharacters, left.count, right.count)
         guard limit >= 2 else { return 0 }
 
         let normalizedLeft = left.map(normalize)
@@ -75,6 +109,126 @@ private enum SenseVoiceTranscriptMerger {
 
     private static func normalize(_ word: String) -> String {
         word.lowercased().filter { $0.isLetter || $0.isNumber }
+    }
+
+    private static func normalize(_ character: Character) -> String {
+        String(character).lowercased().filter { $0.isLetter || $0.isNumber }
+    }
+
+    private static func containsUnspacedCJKScript(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            switch scalar.value {
+            case 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF,
+                 0x3040...0x30FF,
+                 0xAC00...0xD7AF:
+                return true
+            default:
+                return false
+            }
+        }
+    }
+}
+
+enum SenseVoiceAudioWindowReaderError: Error, LocalizedError {
+    case unsupportedFormat
+    case missingFloatChannelData
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedFormat:
+            return "Could not create a SenseVoice audio conversion format."
+        case .missingFloatChannelData:
+            return "Converted SenseVoice audio did not contain float channel data."
+        }
+    }
+}
+
+final class SenseVoiceAudioWindowReader {
+    private static let targetSampleRate = Double(SenseVoiceFileChunking.sampleRate)
+
+    private let file: AVAudioFile
+    private let converter: AVAudioConverter
+    private let outputFormat: AVAudioFormat
+    private let sourceSampleRate: Double
+
+    let sampleCount: Int
+
+    init(url: URL) throws {
+        let file = try AVAudioFile(forReading: url)
+        guard let outputFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: Self.targetSampleRate,
+            channels: 1,
+            interleaved: false
+        ), let converter = AVAudioConverter(from: file.processingFormat, to: outputFormat) else {
+            throw SenseVoiceAudioWindowReaderError.unsupportedFormat
+        }
+
+        self.file = file
+        self.converter = converter
+        self.outputFormat = outputFormat
+        self.sourceSampleRate = file.processingFormat.sampleRate
+        self.sampleCount = max(
+            0,
+            Int((Double(file.length) * Self.targetSampleRate / file.processingFormat.sampleRate).rounded(.up))
+        )
+    }
+
+    func samples(for targetRange: Range<Int>) throws -> [Float] {
+        guard !targetRange.isEmpty else { return [] }
+
+        let sourceStart = AVAudioFramePosition(
+            (Double(targetRange.lowerBound) / Self.targetSampleRate * sourceSampleRate).rounded(.down)
+        )
+        let sourceEnd = AVAudioFramePosition(
+            (Double(targetRange.upperBound) / Self.targetSampleRate * sourceSampleRate).rounded(.up)
+        )
+        let clampedStart = min(max(0, sourceStart), file.length)
+        let clampedEnd = min(max(clampedStart, sourceEnd), file.length)
+        let sourceFrameCount = AVAudioFrameCount(clampedEnd - clampedStart)
+        guard sourceFrameCount > 0 else { return [] }
+
+        guard let inputBuffer = AVAudioPCMBuffer(
+            pcmFormat: file.processingFormat,
+            frameCapacity: sourceFrameCount
+        ) else {
+            throw SenseVoiceAudioWindowReaderError.unsupportedFormat
+        }
+
+        file.framePosition = clampedStart
+        try file.read(into: inputBuffer, frameCount: sourceFrameCount)
+        guard inputBuffer.frameLength > 0 else { return [] }
+
+        converter.reset()
+        let outputCapacity = AVAudioFrameCount(
+            max(1, Int((Double(inputBuffer.frameLength) * Self.targetSampleRate / sourceSampleRate).rounded(.up)) + 64)
+        )
+        guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: outputCapacity) else {
+            throw SenseVoiceAudioWindowReaderError.unsupportedFormat
+        }
+
+        var didProvideInput = false
+        let inputBlock: AVAudioConverterInputBlock = { _, status in
+            if didProvideInput {
+                status.pointee = .endOfStream
+                return nil
+            }
+            didProvideInput = true
+            status.pointee = .haveData
+            return inputBuffer
+        }
+
+        var conversionError: NSError?
+        let status = converter.convert(to: outputBuffer, error: &conversionError, withInputFrom: inputBlock)
+        if let conversionError {
+            throw conversionError
+        }
+        guard status != .error, let outputChannel = outputBuffer.floatChannelData?[0] else {
+            throw SenseVoiceAudioWindowReaderError.missingFloatChannelData
+        }
+
+        let frameLength = min(Int(outputBuffer.frameLength), targetRange.count)
+        return Array(UnsafeBufferPointer(start: outputChannel, count: frameLength))
     }
 }
 
@@ -128,9 +282,8 @@ actor SenseVoiceTranscriber {
             return (text, CFAbsoluteTimeGetCurrent() - start)
         }
 
-        let samples = try AudioConverter(sampleRate: Double(SenseVoiceFileChunking.sampleRate))
-            .resampleAudioFile(wavURL)
-        let windows = SenseVoiceFileChunking.windows(sampleCount: samples.count)
+        let reader = try SenseVoiceAudioWindowReader(url: wavURL)
+        let windows = SenseVoiceFileChunking.windows(sampleCount: reader.sampleCount)
         guard !windows.isEmpty else {
             return ("", CFAbsoluteTimeGetCurrent() - start)
         }
@@ -140,7 +293,9 @@ actor SenseVoiceTranscriber {
         transcripts.reserveCapacity(windows.count)
         for window in windows {
             try Task.checkCancellation()
-            let text = try await manager.transcribe(audio: Array(samples[window]))
+            let audio = try reader.samples(for: window)
+            guard !audio.isEmpty else { continue }
+            let text = try await manager.transcribe(audio: audio)
             transcripts.append(text)
         }
 

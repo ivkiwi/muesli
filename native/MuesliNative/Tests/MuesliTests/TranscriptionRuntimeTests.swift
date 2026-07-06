@@ -1,4 +1,5 @@
 import Testing
+import AVFoundation
 import Foundation
 import MuesliCore
 @testable import MuesliNativeApp
@@ -230,6 +231,64 @@ struct SenseVoiceFileChunkingTests {
         ])
 
         #expect(result == "alpha beta gamma delta epsilon zeta eta theta iota")
+    }
+
+    @Test("merge deduplicates CJK character overlap")
+    func mergeDeduplicatesCJKCharacterOverlap() {
+        let result = SenseVoiceFileChunking.mergeTranscripts([
+            "今天我们讨论语音识别模型",
+            "语音识别模型效果很好",
+        ])
+
+        #expect(result == "今天我们讨论语音识别模型效果很好")
+    }
+
+    @Test("window reader reads bounded chunks")
+    func windowReaderReadsBoundedChunks() throws {
+        let sampleRate = SenseVoiceFileChunking.sampleRate
+        let url = try Self.writeWav(seconds: 16, sampleRate: sampleRate)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let reader = try SenseVoiceAudioWindowReader(url: url)
+        let windows = SenseVoiceFileChunking.windows(sampleCount: reader.sampleCount)
+
+        #expect(windows.count == 2)
+        let first = try reader.samples(for: windows[0])
+        let second = try reader.samples(for: windows[1])
+
+        #expect(first.count > 14 * sampleRate)
+        #expect(first.count <= 15 * sampleRate)
+        #expect(second.count <= 3 * sampleRate + 64)
+        #expect(first.count < reader.sampleCount)
+    }
+
+    private static func writeWav(seconds: Int, sampleRate: Int) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sensevoice-window-\(UUID().uuidString).wav")
+        guard let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: Double(sampleRate),
+            channels: 1,
+            interleaved: false
+        ) else {
+            throw NSError(domain: "SenseVoiceFileChunkingTests", code: 1)
+        }
+        let frameCount = seconds * sampleRate
+        guard let buffer = AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: AVAudioFrameCount(frameCount)
+        ), let channel = buffer.floatChannelData?[0] else {
+            throw NSError(domain: "SenseVoiceFileChunkingTests", code: 2)
+        }
+
+        buffer.frameLength = AVAudioFrameCount(frameCount)
+        for index in 0..<frameCount {
+            channel[index] = Float(sin(Double(index) * 0.01)) * 0.1
+        }
+
+        let file = try AVAudioFile(forWriting: url, settings: format.settings)
+        try file.write(from: buffer)
+        return url
     }
 }
 
