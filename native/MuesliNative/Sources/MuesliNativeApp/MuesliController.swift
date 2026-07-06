@@ -7053,12 +7053,14 @@ final class MuesliController: NSObject {
     @MainActor
     private func handleNemotronStreamingStartFailure() {
         fputs("[muesli-native] Nemotron streaming controller failed to start\n", stderr)
-        recordDiagnosticIncident(
-            kind: .streamingDictationStartFailed,
-            stage: "nemotron_streaming_start",
-            backend: selectedBackend,
-            error: nil
-        )
+        if !isDictationTestMode {
+            recordDiagnosticIncident(
+                kind: .streamingDictationStartFailed,
+                stage: "nemotron_streaming_start",
+                backend: selectedBackend,
+                error: nil
+            )
+        }
         isNemotron35Streaming = false
         _streamingDictationController = nil
         nemotron35StreamingSessionID = nil
@@ -7079,12 +7081,14 @@ final class MuesliController: NSObject {
     private func handleNemotronStreamingRuntimeFailure(error: Error, sessionID: UUID) {
         guard isNemotron35Streaming, nemotron35StreamingSessionID == sessionID else { return }
         fputs("[muesli-native] Nemotron streaming failed: \(error)\n", stderr)
-        recordDiagnosticIncident(
-            kind: .streamingDictationRuntimeFailed,
-            stage: "nemotron_streaming_runtime",
-            backend: selectedBackend,
-            error: error
-        )
+        if !isDictationTestMode {
+            recordDiagnosticIncident(
+                kind: .streamingDictationRuntimeFailed,
+                stage: "nemotron_streaming_runtime",
+                backend: selectedBackend,
+                error: error
+            )
+        }
         isNemotron35Streaming = false
         _streamingDictationController = nil
         nemotron35StreamingSessionID = nil
