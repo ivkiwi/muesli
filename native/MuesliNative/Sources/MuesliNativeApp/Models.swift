@@ -140,12 +140,21 @@ struct BackendOption: Equatable {
         all.filter { $0.isDownloaded }
     }
 
+    /// Models that can keep up with post-meeting and imported recording transcription.
+    static var downloadedMeetingTranscription: [BackendOption] {
+        downloaded.filter(\.supportsMeetingTranscription)
+    }
+
     static func resolve(backend: String, model: String) -> BackendOption? {
         all.first { $0.backend == backend && $0.model == model }
     }
 
     var isStreamingDictationBackend: Bool {
         backend == "nemotron35"
+    }
+
+    var supportsMeetingTranscription: Bool {
+        !isStreamingDictationBackend
     }
 
     static func resolveDownloaded(

@@ -412,7 +412,10 @@ final class MuesliController: NSObject {
             config: loadedConfig,
             dictationBackend: self.selectedBackend,
             downloadedOptions: BackendOption.downloaded
-        ) ?? configuredMeetingBackend ?? self.selectedBackend
+        ) ?? Self.fallbackMeetingTranscriptionBackend(
+            configured: configuredMeetingBackend,
+            dictationBackend: self.selectedBackend
+        )
         self.selectedMeetingSummaryBackend = MeetingSummaryBackendOption.all.first(where: {
             $0.backend == loadedConfig.meetingSummaryBackend
         }) ?? .chatGPT
@@ -922,12 +925,27 @@ final class MuesliController: NSObject {
         dictationBackend: BackendOption,
         downloadedOptions: [BackendOption] = BackendOption.downloaded
     ) -> BackendOption? {
-        BackendOption.resolveDownloaded(
+        let meetingOptions = downloadedOptions.filter(\.supportsMeetingTranscription)
+        let fallback = dictationBackend.supportsMeetingTranscription ? dictationBackend : nil
+        return BackendOption.resolveDownloaded(
             backend: config.meetingTranscriptionBackend,
             model: config.meetingTranscriptionModel,
-            fallback: dictationBackend,
-            downloadedOptions: downloadedOptions
+            fallback: fallback,
+            downloadedOptions: meetingOptions
         )
+    }
+
+    private static func fallbackMeetingTranscriptionBackend(
+        configured: BackendOption?,
+        dictationBackend: BackendOption
+    ) -> BackendOption {
+        if let configured, configured.supportsMeetingTranscription {
+            return configured
+        }
+        if dictationBackend.supportsMeetingTranscription {
+            return dictationBackend
+        }
+        return BackendOption.all.first(where: \.supportsMeetingTranscription) ?? .whisper
     }
 
     @discardableResult
@@ -943,10 +961,13 @@ final class MuesliController: NSObject {
             dictationBackend: dictationBackend,
             downloadedOptions: downloadedOptions
         ) else {
-            selectedMeetingTranscriptionBackend = BackendOption.resolve(
-                backend: config.meetingTranscriptionBackend,
-                model: config.meetingTranscriptionModel
-            ) ?? dictationBackend
+            selectedMeetingTranscriptionBackend = Self.fallbackMeetingTranscriptionBackend(
+                configured: BackendOption.resolve(
+                    backend: config.meetingTranscriptionBackend,
+                    model: config.meetingTranscriptionModel
+                ),
+                dictationBackend: dictationBackend
+            )
             appState.selectedMeetingTranscriptionBackend = selectedMeetingTranscriptionBackend
             appState.config = config
             return nil
@@ -997,9 +1018,13 @@ final class MuesliController: NSObject {
         selectedBackend = BackendOption.all.first(where: {
             $0.backend == config.sttBackend && $0.model == config.sttModel
         }) ?? .whisper
-        selectedMeetingTranscriptionBackend = BackendOption.all.first(where: {
+        let configuredMeetingTranscriptionBackend = BackendOption.all.first(where: {
             $0.backend == config.meetingTranscriptionBackend && $0.model == config.meetingTranscriptionModel
-        }) ?? selectedBackend
+        })
+        selectedMeetingTranscriptionBackend = Self.fallbackMeetingTranscriptionBackend(
+            configured: configuredMeetingTranscriptionBackend,
+            dictationBackend: selectedBackend
+        )
         selectedMeetingSummaryBackend = MeetingSummaryBackendOption.all.first(where: {
             $0.backend == config.meetingSummaryBackend
         }) ?? .chatGPT
@@ -1708,6 +1733,14 @@ final class MuesliController: NSObject {
     }
 
     func selectMeetingTranscriptionBackend(_ option: BackendOption, requireDownloaded: Bool = true) {
+        guard option.supportsMeetingTranscription else {
+            presentErrorAlert(
+                title: "Meeting model unavailable",
+                message: "\(option.label) is optimized for dictation and cannot be used for meeting transcription."
+            )
+            normalizeMeetingTranscriptionSelectionForAvailability()
+            return
+        }
         guard !requireDownloaded || option.isDownloaded else {
             presentErrorAlert(
                 title: "Meeting model unavailable",
