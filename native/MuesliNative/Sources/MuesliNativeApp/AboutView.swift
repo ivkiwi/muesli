@@ -3,8 +3,9 @@ import MuesliCore
 
 struct AboutView: View {
     let appState: AppState
+    let openDiagnosticReport: () -> Void
 
-    private let githubURL = "https://github.com/Muesli-HQ/muesli"
+    private let githubURL = "https://github.com/ivkiwi/guesli"
     private let donateURL = "https://buymeacoffee.com/phequals7"
 
     private var version: String {
@@ -73,6 +74,14 @@ struct AboutView: View {
                     aboutRow("Source Code") {
                         actionButton("View on GitHub", icon: "arrow.up.right.square") {
                             if let url = URL(string: githubURL) { NSWorkspace.shared.open(url) }
+                        }
+                    }
+
+                    Divider().background(MuesliTheme.surfaceBorder)
+
+                    aboutRow("Report a Problem") {
+                        actionButton("Open Report", icon: "exclamationmark.bubble") {
+                            openDiagnosticReport()
                         }
                     }
                 }

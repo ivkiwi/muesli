@@ -40,6 +40,18 @@ struct DashboardRootView: View {
         } message: {
             Text(appState.contributionMilestonePrompt?.message ?? "")
         }
+        .sheet(
+            item: Binding<DiagnosticIncident?>(
+                get: { appState.pendingDiagnosticIncident },
+                set: { if $0 == nil { controller.dismissDiagnosticIncidentPrompt() } }
+            )
+        ) { incident in
+            DiagnosticIncidentReportView(
+                incident: incident,
+                onOpenIssue: { controller.openDiagnosticIncidentIssue(incident) },
+                onDismiss: { controller.dismissDiagnosticIncidentPrompt() }
+            )
+        }
     }
 
     @ViewBuilder
@@ -75,7 +87,9 @@ struct DashboardRootView: View {
             case .settings:
                 SettingsView(appState: appState, controller: controller)
             case .about:
-                AboutView(appState: appState)
+                AboutView(appState: appState) {
+                    controller.openManualDiagnosticReport()
+                }
             }
         }
     }
