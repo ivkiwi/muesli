@@ -148,11 +148,17 @@ struct MeetingSummaryClientTests {
         let markerLine = try #require(
             bounded.split(separator: "\n").first { $0.contains("characters omitted") }
         )
+        let markerRange = try #require(
+            bounded.range(
+                of: #"\n\n\[\.\.\. transcript truncated: \d+ characters omitted \.\.\.\]\n\n"#,
+                options: .regularExpression
+            )
+        )
         let omittedText = String(markerLine)
             .components(separatedBy: CharacterSet.decimalDigits.inverted)
             .joined()
         let omittedCount = try #require(Int(omittedText))
-        let marker = "\n\n\(markerLine)\n\n"
+        let marker = bounded[markerRange]
 
         #expect(omittedCount == transcript.count - (bounded.count - marker.count))
     }
