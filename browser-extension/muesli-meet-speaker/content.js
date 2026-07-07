@@ -53,7 +53,7 @@ function nameFromSpeakingLabel(label) {
 
 function cleanParticipantName(value) {
   return cleanName(value)
-    .replace(/\s*\((you|me)\)\s*/gi, " ")
+    .replace(/\s*\((you|me|presentation|presenting[^)]*)\)\s*/gi, " ")
     .replace(/\b(you|me)\b$/i, "")
     .replace(/\b(tiles?|participants?|people|camera|video|microphone|captions?|pin|unpin|more options)\b/gi, "")
     .replace(/\b(ask to unmute|remove from call|joined|left)\b/gi, "")
@@ -63,8 +63,11 @@ function cleanParticipantName(value) {
 
 function validParticipantName(name) {
   if (!name || name.length < 2 || name.length > 80) return false;
+  if (/[.!?]/.test(name)) return false;
   if (/^(you|me|everyone|people|chat|activities|host controls|present now|settings|leave call)$/i.test(name)) return false;
-  if (/^(muted|unmuted|speaking|presenting|camera off|microphone off)$/i.test(name)) return false;
+  if (/^(muted|unmuted|speaking|presenting|camera off|microphone off|turn on|turn off)$/i.test(name)) return false;
+  if (/\b(click to|your|background|settings|controls|options|caption|camera|video|microphone)\b/i.test(name)) return false;
+  if (/^[a-z_]+$/.test(name)) return false;
   return /[A-Za-zА-Яа-яЁё0-9]/.test(name);
 }
 
@@ -86,7 +89,7 @@ function collectParticipants() {
   const labelled = [...document.querySelectorAll("[aria-label]")].filter(isVisible);
   for (const element of labelled) {
     const label = element.getAttribute("aria-label") || "";
-    if (!/\b(speaking|muted|unmuted|presenting|camera|video|microphone|participant|tile)\b/i.test(label)) continue;
+    if (!/\b(speaking|muted|unmuted|presenting|participant|tile)\b/i.test(label)) continue;
     addParticipant(participants, label);
   }
 
@@ -97,6 +100,11 @@ function collectParticipants() {
       .map((line) => line.trim())
       .find(Boolean);
     if (firstLine) addParticipant(participants, firstLine);
+  }
+
+  const nameNodes = [...document.querySelectorAll(".notranslate")].filter(isVisible);
+  for (const node of nameNodes) {
+    addParticipant(participants, node.innerText || node.textContent || "");
   }
 
   return [...participants.values()]
@@ -144,9 +152,18 @@ function activeSpeakerFromCaptions() {
   return "";
 }
 
+function activeSpeakerFromMeetTiles() {
+  const names = [...document.querySelectorAll(".iPFm3e .notranslate")]
+    .filter(isVisible)
+    .map((element) => cleanParticipantName(element.innerText || element.textContent || ""))
+    .filter(validParticipantName);
+  return names[0] || "";
+}
+
 function detectActiveSpeaker() {
   return activeSpeakerFromAriaLabels()
     || activeSpeakerFromLiveRegions()
+    || activeSpeakerFromMeetTiles()
     || activeSpeakerFromCaptions();
 }
 
@@ -242,13 +259,23 @@ function removeBackupObservations(ids) {
 
 async function postBridgePayload(payload) {
   if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
-    const response = await sendBackgroundMessage({ type: "muesli.postBridgePayload", payload });
-    if (!response?.ok) {
-      throw new Error(response?.error || "Guesli bridge request failed");
+    try {
+      const response = await sendBackgroundMessage({ type: "muesli.postBridgePayload", payload });
+      if (!response?.ok) {
+        throw new Error(response?.error || "Guesli bridge request failed");
+      }
+      return;
+    } catch (error) {
+      if (!/Extension context invalidated/i.test(error?.message || "")) {
+        throw error;
+      }
     }
-    return;
   }
 
+  await fetchBridgePayload(payload);
+}
+
+async function fetchBridgePayload(payload) {
   const response = await fetch(MUESLI_BRIDGE_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

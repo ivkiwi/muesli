@@ -308,6 +308,48 @@ struct MeetingsNavigationTests {
         #expect(FileManager.default.fileExists(atPath: strandedCacheURL.path) == false)
     }
 
+    @Test("clearMeetingHistory keeps unrelated files in custom recording folder")
+    func clearMeetingHistoryKeepsUnrelatedFilesInCustomRecordingFolder() throws {
+        let store = try makeStore()
+        let configStore = makeConfigStore()
+        let recordingsDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-custom-recordings-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: recordingsDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: recordingsDirectory) }
+
+        let savedRecordingURL = recordingsDirectory.appendingPathComponent("meeting.m4a")
+        let unrelatedURL = recordingsDirectory.appendingPathComponent("family-video.mov")
+        try Data("recording".utf8).write(to: savedRecordingURL)
+        try Data("unrelated".utf8).write(to: unrelatedURL)
+        let cacheURL = try RecordingWaveformCacheFiles.cacheURL(
+            for: savedRecordingURL,
+            supportDirectory: configStore.supportDirectory()
+        )
+        try Data("cache".utf8).write(to: cacheURL)
+
+        let now = Date()
+        try store.insertMeeting(
+            title: "Custom Clear Target",
+            calendarEventID: nil,
+            startTime: now,
+            endTime: now.addingTimeInterval(60),
+            rawTranscript: "Transcript",
+            formattedNotes: "## Notes",
+            micAudioPath: nil,
+            systemAudioPath: nil,
+            savedRecordingPath: savedRecordingURL.path
+        )
+        let controller = makeController(configStore: configStore, dictationStore: store)
+        controller.updateConfig { $0.meetingRecordingFolderPath = recordingsDirectory.path }
+
+        controller.clearMeetingHistory()
+
+        #expect(try store.recentMeetings(limit: 10).isEmpty)
+        #expect(FileManager.default.fileExists(atPath: savedRecordingURL.path) == false)
+        #expect(FileManager.default.fileExists(atPath: cacheURL.path) == false)
+        #expect(FileManager.default.fileExists(atPath: unrelatedURL.path))
+    }
+
     @Test("deleteMeeting keeps a shared saved recording for remaining meetings")
     func deleteMeetingKeepsSharedRecording() throws {
         let store = try makeStore()
@@ -699,6 +741,39 @@ struct MeetingsNavigationTests {
         #expect(FileManager.default.fileExists(atPath: savedRecordingURL.path))
     }
 
+    @Test("persistCompletedMeetingResult discards retained recording when policy is never")
+    func persistCompletedMeetingResultDiscardsRetainedRecordingWhenPolicyIsNever() async throws {
+        let store = try makeStore()
+        let controller = makeController(dictationStore: store)
+        controller.updateConfig { $0.meetingRecordingSavePolicy = .never }
+        let retainedRecordingURL = try makeRetainedRecordingURL()
+
+        let result = MeetingSessionResult(
+            title: "Discard Source",
+            originalTitle: "Meeting",
+            calendarEventID: nil,
+            startTime: Date(),
+            endTime: Date().addingTimeInterval(30),
+            durationSeconds: 30,
+            rawTranscript: "Discard transcript.",
+            formattedNotes: "## Summary\nDiscard notes.",
+            retainedRecordingURL: retainedRecordingURL,
+            retainedRecordingError: nil,
+            systemRecordingURL: nil,
+            templateSnapshot: MeetingTemplates.auto.snapshot
+        )
+
+        let preparedRecordingSave = await controller.prepareMeetingRecordingSave(for: result)
+        let persistenceResult = try controller.persistCompletedMeetingResult(
+            result,
+            preparedRecordingSave: preparedRecordingSave
+        )
+
+        let storedMeeting = try #require(try store.meeting(id: persistenceResult.meetingID))
+        #expect(storedMeeting.savedRecordingPath == nil)
+        #expect(FileManager.default.fileExists(atPath: retainedRecordingURL.path) == false)
+    }
+
     @Test("persistCompletedMeetingResult surfaces prompt policy retained recording failures without decision")
     func persistCompletedMeetingResultSurfacesPromptPolicyRetainedRecordingFailuresWithoutDecision() async throws {
         let store = try makeStore()
@@ -915,7 +990,7 @@ struct MeetingsNavigationTests {
         let savedURL = URL(fileURLWithPath: savedRecordingPath)
         defer { try? FileManager.default.removeItem(at: savedURL) }
         #expect(meeting.status == .failed)
-        #expect(savedURL.pathExtension == "m4a")
+        #expect(savedURL.pathExtension == "wav")
         #expect(FileManager.default.fileExists(atPath: savedURL.path))
         #expect(FileManager.default.fileExists(atPath: partialURL.path) == false)
         #expect(try audioDuration(from: savedURL) > 1)

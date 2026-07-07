@@ -79,12 +79,11 @@ enum MeetingRecordingStorage {
             withIntermediateDirectories: true
         )
 
-        let destinationURL = destinationDirectory.appendingPathComponent(
-            "\(fileNamePrefix(for: startedAt, title: meetingTitle)).\(fileFormat.fileExtension)"
+        let destinationURL = uniqueDestinationURL(
+            in: destinationDirectory,
+            prefix: fileNamePrefix(for: startedAt, title: meetingTitle),
+            fileExtension: fileFormat.fileExtension
         )
-        if FileManager.default.fileExists(atPath: destinationURL.path) {
-            try FileManager.default.removeItem(at: destinationURL)
-        }
 
         if fileFormat == .wav {
             try FileManager.default.moveItem(at: tempWAVURL, to: destinationURL)
@@ -257,5 +256,20 @@ enum MeetingRecordingStorage {
             .lowercased()
 
         return slug.isEmpty ? timestamp : "\(timestamp)-\(slug)"
+    }
+
+    private static func uniqueDestinationURL(
+        in directory: URL,
+        prefix: String,
+        fileExtension: String
+    ) -> URL {
+        let fileManager = FileManager.default
+        var candidate = directory.appendingPathComponent("\(prefix).\(fileExtension)")
+        var suffix = 2
+        while fileManager.fileExists(atPath: candidate.path) {
+            candidate = directory.appendingPathComponent("\(prefix)-\(suffix).\(fileExtension)")
+            suffix += 1
+        }
+        return candidate
     }
 }

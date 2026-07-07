@@ -344,6 +344,9 @@ final class MeetingSession {
     private var rawMicChunkRecorder: PCMChunkRecorder?
     private var retainedRecordingWriter: MeetingRecordingWriter?
     private var retainedRecordingWriterError: Error?
+    private var retainedRecordingWriterFactory: (Int64?) throws -> MeetingRecordingWriter = { meetingID in
+        try MeetingRecordingWriter(meetingID: meetingID)
+    }
     /// VAD controller for speech-boundary chunk rotation
     private var vadController: StreamingVadController?
     private var systemVadController: StreamingVadController?
@@ -475,9 +478,20 @@ final class MeetingSession {
         enqueueRealtimeSystemSamples(samples)
     }
 
+    func enqueueChunkRotationPauseForTesting(started: @escaping @Sendable () -> Void, release: DispatchSemaphore) {
+        chunkRotationQueue.async {
+            started()
+            release.wait()
+        }
+    }
+
     func setRetainedRecordingWriterForTesting(_ writer: MeetingRecordingWriter?) {
         retainedRecordingWriter = writer
         retainedRecordingWriterError = nil
+    }
+
+    func setRetainedRecordingWriterFactoryForTesting(_ factory: @escaping (Int64?) throws -> MeetingRecordingWriter) {
+        retainedRecordingWriterFactory = factory
     }
 
     var stopIntakeRequestedForTesting: Bool {
@@ -568,7 +582,7 @@ final class MeetingSession {
         do {
             try prepareRealtimeAudioPipeline(vadManager: vadManager)
             try meetingMicRecorder.prepare()
-            setupRetainedRecordingWriterIfNeeded()
+            try setupRetainedRecordingWriterIfNeeded()
             try await systemAudioRecorder.start()
             try meetingMicRecorder.start()
         } catch {
@@ -697,8 +711,6 @@ final class MeetingSession {
         }
         defer { writeStopCountersOnce() }
 
-        // Stop intake before any awaited drain/transcription work.
-        stopIntakeRequested.store(true, ordering: .releasing)
         noteStopPhaseForTesting("stop_requested")
         vadController?.stop()
         vadController = nil
@@ -727,6 +739,7 @@ final class MeetingSession {
             let lastSystemChunkTiming = systemChunkTimingTracker.finish()
             return (meetingStart, lastChunkTiming, lastRawMicURL, lastSystemChunkTiming, lastSystemChunkURL)
         }
+        stopIntakeRequested.store(true, ordering: .releasing)
         let retainedRecordingTempURL = retainedRecordingWriter?.stop()
         retainedRecordingWriter = nil
         let retainedRecordingSavedURL = await finalizeRetainedRecordingEarly(
@@ -1330,17 +1343,16 @@ final class MeetingSession {
         }
     }
 
-    private func setupRetainedRecordingWriterIfNeeded() {
+    private func setupRetainedRecordingWriterIfNeeded() throws {
         retainedRecordingWriter = nil
         retainedRecordingWriterError = nil
 
-        guard config.meetingRecordingSavePolicy != .never else { return }
-
         do {
-            retainedRecordingWriter = try MeetingRecordingWriter(meetingID: liveMeetingID)
+            retainedRecordingWriter = try retainedRecordingWriterFactory(liveMeetingID)
         } catch {
             retainedRecordingWriterError = error
             fputs("[meeting] failed to prepare retained recording writer: \(error)\n", stderr)
+            throw error
         }
     }
 

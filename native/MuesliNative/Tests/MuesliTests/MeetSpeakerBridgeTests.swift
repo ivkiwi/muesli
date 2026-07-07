@@ -60,6 +60,33 @@ struct MeetSpeakerBridgeTests {
         #expect(abs(observations[1].observedAt.timeIntervalSince1970 - 1_710_000_002.123) < 0.001)
     }
 
+    @Test("waits for complete Chrome POST body")
+    func waitsForCompleteChromePOSTBody() throws {
+        let body = #"{"speakerName":"Alice Owner","observedAtMs":1710000000123,"source":"google-meet-extension"}"#
+        let header = "POST /v1/meet-speaker HTTP/1.1\r\n"
+            + "Host: 127.0.0.1:1477\r\n"
+            + "Content-Type: application/json\r\n"
+            + "Content-Length: \(body.utf8.count)\r\n"
+            + "\r\n"
+        let headerData = Data(header.utf8)
+        let requestData = headerData + Data(body.utf8)
+
+        #expect(MeetSpeakerBridgeServer.completeHTTPRequestLength(headerData) == headerData.count + body.utf8.count)
+        #expect(MeetSpeakerBridgeServer.completeHTTPRequestLength(requestData) == requestData.count)
+    }
+
+    @Test("accepts Chrome private network preflight without body")
+    func acceptsChromePrivateNetworkPreflightWithoutBody() throws {
+        let request = "OPTIONS /v1/meet-speaker HTTP/1.1\r\n"
+            + "Host: 127.0.0.1:1477\r\n"
+            + "Access-Control-Request-Method: POST\r\n"
+            + "Access-Control-Request-Private-Network: true\r\n"
+            + "\r\n"
+        let data = Data(request.utf8)
+
+        #expect(MeetSpeakerBridgeServer.completeHTTPRequestLength(data) == data.count)
+    }
+
     @Test("maps observed Meet speaker names to diarization clusters")
     func mapsSpeakerNamesToDiarizationClusters() {
         let start = Date(timeIntervalSince1970: 1000)

@@ -86,6 +86,36 @@ struct MeetingRecordingWriterTests {
         #expect(try readMonoPCM16WAVSamples(from: savedURL) == [1200, -800, 400])
     }
 
+    @Test("persistTemporaryRecording keeps existing recordings on filename collision")
+    func persistTemporaryRecordingKeepsExistingRecordingOnCollision() throws {
+        let supportDirectory = makeTemporaryDirectory()
+        let startedAt = Date(timeIntervalSince1970: 1_711_000_000)
+
+        let firstWriter = try MeetingRecordingWriter()
+        firstWriter.appendSystem([1200, -800, 400])
+        let firstTempURL = try #require(firstWriter.stop())
+        let firstSavedURL = try MeetingRecordingWriter.persistTemporaryRecording(
+            from: firstTempURL,
+            meetingTitle: "Weekly Product Sync",
+            startedAt: startedAt,
+            supportDirectory: supportDirectory
+        )
+
+        let secondWriter = try MeetingRecordingWriter()
+        secondWriter.appendSystem([300, 600, 900])
+        let secondTempURL = try #require(secondWriter.stop())
+        let secondSavedURL = try MeetingRecordingWriter.persistTemporaryRecording(
+            from: secondTempURL,
+            meetingTitle: "Weekly Product Sync",
+            startedAt: startedAt,
+            supportDirectory: supportDirectory
+        )
+
+        #expect(firstSavedURL != secondSavedURL)
+        #expect(FileManager.default.fileExists(atPath: firstSavedURL.path))
+        #expect(FileManager.default.fileExists(atPath: secondSavedURL.path))
+    }
+
     @Test("saved m4a decodes to temporary wav for retranscription")
     func savedM4ADecodesToTemporaryWAVForRetranscription() async throws {
         let writer = try MeetingRecordingWriter()

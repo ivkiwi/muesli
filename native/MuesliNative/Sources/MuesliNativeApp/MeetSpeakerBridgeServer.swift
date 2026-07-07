@@ -34,6 +34,7 @@ struct MeetSpeakerObservationStats: Equatable, Sendable {
 final class MeetSpeakerBridgeServer {
     static let port: NWEndpoint.Port = 1477
     static let path = "/v1/meet-speaker"
+    private static let maxRequestBytes = 128 * 1024
 
     private var listener: NWListener?
     var onObservation: ((MeetSpeakerObservation) -> Void)?
@@ -49,17 +50,7 @@ final class MeetSpeakerBridgeServer {
 
         listener.newConnectionHandler = { [weak self] connection in
             connection.start(queue: .main)
-            connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, _, _ in
-                guard let self else {
-                    connection.cancel()
-                    return
-                }
-                let response = self.handle(data)
-                connection.send(
-                    content: response.data(using: .utf8),
-                    completion: .contentProcessed { _ in connection.cancel() }
-                )
-            }
+            self?.receiveRequest(on: connection)
         }
         listener.stateUpdateHandler = { state in
             if case .failed(let error) = state {
@@ -99,6 +90,42 @@ final class MeetSpeakerBridgeServer {
             onObservation?(observation)
         }
         return Self.http(status: "204 No Content")
+    }
+
+    private func receiveRequest(on connection: NWConnection, buffer: Data = Data()) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 16 * 1024) { [weak self] data, _, isComplete, error in
+            guard let self else {
+                connection.cancel()
+                return
+            }
+
+            var nextBuffer = buffer
+            if let data {
+                nextBuffer.append(data)
+            }
+
+            if let expectedLength = Self.completeHTTPRequestLength(nextBuffer),
+               nextBuffer.count >= expectedLength {
+                self.sendResponse(self.handle(nextBuffer), on: connection)
+                return
+            }
+
+            guard error == nil,
+                  !isComplete,
+                  nextBuffer.count <= Self.maxRequestBytes else {
+                self.sendResponse(Self.http(status: "400 Bad Request"), on: connection)
+                return
+            }
+
+            self.receiveRequest(on: connection, buffer: nextBuffer)
+        }
+    }
+
+    private func sendResponse(_ response: String, on connection: NWConnection) {
+        connection.send(
+            content: response.data(using: .utf8),
+            completion: .contentProcessed { _ in connection.cancel() }
+        )
     }
 
     static func parseObservation(_ data: Data) -> MeetSpeakerObservation? {
@@ -193,6 +220,24 @@ final class MeetSpeakerBridgeServer {
         let separator = Data("\r\n\r\n".utf8)
         guard let range = data.range(of: separator) else { return nil }
         return data[range.upperBound...]
+    }
+
+    static func completeHTTPRequestLength(_ data: Data) -> Int? {
+        let separator = Data("\r\n\r\n".utf8)
+        guard let range = data.range(of: separator) else { return nil }
+        let headerLength = range.upperBound
+        guard let header = String(data: data[..<range.lowerBound], encoding: .utf8) else {
+            return headerLength
+        }
+        let contentLength = header
+            .components(separatedBy: .newlines)
+            .compactMap { line -> Int? in
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard trimmed.lowercased().hasPrefix("content-length:") else { return nil }
+                return Int(trimmed.dropFirst("content-length:".count).trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+            .first ?? 0
+        return headerLength + contentLength
     }
 
     private static func http(status: String) -> String {
