@@ -4076,12 +4076,12 @@ final class MuesliController: NSObject {
         }
 
         do {
-            try clearSavedMeetingWaveformCache()
+            try? clearSavedMeetingWaveformCache()
             try clearSavedMeetingRecordingsDirectory()
         } catch {
             presentErrorAlert(
                 title: "Couldn't Clear Meeting History",
-                message: "Saved meeting audio or waveform cache files could not be deleted, so meeting history was left in place. \(error.localizedDescription)"
+                message: "Saved meeting audio files could not be deleted, so meeting history was left in place. \(error.localizedDescription)"
             )
             return
         }
