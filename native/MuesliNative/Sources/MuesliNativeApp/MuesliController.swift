@@ -5751,10 +5751,13 @@ final class MuesliController: NSObject {
             return false
         }
         let recordingURLs = meetings.compactMap { savedRecordingURL(from: $0.savedRecordingPath) }
-        RecordingWaveformCacheFiles.sweepOrphanedCachedWaveforms(
+        let result = RecordingWaveformCacheFiles.sweepOrphanedCachedWaveforms(
             retainedRecordingURLs: recordingURLs,
             supportDirectory: configStore.supportDirectory()
         )
+        if case .skipped = result {
+            return false
+        }
         return true
     }
 

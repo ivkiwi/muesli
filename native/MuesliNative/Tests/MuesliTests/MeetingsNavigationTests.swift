@@ -336,13 +336,13 @@ struct MeetingsNavigationTests {
         try Data("missing-cache".utf8).write(to: missingCacheURL)
         try FileManager.default.removeItem(at: missingRecordingURL)
 
-        let removed = RecordingWaveformCacheFiles.sweepOrphanedCachedWaveforms(
+        let result = RecordingWaveformCacheFiles.sweepOrphanedCachedWaveforms(
             retainedRecordingURLs: [liveRecordingURL, missingRecordingURL],
             supportDirectory: supportDirectory,
             logger: nil
         )
 
-        #expect(removed == 1)
+        #expect(result == .completed(removed: 1))
         #expect(FileManager.default.fileExists(atPath: liveCacheURL.path))
         #expect(FileManager.default.fileExists(atPath: missingCacheURL.path) == false)
     }

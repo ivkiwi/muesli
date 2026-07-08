@@ -92,6 +92,11 @@ private struct RecordingWaveformData: Equatable {
 }
 
 enum RecordingWaveformCacheFiles {
+    enum SweepResult: Equatable {
+        case completed(removed: Int)
+        case skipped
+    }
+
     static func cacheURL(
         for recordingURL: URL,
         supportDirectory: URL = AppIdentity.supportDirectoryURL,
@@ -141,21 +146,21 @@ enum RecordingWaveformCacheFiles {
         supportDirectory: URL = AppIdentity.supportDirectoryURL,
         fileManager: FileManager = .default,
         logger: ((String) -> Void)? = { fputs("\($0)\n", stderr) }
-    ) -> Int {
+    ) -> SweepResult {
         let directory = cacheDirectory(supportDirectory: supportDirectory)
         guard let entries = try? fileManager.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
         ) else {
-            return 0
+            return .completed(removed: 0)
         }
         guard let retainedCachePaths = retainedCachePaths(
             for: retainedRecordingURLs,
             supportDirectory: supportDirectory,
             fileManager: fileManager
         ) else {
-            return 0
+            return .skipped
         }
 
         var removed = 0
@@ -172,7 +177,7 @@ enum RecordingWaveformCacheFiles {
         if removed > 0 {
             logger?("[muesli-native] cleaned up \(removed) orphaned waveform cache file\(removed == 1 ? "" : "s")")
         }
-        return removed
+        return .completed(removed: removed)
     }
 
     static func cacheDirectory(supportDirectory: URL = AppIdentity.supportDirectoryURL) -> URL {
