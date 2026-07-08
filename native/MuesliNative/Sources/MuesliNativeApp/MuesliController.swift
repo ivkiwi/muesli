@@ -103,6 +103,27 @@ struct PendingMeetingCompletionNotification {
     let title: String
 }
 
+private struct PostMeetingSourceTrackSidecar: Codable {
+    let meetingID: Int64
+    let micAudioPath: String?
+    let systemAudioPath: String?
+    let savedRecordingPath: String?
+    let micStartOffset: TimeInterval
+    let systemStartOffset: TimeInterval
+}
+
+private struct PostMeetingSourceTrackInfo {
+    let micURL: URL?
+    let systemURL: URL?
+    let micStartOffset: TimeInterval
+    let systemStartOffset: TimeInterval
+}
+
+private struct MeetingSourceTrackTranscription {
+    let segments: [SpeechSegment]
+    let samples: [Float]
+}
+
 struct MeetSpeakerBridgeRoutingStats: Equatable, Sendable {
     var received = MeetSpeakerObservationStats()
     var matchedToMeeting = 0
@@ -1028,6 +1049,9 @@ final class MuesliController: NSObject {
         let fallbackPartial = fallbackRetainedRecordingPartial(for: meetings)
         for meeting in meetings {
             do {
+                if try recoverPostMeetingTrackPartialsIfNeeded(for: meeting) {
+                    scheduleICloudSyncAfterLocalChange()
+                }
                 if try recoverRetainedRecordingPartialIfNeeded(
                     for: meeting,
                     fallbackCandidate: fallbackPartial
@@ -1050,6 +1074,92 @@ final class MuesliController: NSObject {
         if !meetings.isEmpty {
             syncAppState()
         }
+    }
+
+    private func recoverPostMeetingTrackPartialsIfNeeded(for meeting: MeetingRecord) throws -> Bool {
+        let hasLinkedAudio =
+            meeting.savedRecordingPath?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ||
+            meeting.micAudioPath?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ||
+            meeting.systemAudioPath?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        guard !hasLinkedAudio else { return false }
+        guard let candidate = MeetingDualTrackRecordingWriter.recoveryCandidates(forMeetingID: meeting.id).first else {
+            return false
+        }
+        guard let sourceTracks = try MeetingDualTrackRecordingWriter.finalizePartialTracksIfNonTrivial(candidate) else {
+            return false
+        }
+
+        let startedAt = ISO8601DateFormatter().date(from: meeting.startTime) ?? Date()
+        let destinationDirectory = MeetingRecordingStorage.directory(
+            config: config,
+            supportDirectory: configStore.supportDirectory()
+        )
+        let micURL: URL?
+        if let sourceURL = sourceTracks.micURL {
+            micURL = try MeetingRecordingStorage.persistTemporaryTrackRecording(
+                from: sourceURL,
+                meetingTitle: meeting.title,
+                startedAt: startedAt,
+                trackName: "mic",
+                destinationDirectory: destinationDirectory
+            )
+        } else {
+            micURL = nil
+        }
+        let systemURL: URL?
+        if let sourceURL = sourceTracks.systemURL {
+            systemURL = try MeetingRecordingStorage.persistTemporaryTrackRecording(
+                from: sourceURL,
+                meetingTitle: meeting.title,
+                startedAt: startedAt,
+                trackName: "system",
+                destinationDirectory: destinationDirectory
+            )
+        } else {
+            systemURL = nil
+        }
+        let mixedTempURL = try MeetingDualTrackRecordingWriter.writeMixedTemporaryWAV(
+            micURL: micURL,
+            micStartOffset: sourceTracks.micStartOffset,
+            systemURL: systemURL,
+            systemStartOffset: sourceTracks.systemStartOffset
+        )
+        let mixedURL: URL?
+        if let mixedTempURL {
+            mixedURL = try MeetingRecordingStorage.persistTemporaryRecording(
+                from: mixedTempURL,
+                meetingTitle: meeting.title,
+                startedAt: startedAt,
+                destinationDirectory: destinationDirectory,
+                fileFormat: .m4a
+            )
+        } else {
+            mixedURL = nil
+        }
+
+        try dictationStore.updateMeetingAudioPaths(
+            id: meeting.id,
+            micAudioPath: micURL?.path,
+            systemAudioPath: systemURL?.path,
+            savedRecordingPath: mixedURL?.path
+        )
+        let request = PostMeetingRecordingFinalizeRequest(
+            sourceTracks: sourceTracks,
+            mixedTempURL: nil,
+            meetingTitle: meeting.title,
+            startedAt: startedAt
+        )
+        writePostMeetingSourceSidecar(
+            meetingID: meeting.id,
+            request: request,
+            micURL: micURL,
+            systemURL: systemURL,
+            mixedURL: mixedURL
+        )
+        DiagnosticsLog.write(
+            "[meeting-stop] recovered_post_recording meeting_id=\(meeting.id) mic=\(micURL?.path ?? "nil") system=\(systemURL?.path ?? "nil") mixed=\(mixedURL?.path ?? "nil")"
+        )
+        return true
     }
 
     private func recoverRetainedRecordingPartialIfNeeded(
@@ -3801,12 +3911,16 @@ final class MuesliController: NSObject {
             }
             var didSetProcessing = false
             do {
-                guard let savedRecordingPath = meeting.savedRecordingPath,
-                      !savedRecordingPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                    throw MeetingRetranscriptionError.recordingUnavailable
+                let sourceTrackInfo = self.postMeetingSourceTrackInfo(for: meeting)
+                let recordingURL: URL?
+                if let savedRecordingPath = meeting.savedRecordingPath,
+                   !savedRecordingPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    let candidate = URL(fileURLWithPath: savedRecordingPath)
+                    recordingURL = FileManager.default.fileExists(atPath: candidate.path) ? candidate : nil
+                } else {
+                    recordingURL = nil
                 }
-                let recordingURL = URL(fileURLWithPath: savedRecordingPath)
-                guard FileManager.default.fileExists(atPath: recordingURL.path) else {
+                guard sourceTrackInfo != nil || recordingURL != nil else {
                     throw MeetingRetranscriptionError.recordingUnavailable
                 }
                 guard let backend = self.normalizeMeetingTranscriptionSelectionForAvailability() else {
@@ -3823,13 +3937,24 @@ final class MuesliController: NSObject {
                     enablePostProcessor: false,
                     includeMeetingHelpers: true
                 )
-                let preparedAudio = try await AudioFileImportController.prepareAudioForImport(sourceURL: recordingURL)
-                defer { try? FileManager.default.removeItem(at: preparedAudio.wavURL) }
-                let rawTranscript = try await self.retranscribePreparedMeetingAudio(
-                    preparedAudio,
-                    meeting: meeting,
-                    backend: backend
-                )
+                let rawTranscript: String
+                if let sourceTrackInfo {
+                    rawTranscript = try await self.retranscribePostModeSourceTracks(
+                        sourceTrackInfo,
+                        meeting: meeting,
+                        backend: backend
+                    )
+                } else if let recordingURL {
+                    let preparedAudio = try await AudioFileImportController.prepareAudioForImport(sourceURL: recordingURL)
+                    defer { try? FileManager.default.removeItem(at: preparedAudio.wavURL) }
+                    rawTranscript = try await self.retranscribePreparedMeetingAudio(
+                        preparedAudio,
+                        meeting: meeting,
+                        backend: backend
+                    )
+                } else {
+                    throw MeetingRetranscriptionError.recordingUnavailable
+                }
                 guard !rawTranscript.isEmpty else {
                     throw MeetingRetranscriptionError.emptyTranscript
                 }
@@ -3958,6 +4083,179 @@ final class MuesliController: NSObject {
             meetingID: meeting.id,
             meetingStart: meetingStart
         )
+    }
+
+    private func postMeetingSourceTrackInfo(for meeting: MeetingRecord) -> PostMeetingSourceTrackInfo? {
+        func existingURL(_ path: String?) -> URL? {
+            guard let path,
+                  !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            let url = URL(fileURLWithPath: path)
+            return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        }
+
+        let micURL = existingURL(meeting.micAudioPath)
+        let systemURL = existingURL(meeting.systemAudioPath)
+        guard micURL != nil || systemURL != nil else { return nil }
+
+        let sidecar = loadPostMeetingSourceSidecar(meeting: meeting)
+        return PostMeetingSourceTrackInfo(
+            micURL: micURL,
+            systemURL: systemURL,
+            micStartOffset: sidecar?.micStartOffset ?? 0,
+            systemStartOffset: sidecar?.systemStartOffset ?? 0
+        )
+    }
+
+    private func retranscribePostModeSourceTracks(
+        _ sourceTrackInfo: PostMeetingSourceTrackInfo,
+        meeting: MeetingRecord,
+        backend: BackendOption
+    ) async throws -> String {
+        let meetingStart = Self.meetingStartDate(for: meeting)
+        let micTrack = try await transcribeMeetingSourceTrack(
+            url: sourceTrackInfo.micURL,
+            trackRole: .mic,
+            backend: backend
+        )
+        let systemTrack = try await transcribeMeetingSourceTrack(
+            url: sourceTrackInfo.systemURL,
+            trackRole: .system,
+            backend: backend
+        )
+        let micSegments = MeetingRetranscriptionPipeline.applyTrackOffset(
+            micTrack.segments,
+            offset: sourceTrackInfo.micStartOffset
+        )
+        let systemSegments = MeetingRetranscriptionPipeline.applyTrackOffset(
+            systemTrack.segments,
+            offset: sourceTrackInfo.systemStartOffset
+        )
+        let diarizationSegments = MeetingRetranscriptionPipeline.applyDiarizationOffset(
+            await retranscribeDiarizationSegments(samples: systemTrack.samples, meetingID: meeting.id),
+            offset: sourceTrackInfo.systemStartOffset
+        )
+        let observations = loadMeetSpeakerObservations(meetingID: meeting.id)
+        let speakerNameMap = MeetingSession.speakerNameMap(
+            diarizationSegments: diarizationSegments,
+            observations: observations,
+            meetingStart: meetingStart
+        )
+        let formatted = TranscriptFormatter.merge(
+            micSegments: micSegments,
+            systemSegments: systemSegments,
+            diarizationSegments: diarizationSegments,
+            speakerNameMap: speakerNameMap,
+            meetingStart: meetingStart
+        )
+        let trimmed = formatted.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return trimmed
+        }
+        return (micSegments + systemSegments)
+            .sorted { lhs, rhs in
+                if lhs.start == rhs.start { return lhs.text < rhs.text }
+                return lhs.start < rhs.start
+            }
+            .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    private func transcribeMeetingSourceTrack(
+        url: URL?,
+        trackRole: MeetingRetranscriptionPipeline.TrackRole,
+        backend: BackendOption
+    ) async throws -> MeetingSourceTrackTranscription {
+        guard let url else {
+            return MeetingSourceTrackTranscription(segments: [], samples: [])
+        }
+        let wavData = try WavReader.readFloatMonoWAV(from: url)
+        let duration = Double(wavData.samples.count) / Double(max(wavData.sampleRate, 1))
+        guard !wavData.samples.isEmpty else {
+            return MeetingSourceTrackTranscription(segments: [], samples: [])
+        }
+        guard let vadManager = await transcriptionCoordinator.getVadManager() else {
+            DiagnosticsLog.write("[muesli-native] source-track retranscribe VAD unavailable; transcribing full \(trackRole) track meeting_id=\(meetingIDForLog(url: url))")
+            let transcription = try await transcriptionCoordinator.transcribeMeeting(
+                at: url,
+                samples: wavData.samples,
+                backend: backend,
+                cohereLanguage: config.resolvedCohereLanguageMeetings
+            )
+            return MeetingSourceTrackTranscription(
+                segments: normalizeRetranscribedTrack(
+                    transcription,
+                    trackRole: trackRole,
+                    duration: duration
+                ),
+                samples: wavData.samples
+            )
+        }
+
+        let speechSegments = try await vadManager.segmentSpeech(
+            wavData.samples,
+            config: MeetingRetranscriptionPipeline.vadSegmentationConfig
+        )
+        guard !speechSegments.isEmpty else {
+            return MeetingSourceTrackTranscription(segments: [], samples: wavData.samples)
+        }
+
+        let transcription: SpeechTranscriptionResult
+        if backend.backend == SherpaGigaAMRNNTModelStore.backendIdentifier {
+            transcription = try await MeetingRetranscriptionPipeline.transcribeSegmentedAudio(
+                samples: wavData.samples,
+                vadSegments: speechSegments,
+                trackRole: trackRole
+            ) { [transcriptionCoordinator] segmentAudio in
+                try await transcriptionCoordinator.transcribeMeetingBatchWithSherpaGigaAMRNNT(
+                    samplesBatch: segmentAudio.map(\.samples)
+                )
+            }
+        } else {
+            transcription = try await MeetingRetranscriptionPipeline.transcribeSegmentedAudio(
+                samples: wavData.samples,
+                vadSegments: speechSegments,
+                trackRole: trackRole
+            ) { [transcriptionCoordinator, config] _, samples in
+                let segmentURL = try WavWriter.writeTemporaryWAV(
+                    samples: samples,
+                    directoryName: AppTemporaryDirectories.meetingRetranscription
+                )
+                defer { try? FileManager.default.removeItem(at: segmentURL) }
+                return try await transcriptionCoordinator.transcribeMeeting(
+                    at: segmentURL,
+                    samples: samples,
+                    backend: backend,
+                    cohereLanguage: config.resolvedCohereLanguageMeetings
+                )
+            }
+        }
+        return MeetingSourceTrackTranscription(segments: transcription.segments, samples: wavData.samples)
+    }
+
+    private func normalizeRetranscribedTrack(
+        _ transcription: SpeechTranscriptionResult,
+        trackRole: MeetingRetranscriptionPipeline.TrackRole,
+        duration: TimeInterval
+    ) -> [SpeechSegment] {
+        switch trackRole {
+        case .mic:
+            return MicTurnNormalizer.normalize(
+                result: transcription,
+                startTime: 0,
+                endTime: max(duration, 0.1)
+            )
+        case .system:
+            return SystemTurnNormalizer.normalize(
+                result: transcription,
+                startTime: 0,
+                endTime: max(duration, 0.1)
+            )
+        }
+    }
+
+    private func meetingIDForLog(url: URL) -> String {
+        url.deletingPathExtension().lastPathComponent
     }
 
     private func formatRetranscribedMeeting(
@@ -5095,6 +5393,10 @@ final class MuesliController: NSObject {
                         return self.liveMeetingTitle(id: meetingID)
                     }
                 }
+                meetingSession.onPostMeetingRecordingReady = { [weak self] request in
+                    guard let self else { return nil }
+                    return try await self.persistPostMeetingRecording(request, meetingID: meetingID)
+                }
                 meetingSession.onChunkTranscribed = { [weak self, weak meetingSession] segments, speaker in
                     Task { @MainActor [weak self, weak meetingSession] in
                         guard let self else { return }
@@ -5703,6 +6005,11 @@ final class MuesliController: NSObject {
         }
         guard activeMeetingAudioWarning != nextWarning else { return }
         activeMeetingAudioWarning = nextWarning
+        if let nextWarning {
+            DiagnosticsLog.write(
+                "[meeting-audio] warning meeting_id=\(meetingID) state=\(health.state.rawValue) message=\(nextWarning.message)"
+            )
+        }
         syncAppState()
     }
 
@@ -5897,6 +6204,8 @@ final class MuesliController: NSObject {
         let meetingID: Int64
         let savedRecordingPath = preparedRecordingSave.path
         let recordingSaveError = preparedRecordingSave.error
+        let micAudioPath = result.sourceMicRecordingURL?.path
+        let systemAudioPath = result.sourceSystemRecordingURL?.path
 
         do {
             if let existingMeetingID {
@@ -5910,8 +6219,8 @@ final class MuesliController: NSObject {
                     rawTranscript: result.rawTranscript,
                     rawOriginalTranscript: result.rawOriginalTranscript,
                     formattedNotes: result.formattedNotes,
-                    micAudioPath: nil,
-                    systemAudioPath: nil,
+                    micAudioPath: micAudioPath,
+                    systemAudioPath: systemAudioPath,
                     savedRecordingPath: savedRecordingPath,
                     selectedTemplateID: result.templateSnapshot.id,
                     selectedTemplateName: result.templateSnapshot.name,
@@ -5930,8 +6239,8 @@ final class MuesliController: NSObject {
                     rawTranscript: result.rawTranscript,
                     rawOriginalTranscript: result.rawOriginalTranscript,
                     formattedNotes: result.formattedNotes,
-                    micAudioPath: nil,
-                    systemAudioPath: nil,
+                    micAudioPath: micAudioPath,
+                    systemAudioPath: systemAudioPath,
                     savedRecordingPath: savedRecordingPath,
                     selectedTemplateID: result.templateSnapshot.id,
                     selectedTemplateName: result.templateSnapshot.name,
@@ -6102,6 +6411,146 @@ final class MuesliController: NSObject {
     ) async -> PreparedMeetingRecordingSave {
         let plan = meetingRecordingSavePlan(for: result, saveDecision: saveDecision)
         return await Self.prepareMeetingRecordingSave(plan)
+    }
+
+    private func persistPostMeetingRecording(
+        _ request: PostMeetingRecordingFinalizeRequest,
+        meetingID: Int64
+    ) async throws -> PersistedPostMeetingRecording {
+        let destinationDirectory = MeetingRecordingStorage.directory(
+            config: config,
+            supportDirectory: configStore.supportDirectory()
+        )
+        func existingFallbackURL(_ url: URL) -> URL? {
+            FileManager.default.fileExists(atPath: url.path) ? url : nil
+        }
+        func persistSourceTrack(_ sourceURL: URL?, trackName: String) -> URL? {
+            guard let sourceURL else { return nil }
+            do {
+                return try MeetingRecordingStorage.persistTemporaryTrackRecording(
+                    from: sourceURL,
+                    meetingTitle: request.meetingTitle,
+                    startedAt: request.startedAt,
+                    trackName: trackName,
+                    destinationDirectory: destinationDirectory
+                )
+            } catch {
+                let fallbackURL = existingFallbackURL(sourceURL)
+                DiagnosticsLog.write(
+                    "[meeting-stop] failed_to_persist_post_\(trackName)_track meeting_id=\(meetingID) source=\(sourceURL.path) fallback=\(fallbackURL?.path ?? "nil") error=\(error.localizedDescription)"
+                )
+                return fallbackURL
+            }
+        }
+
+        let micURL = persistSourceTrack(request.sourceTracks.micURL, trackName: "mic")
+        let systemURL = persistSourceTrack(request.sourceTracks.systemURL, trackName: "system")
+
+        let mixedURL: URL?
+        if let mixedTempURL = request.mixedTempURL {
+            do {
+                mixedURL = try MeetingRecordingStorage.persistTemporaryRecording(
+                    from: mixedTempURL,
+                    meetingTitle: request.meetingTitle,
+                    startedAt: request.startedAt,
+                    destinationDirectory: destinationDirectory,
+                    fileFormat: .m4a
+                )
+            } catch {
+                DiagnosticsLog.write(
+                    "[meeting-stop] failed_to_persist_post_mixed_recording meeting_id=\(meetingID) source=\(mixedTempURL.path) error=\(error.localizedDescription)"
+                )
+                mixedURL = nil
+            }
+        } else {
+            mixedURL = nil
+        }
+
+        do {
+            try dictationStore.updateMeetingAudioPaths(
+                id: meetingID,
+                micAudioPath: micURL?.path,
+                systemAudioPath: systemURL?.path,
+                savedRecordingPath: mixedURL?.path
+            )
+            scheduleICloudSyncAfterLocalChange()
+            DiagnosticsLog.write(
+                "[meeting-stop] linked_post_recording meeting_id=\(meetingID) mic=\(micURL?.path ?? "nil") system=\(systemURL?.path ?? "nil") mixed=\(mixedURL?.path ?? "nil")"
+            )
+        } catch {
+            DiagnosticsLog.write(
+                "[meeting-stop] failed_to_link_post_recording meeting_id=\(meetingID) error=\(error.localizedDescription)"
+            )
+        }
+
+        writePostMeetingSourceSidecar(
+            meetingID: meetingID,
+            request: request,
+            micURL: micURL,
+            systemURL: systemURL,
+            mixedURL: mixedURL
+        )
+
+        return PersistedPostMeetingRecording(
+            micURL: micURL,
+            systemURL: systemURL,
+            mixedURL: mixedURL
+        )
+    }
+
+    private func writePostMeetingSourceSidecar(
+        meetingID: Int64,
+        request: PostMeetingRecordingFinalizeRequest,
+        micURL: URL?,
+        systemURL: URL?,
+        mixedURL: URL?
+    ) {
+        guard let anchorURL = mixedURL ?? micURL ?? systemURL else { return }
+        let sidecar = PostMeetingSourceTrackSidecar(
+            meetingID: meetingID,
+            micAudioPath: micURL?.path,
+            systemAudioPath: systemURL?.path,
+            savedRecordingPath: mixedURL?.path,
+            micStartOffset: request.sourceTracks.micStartOffset,
+            systemStartOffset: request.sourceTracks.systemStartOffset
+        )
+        do {
+            let data = try JSONEncoder().encode(sidecar)
+            try data.write(to: postMeetingSourceSidecarURL(anchorURL: anchorURL), options: [.atomic])
+        } catch {
+            DiagnosticsLog.write(
+                "[meeting-stop] failed_to_write_post_source_sidecar meeting_id=\(meetingID) error=\(error.localizedDescription)"
+            )
+        }
+    }
+
+    private func loadPostMeetingSourceSidecar(meeting: MeetingRecord) -> PostMeetingSourceTrackSidecar? {
+        let candidatePaths = [
+            meeting.savedRecordingPath,
+            meeting.micAudioPath,
+            meeting.systemAudioPath,
+        ].compactMap { path -> URL? in
+            guard let path,
+                  !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return postMeetingSourceSidecarURL(anchorURL: URL(fileURLWithPath: path))
+        }
+        for url in candidatePaths where FileManager.default.fileExists(atPath: url.path) {
+            do {
+                return try JSONDecoder().decode(
+                    PostMeetingSourceTrackSidecar.self,
+                    from: Data(contentsOf: url)
+                )
+            } catch {
+                DiagnosticsLog.write(
+                    "[muesli-native] failed_to_read_post_source_sidecar meeting_id=\(meeting.id) path=\(url.path) error=\(error.localizedDescription)"
+                )
+            }
+        }
+        return nil
+    }
+
+    private func postMeetingSourceSidecarURL(anchorURL: URL) -> URL {
+        anchorURL.appendingPathExtension("sources.json")
     }
 
     private nonisolated static func prepareMeetingRecordingSave(

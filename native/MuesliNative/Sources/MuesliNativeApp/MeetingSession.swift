@@ -205,6 +205,8 @@ struct MeetingSessionResult {
     let retainedRecordingError: Error?
     let retainedRecordingSavedURL: URL?
     let systemRecordingURL: URL?
+    let sourceMicRecordingURL: URL?
+    let sourceSystemRecordingURL: URL?
     let templateSnapshot: MeetingTemplateSnapshot
     let liveCollectorDrainTimeoutDroppedChunkCount: Int
 
@@ -222,6 +224,8 @@ struct MeetingSessionResult {
         retainedRecordingError: Error?,
         retainedRecordingSavedURL: URL? = nil,
         systemRecordingURL: URL?,
+        sourceMicRecordingURL: URL? = nil,
+        sourceSystemRecordingURL: URL? = nil,
         templateSnapshot: MeetingTemplateSnapshot,
         liveCollectorDrainTimeoutDroppedChunkCount: Int = 0
     ) {
@@ -238,6 +242,8 @@ struct MeetingSessionResult {
         self.retainedRecordingError = retainedRecordingError
         self.retainedRecordingSavedURL = retainedRecordingSavedURL
         self.systemRecordingURL = systemRecordingURL
+        self.sourceMicRecordingURL = sourceMicRecordingURL
+        self.sourceSystemRecordingURL = sourceSystemRecordingURL
         self.templateSnapshot = templateSnapshot
         self.liveCollectorDrainTimeoutDroppedChunkCount = liveCollectorDrainTimeoutDroppedChunkCount
     }
@@ -247,6 +253,19 @@ struct RetainedMeetingRecordingFinalizeRequest: Sendable {
     let tempURL: URL
     let meetingTitle: String
     let startedAt: Date
+}
+
+struct PostMeetingRecordingFinalizeRequest: Sendable {
+    let sourceTracks: MeetingSourceTrackRecording
+    let mixedTempURL: URL?
+    let meetingTitle: String
+    let startedAt: Date
+}
+
+struct PersistedPostMeetingRecording: Sendable {
+    let micURL: URL?
+    let systemURL: URL?
+    let mixedURL: URL?
 }
 
 enum MeetingProcessingStage {
@@ -348,6 +367,10 @@ final class MeetingSession {
     private var retainedRecordingWriterFactory: (Int64?) throws -> MeetingRecordingWriter = { meetingID in
         try MeetingRecordingWriter(meetingID: meetingID)
     }
+    private var postModeTrackWriter: MeetingDualTrackRecordingWriter?
+    private var postModeTrackWriterFactory: (Int64?, Date) throws -> MeetingDualTrackRecordingWriter = { meetingID, startedAt in
+        try MeetingDualTrackRecordingWriter(meetingID: meetingID, startedAt: startedAt)
+    }
     /// VAD controller for speech-boundary chunk rotation
     private var vadController: StreamingVadController?
     private var systemVadController: StreamingVadController?
@@ -368,6 +391,7 @@ final class MeetingSession {
     var manualNotesProvider: (() async -> String?)?
     var liveTitleProvider: (() async -> String?)?
     var onRetainedRecordingReady: ((RetainedMeetingRecordingFinalizeRequest) async throws -> URL?)?
+    var onPostMeetingRecordingReady: ((PostMeetingRecordingFinalizeRequest) async throws -> PersistedPostMeetingRecording?)?
     var onChunkTranscribed: (([SpeechSegment], String) -> Void)?
     private let screenContextCollector = MeetingScreenContextCollector()
     private var diagnostics: MeetingSessionDiagnostics?
@@ -569,6 +593,11 @@ final class MeetingSession {
         diagnostics = MeetingSessionDiagnostics(title: title, startedAt: now)
         stopIntakeRequested.store(false, ordering: .releasing)
 
+        if config.resolvedMeetingProcessingMode == .post {
+            try await startPostProcessingMode(startedAt: now)
+            return
+        }
+
         // AEC must be loaded before audio pipeline starts (streaming mode)
         await neuralAec.preload()
 
@@ -625,14 +654,57 @@ final class MeetingSession {
         }
     }
 
+    private func startPostProcessingMode(startedAt now: Date) async throws {
+        chunkRotationQueue.sync {
+            startTime = now
+            isRecording = true
+            setPausedStateOnQueue(false)
+        }
+
+        do {
+            postModeTrackWriter = try postModeTrackWriterFactory(liveMeetingID, now)
+            meetingMicRecorder.onRawPCMSamples = { [weak self] samples in
+                self?.enqueuePostModeMicSamples(samples)
+            }
+            systemAudioRecorder.onPCMSamples = { [weak self] samples in
+                self?.enqueuePostModeSystemSamples(samples)
+            }
+            try meetingMicRecorder.prepare()
+            try await systemAudioRecorder.start()
+            try meetingMicRecorder.start()
+        } catch {
+            stopIntakeRequested.store(true, ordering: .releasing)
+            meetingMicRecorder.onRawPCMSamples = nil
+            systemAudioRecorder.onPCMSamples = nil
+            postModeTrackWriter?.cancel()
+            postModeTrackWriter = nil
+            chunkRotationQueue.sync {
+                isRecording = false
+                setPausedStateOnQueue(false)
+                startTime = nil
+            }
+            meetingMicRecorder.cancel()
+            if let url = systemAudioRecorder.stop() {
+                try? FileManager.default.removeItem(at: url)
+            }
+            throw error
+        }
+        fputs("[meeting] started in post-processing mode; live ASR disabled\n", stderr)
+        if config.enableScreenContext && CGPreflightScreenCaptureAccess() {
+            await screenContextCollector.startPeriodicCapture(useOCR: config.useCoreAudioTap)
+        }
+    }
+
     func pause() {
         let shouldPause = chunkRotationQueue.sync { () -> Bool in
             guard isRecording, !isPaused else { return false }
-            appendFlushedStreamingMicOnQueue()
-            rotateChunkOnQueue()
-            rotateSystemChunkOnQueue()
-            retainedRecordingWriter?.markPauseBoundary()
-            neuralAec.resetForStreaming()
+            if config.resolvedMeetingProcessingMode == .live {
+                appendFlushedStreamingMicOnQueue()
+                rotateChunkOnQueue()
+                rotateSystemChunkOnQueue()
+                retainedRecordingWriter?.markPauseBoundary()
+                neuralAec.resetForStreaming()
+            }
             setPausedStateOnQueue(true)
             return true
         }
@@ -680,6 +752,8 @@ final class MeetingSession {
         retainedRecordingWriter?.cancel()
         retainedRecordingWriter = nil
         retainedRecordingWriterError = nil
+        postModeTrackWriter?.cancel()
+        postModeTrackWriter = nil
         rawRecorder?.cancel()
         systemRecorder?.cancel()
         meetingMicRecorder.onRawPCMSamples = nil
@@ -696,6 +770,9 @@ final class MeetingSession {
     func stop() async throws -> MeetingSessionResult {
         onProgress?(.transcribingAudio)
         let endTime = Date()
+        if config.resolvedMeetingProcessingMode == .post {
+            return try await stopPostProcessingMode(endTime: endTime)
+        }
         var micSegments: [SpeechSegment] = []
         var systemSegments: [SpeechSegment] = []
         var didWriteStopCounters = false
@@ -1081,6 +1158,399 @@ final class MeetingSession {
             liveCollectorDrainTimeoutDroppedChunkCount: liveChunkingConfiguration.deduplicatesText
                 ? drainTimeoutDroppedChunkCount
                 : 0
+        )
+    }
+
+    private struct PostModeTrackTranscription {
+        let segments: [SpeechSegment]
+        let samples: [Float]
+        let duration: TimeInterval
+    }
+
+    private func stopPostProcessingMode(endTime: Date) async throws -> MeetingSessionResult {
+        noteStopPhaseForTesting("stop_requested")
+        meetingMicRecorder.onRawPCMSamples = nil
+        systemAudioRecorder.onPCMSamples = nil
+        noteStopPhaseForTesting("mic_recorder_stop")
+        let rawStreamingMicURL = meetingMicRecorder.stop()
+        noteStopPhaseForTesting("system_recorder_stop")
+        let systemAudioURL = systemAudioRecorder.stop()
+        let meetingStart = chunkRotationQueue.sync { () -> Date in
+            noteStopPhaseForTesting("chunk_queue_finalize")
+            isRecording = false
+            setPausedStateOnQueue(false)
+            return self.startTime ?? Date()
+        }
+        stopIntakeRequested.store(true, ordering: .releasing)
+        let sourceTracks = postModeTrackWriter?.stop() ?? MeetingSourceTrackRecording(
+            micURL: nil,
+            systemURL: nil,
+            micStartOffset: 0,
+            systemStartOffset: 0
+        )
+        postModeTrackWriter = nil
+        defer {
+            if let rawStreamingMicURL {
+                try? FileManager.default.removeItem(at: rawStreamingMicURL)
+            }
+            if let systemAudioURL {
+                try? FileManager.default.removeItem(at: systemAudioURL)
+            }
+        }
+
+        let mixedTempURL = try MeetingDualTrackRecordingWriter.writeMixedTemporaryWAV(from: sourceTracks)
+        let persistedRecording = await finalizePostMeetingRecording(
+            sourceTracks: sourceTracks,
+            mixedTempURL: mixedTempURL,
+            meetingStart: meetingStart
+        )
+        let sourceMicURL = persistedRecording?.micURL ?? sourceTracks.micURL
+        let sourceSystemURL = persistedRecording?.systemURL ?? sourceTracks.systemURL
+        let retainedRecordingSavedURL = persistedRecording?.mixedURL
+        let retainedRecordingURL = retainedRecordingSavedURL == nil ? mixedTempURL : nil
+
+        let backend = currentBackend()
+        let micTrack = try await transcribePostModeTrack(
+            url: sourceMicURL,
+            trackRole: .mic,
+            backend: backend
+        )
+        let systemTrack = try await transcribePostModeTrack(
+            url: sourceSystemURL,
+            trackRole: .system,
+            backend: backend
+        )
+        var micSegments = MeetingRetranscriptionPipeline.applyTrackOffset(
+            micTrack.segments,
+            offset: sourceTracks.micStartOffset
+        )
+        var systemSegments = MeetingRetranscriptionPipeline.applyTrackOffset(
+            systemTrack.segments,
+            offset: sourceTracks.systemStartOffset
+        )
+        micSegments.sort { lhs, rhs in
+            if lhs.start == rhs.start { return lhs.text < rhs.text }
+            return lhs.start < rhs.start
+        }
+        systemSegments.sort { lhs, rhs in
+            if lhs.start == rhs.start { return lhs.text < rhs.text }
+            return lhs.start < rhs.start
+        }
+
+        let diarizationSegments = await postModeDiarizationSegments(
+            samples: systemTrack.samples,
+            offset: sourceTracks.systemStartOffset
+        )
+
+        fputs("[meeting] post-mode transcribed mic=\(micSegments.count) system=\(systemSegments.count)\n", stderr)
+
+        let reconciledTranscriptInputs = TranscriptReconciler.reconcile(
+            micTurns: micSegments,
+            systemSegments: systemSegments,
+            diarizationSegments: diarizationSegments
+        )
+        let protectedTranscriptInputs = reconciledTranscriptInputs
+        let speakerObservations = speakerObservationLock.withLock { $0 }
+        let observedParticipants = Self.observedParticipants(from: speakerObservations)
+        let allParticipantCandidates = Self.mergedParticipants(
+            participantCandidates,
+            observedParticipants
+        )
+        let speakerNameMap = Self.speakerNameMap(
+            diarizationSegments: protectedTranscriptInputs.diarizationSegments,
+            observations: speakerObservations,
+            meetingStart: meetingStart
+        )
+
+        let rawTranscript = TranscriptFormatter.merge(
+            micSegments: protectedTranscriptInputs.micSegments,
+            systemSegments: protectedTranscriptInputs.systemSegments,
+            diarizationSegments: protectedTranscriptInputs.diarizationSegments,
+            speakerNameMap: speakerNameMap,
+            meetingStart: meetingStart
+        )
+        let cleanupResult = await stopPhaseValue(
+            "transcript_cleanup",
+            timeout: MeetingStopPhaseTimeouts.transcriptCleanup,
+            fallback: MeetingTranscriptCleanupResult(transcript: rawTranscript, originalTranscript: nil)
+        ) {
+            await MeetingTranscriptCleanupPipeline.cleanIfNeeded(
+                transcript: rawTranscript,
+                config: self.config,
+                isChatGPTAuthenticated: ChatGPTAuthManager.shared.isAuthenticated,
+                cleaner: self.transcriptCleaner
+            )
+        }
+        let finalTranscript = cleanupResult.transcript
+
+        let generatedTitle: String
+        onProgress?(.generatingTitle)
+        let liveTitle = await stopPhaseValue(
+            "live_title_provider",
+            timeout: MeetingStopPhaseTimeouts.liveTitle,
+            fallback: Optional<String>.none
+        ) {
+            await self.userEditedLiveTitle()
+        }
+        if let liveTitle {
+            generatedTitle = liveTitle
+        } else if let calendarTitle = Self.calendarTitleCandidate(
+            originalTitle: title,
+            calendarEventID: calendarEventID
+        ) {
+            generatedTitle = calendarTitle
+        } else {
+            let autoTitle = await stopPhaseValue(
+                "title_generation",
+                timeout: MeetingStopPhaseTimeouts.titleGeneration,
+                fallback: Optional<String>.none
+            ) {
+                await MeetingSummaryClient.generateTitle(transcript: finalTranscript, config: self.config)
+            }
+            if let autoTitle, !autoTitle.isEmpty {
+                generatedTitle = autoTitle
+                fputs("[meeting] auto-generated title: \(generatedTitle)\n", stderr)
+            } else {
+                generatedTitle = title
+            }
+        }
+
+        let templateSnapshot = MeetingTemplates.resolveSnapshot(
+            id: config.defaultMeetingTemplateID,
+            customTemplates: config.customMeetingTemplates
+        )
+        let visualContext = await stopPhaseValue(
+            "screen_context_drain",
+            timeout: MeetingStopPhaseTimeouts.screenContextDrain,
+            fallback: ""
+        ) {
+            await self.screenContextCollector.stopAndDrain()
+        }
+        let summaryContext = Self.summaryContext(
+            participants: allParticipantCandidates,
+            visualContext: visualContext
+        )
+        Self.logger.info("visual context drained chars=\(visualContext.count) includedInPrompt=\(!summaryContext.isEmpty) useOCR=\(self.config.useCoreAudioTap)")
+        fputs("[meeting] visual context drained chars=\(visualContext.count) participants=\(allParticipantCandidates.count) observedParticipants=\(observedParticipants.count) includedInPrompt=\(!summaryContext.isEmpty) useOCR=\(config.useCoreAudioTap)\n", stderr)
+        onProgress?(.summarizingNotes)
+        let manualNotes = await stopPhaseValue(
+            "manual_notes_provider",
+            timeout: MeetingStopPhaseTimeouts.manualNotes,
+            fallback: Optional<String>.none
+        ) {
+            await self.manualNotesProvider?()
+        }
+        let formattedNotes: String
+        do {
+            formattedNotes = try await withStopPhaseTimeout(
+                "summary_generation",
+                timeout: MeetingStopPhaseTimeouts.summaryGeneration
+            ) {
+                try await MeetingSummaryClient.summarize(
+                    transcript: finalTranscript,
+                    meetingTitle: generatedTitle,
+                    config: self.config,
+                    template: templateSnapshot,
+                    existingNotes: nil,
+                    manualNotesToRetain: manualNotes,
+                    visualContext: summaryContext.isEmpty ? nil : summaryContext
+                )
+            }
+        } catch {
+            logStopPhaseFailure(
+                "summary_generation",
+                timeout: MeetingStopPhaseTimeouts.summaryGeneration,
+                error: error
+            )
+            fputs("[meeting] summary generation failed: \(error.localizedDescription)\n", stderr)
+            formattedNotes = MeetingSummaryClient.summaryFailureNotes(
+                transcript: finalTranscript,
+                meetingTitle: generatedTitle,
+                error: error,
+                manualNotes: manualNotes
+            )
+        }
+
+        diagnostics?.writeFinalReport(
+            title: generatedTitle,
+            startedAt: meetingStart,
+            endedAt: endTime,
+            rawTranscript: finalTranscript,
+            rawMicURL: rawStreamingMicURL,
+            systemAudioURL: systemAudioURL,
+            systemCapture: (systemAudioRecorder as? SystemAudioDiagnosticsProviding)?.diagnosticsSnapshot,
+            micRecorder: meetingMicRecorder.diagnosticsSnapshot(),
+            micHealth: micHealthTracker.snapshot(),
+            aec: neuralAec.diagnosticsSnapshot,
+            micChunks: micChunkHealthTracker.snapshot(),
+            systemChunks: systemChunkHealthTracker.snapshot(),
+            diarizationSegments: protectedTranscriptInputs.diarizationSegments,
+            protectedSystemSegmentCount: protectedTranscriptInputs.systemSegments.count
+        )
+
+        return MeetingSessionResult(
+            title: generatedTitle,
+            originalTitle: title,
+            calendarEventID: calendarEventID,
+            startTime: meetingStart,
+            endTime: endTime,
+            durationSeconds: max(endTime.timeIntervalSince(meetingStart), 0),
+            rawTranscript: finalTranscript,
+            rawOriginalTranscript: cleanupResult.originalTranscript,
+            formattedNotes: formattedNotes,
+            retainedRecordingURL: retainedRecordingURL,
+            retainedRecordingError: retainedRecordingWriterError,
+            retainedRecordingSavedURL: retainedRecordingSavedURL,
+            systemRecordingURL: systemAudioURL,
+            sourceMicRecordingURL: persistedRecording?.micURL,
+            sourceSystemRecordingURL: persistedRecording?.systemURL,
+            templateSnapshot: templateSnapshot,
+            liveCollectorDrainTimeoutDroppedChunkCount: 0
+        )
+    }
+
+    private func finalizePostMeetingRecording(
+        sourceTracks: MeetingSourceTrackRecording,
+        mixedTempURL: URL?,
+        meetingStart: Date
+    ) async -> PersistedPostMeetingRecording? {
+        noteStopPhaseForTesting("post_recording_finalize")
+        guard let onPostMeetingRecordingReady else { return nil }
+        do {
+            return try await onPostMeetingRecordingReady(
+                PostMeetingRecordingFinalizeRequest(
+                    sourceTracks: sourceTracks,
+                    mixedTempURL: mixedTempURL,
+                    meetingTitle: title,
+                    startedAt: meetingStart
+                )
+            )
+        } catch {
+            retainedRecordingWriterError = error
+            logStopPhaseFailure(
+                "post_recording_finalize",
+                timeout: 0,
+                error: error
+            )
+            return nil
+        }
+    }
+
+    private func transcribePostModeTrack(
+        url: URL?,
+        trackRole: MeetingRetranscriptionPipeline.TrackRole,
+        backend: BackendOption
+    ) async throws -> PostModeTrackTranscription {
+        guard let url else {
+            return PostModeTrackTranscription(segments: [], samples: [], duration: 0)
+        }
+        let wavData = try WavReader.readFloatMonoWAV(from: url)
+        let duration = Double(wavData.samples.count) / Double(max(wavData.sampleRate, 1))
+        guard !wavData.samples.isEmpty else {
+            return PostModeTrackTranscription(segments: [], samples: [], duration: 0)
+        }
+        guard let vadManager = await transcriptionCoordinator.getVadManager() else {
+            DiagnosticsLog.write("[meeting] post-mode VAD unavailable; transcribing full \(trackRole) track")
+            let transcription = try await transcriptionCoordinator.transcribeMeeting(
+                at: url,
+                samples: wavData.samples,
+                backend: backend,
+                cohereLanguage: config.resolvedCohereLanguageMeetings
+            )
+            let segments = normalizePostModeTrack(
+                transcription,
+                trackRole: trackRole,
+                duration: duration
+            )
+            return PostModeTrackTranscription(segments: segments, samples: wavData.samples, duration: duration)
+        }
+
+        let vadSegments = try await vadManager.segmentSpeech(
+            wavData.samples,
+            config: MeetingRetranscriptionPipeline.vadSegmentationConfig
+        )
+        guard !vadSegments.isEmpty else {
+            return PostModeTrackTranscription(segments: [], samples: wavData.samples, duration: duration)
+        }
+
+        let transcription: SpeechTranscriptionResult
+        if backend.backend == SherpaGigaAMRNNTModelStore.backendIdentifier {
+            transcription = try await MeetingRetranscriptionPipeline.transcribeSegmentedAudio(
+                samples: wavData.samples,
+                vadSegments: vadSegments,
+                trackRole: trackRole
+            ) { [transcriptionCoordinator] segmentAudio in
+                try await transcriptionCoordinator.transcribeMeetingBatchWithSherpaGigaAMRNNT(
+                    samplesBatch: segmentAudio.map(\.samples)
+                )
+            }
+        } else {
+            transcription = try await MeetingRetranscriptionPipeline.transcribeSegmentedAudio(
+                samples: wavData.samples,
+                vadSegments: vadSegments,
+                trackRole: trackRole
+            ) { [transcriptionCoordinator, config] _, samples in
+                let segmentURL = try WavWriter.writeTemporaryWAV(
+                    samples: samples,
+                    directoryName: AppTemporaryDirectories.meetingRetranscription
+                )
+                defer { try? FileManager.default.removeItem(at: segmentURL) }
+                return try await transcriptionCoordinator.transcribeMeeting(
+                    at: segmentURL,
+                    samples: samples,
+                    backend: backend,
+                    cohereLanguage: config.resolvedCohereLanguageMeetings
+                )
+            }
+        }
+        return PostModeTrackTranscription(
+            segments: transcription.segments,
+            samples: wavData.samples,
+            duration: duration
+        )
+    }
+
+    private func normalizePostModeTrack(
+        _ transcription: SpeechTranscriptionResult,
+        trackRole: MeetingRetranscriptionPipeline.TrackRole,
+        duration: TimeInterval
+    ) -> [SpeechSegment] {
+        switch trackRole {
+        case .mic:
+            return MicTurnNormalizer.normalize(
+                result: transcription,
+                startTime: 0,
+                endTime: max(duration, 0.1)
+            )
+        case .system:
+            return SystemTurnNormalizer.normalize(
+                result: transcription,
+                startTime: 0,
+                endTime: max(duration, 0.1)
+            )
+        }
+    }
+
+    private func postModeDiarizationSegments(
+        samples: [Float],
+        offset: TimeInterval
+    ) async -> [TimedSpeakerSegment]? {
+        guard !samples.isEmpty else { return nil }
+        let diarizationResult = await stopPhaseValue(
+            "system_diarization",
+            timeout: MeetingStopPhaseTimeouts.systemDiarization,
+            fallback: Optional<MeetingStopDiarizationResult>.none
+        ) {
+            guard let diarizerManager = await self.transcriptionCoordinator.getDiarizerManager(),
+                  diarizerManager.isAvailable else {
+                return nil
+            }
+            let result = try await self.transcriptionCoordinator.diarizeSystemAudio(samples: samples)
+            return MeetingStopDiarizationResult(samples: samples, segments: result?.segments)
+        }
+        return MeetingRetranscriptionPipeline.applyDiarizationOffset(
+            diarizationResult?.segments,
+            offset: offset
         )
     }
 
@@ -1490,6 +1960,36 @@ final class MeetingSession {
             if let systemVadController = self.systemVadController {
                 systemVadController.processAudio(floatSamples)
             }
+        }
+    }
+
+    private func enqueuePostModeMicSamples(_ rawSamples: [Int16]) {
+        guard !rawSamples.isEmpty else { return }
+
+        chunkRotationQueue.async { [weak self] in
+            guard let self,
+                  !self.stopIntakeRequested.load(ordering: .acquiring),
+                  self.isRecording,
+                  !self.isPaused else { return }
+
+            let healthSnapshot = self.micHealthTracker.noteRawMicSamples(rawSamples)
+            self.onMicHealthChanged?(healthSnapshot)
+            self.postModeTrackWriter?.appendMic(rawSamples)
+        }
+    }
+
+    private func enqueuePostModeSystemSamples(_ samples: [Int16]) {
+        guard !samples.isEmpty else { return }
+
+        chunkRotationQueue.async { [weak self] in
+            guard let self,
+                  !self.stopIntakeRequested.load(ordering: .acquiring),
+                  self.isRecording,
+                  !self.isPaused else { return }
+
+            let healthSnapshot = self.micHealthTracker.noteSystemSamples(samples)
+            self.onMicHealthChanged?(healthSnapshot)
+            self.postModeTrackWriter?.appendSystem(samples)
         }
     }
 

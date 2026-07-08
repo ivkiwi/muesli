@@ -128,6 +128,7 @@ struct MeetingStopOrderingTests {
         systemAudioRecorder: SystemAudioCapturing = StopOrderingSystemRecorder()
     ) -> MeetingSession {
         var config = AppConfig()
+        config.meetingProcessingMode = MeetingProcessingMode.live.rawValue
         config.meetingSummaryBackend = "openai"
         config.openAIAPIKey = ""
         config.useCoreAudioTap = false
