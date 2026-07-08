@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import CloudKit
 import CoreAudio
+import FluidAudio
 import Foundation
 import Sparkle
 import MuesliCore
@@ -2360,15 +2361,37 @@ final class MuesliController: NSObject {
             canBufferForPendingMeeting: canBufferMeetSpeakerObservationForPendingMeeting
         ) {
         case .recordToActiveMeeting:
+            if let activeMeetingID {
+                persistMeetSpeakerObservation(observation, meetingID: activeMeetingID)
+            }
             activeMeetingSession?.recordSpeakerObservation(observation)
             meetSpeakerBridgeStats.matchedToMeeting += 1
         case .bufferPendingMeeting:
+            if let meetingID = meetSpeakerObservationPersistenceMeetingID {
+                persistMeetSpeakerObservation(observation, meetingID: meetingID)
+            }
             bufferMeetSpeakerObservation(observation)
             meetSpeakerBridgeStats.bufferedNoActiveMeeting += 1
         case .dropNoActiveMeeting:
             meetSpeakerBridgeStats.droppedNoActiveMeeting += 1
         case .dropSourceMismatch:
             meetSpeakerBridgeStats.droppedSourceMismatch += 1
+        }
+    }
+
+    private var meetSpeakerObservationPersistenceMeetingID: Int64? {
+        activeMeetingID ?? meetingStartMeetingID
+    }
+
+    private func persistMeetSpeakerObservation(_ observation: MeetSpeakerObservation, meetingID: Int64) {
+        do {
+            try MeetSpeakerObservationLog.append(
+                observation,
+                meetingID: meetingID,
+                supportDirectory: configStore.supportDirectory()
+            )
+        } catch {
+            DiagnosticsLog.write("[meet-speaker] persist failed meeting_id=\(meetingID) error=\(error.localizedDescription)")
         }
     }
 
@@ -3800,16 +3823,13 @@ final class MuesliController: NSObject {
                     enablePostProcessor: false,
                     includeMeetingHelpers: true
                 )
-                let transcriptionWAVURL = try await MeetingRecordingStorage.temporaryWAVForTranscription(
-                    from: recordingURL
+                let preparedAudio = try await AudioFileImportController.prepareAudioForImport(sourceURL: recordingURL)
+                defer { try? FileManager.default.removeItem(at: preparedAudio.wavURL) }
+                let rawTranscript = try await self.retranscribePreparedMeetingAudio(
+                    preparedAudio,
+                    meeting: meeting,
+                    backend: backend
                 )
-                defer { try? FileManager.default.removeItem(at: transcriptionWAVURL) }
-                let transcription = try await self.transcriptionCoordinator.transcribeMeeting(
-                    at: transcriptionWAVURL,
-                    backend: backend,
-                    cohereLanguage: self.config.resolvedCohereLanguageMeetings
-                )
-                let rawTranscript = transcription.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !rawTranscript.isEmpty else {
                     throw MeetingRetranscriptionError.emptyTranscript
                 }
@@ -3870,6 +3890,138 @@ final class MuesliController: NSObject {
                 completion(.failure(error))
             }
         }
+    }
+
+    private func retranscribePreparedMeetingAudio(
+        _ preparedAudio: AudioFileImportController.PreparedAudio,
+        meeting: MeetingRecord,
+        backend: BackendOption
+    ) async throws -> String {
+        let meetingStart = Self.meetingStartDate(for: meeting)
+        guard let vadManager = await transcriptionCoordinator.getVadManager() else {
+            DiagnosticsLog.write("[muesli-native] retranscribe VAD unavailable; using full-file transcription meeting_id=\(meeting.id)")
+            let transcription = try await transcriptionCoordinator.transcribeMeeting(
+                at: preparedAudio.wavURL,
+                samples: preparedAudio.samples,
+                backend: backend,
+                cohereLanguage: config.resolvedCohereLanguageMeetings
+            )
+            return await formatRetranscribedMeeting(
+                transcription,
+                samples: preparedAudio.samples,
+                duration: preparedAudio.duration,
+                meetingID: meeting.id,
+                meetingStart: meetingStart
+            )
+        }
+
+        let speechSegments = try await vadManager.segmentSpeech(
+            preparedAudio.samples,
+            config: MeetingRetranscriptionPipeline.vadSegmentationConfig
+        )
+        DiagnosticsLog.write("[muesli-native] retranscribe VAD segments meeting_id=\(meeting.id) count=\(speechSegments.count)")
+        guard !speechSegments.isEmpty else { return "" }
+
+        let transcription = try await MeetingRetranscriptionPipeline.transcribeSegmentedAudio(
+            samples: preparedAudio.samples,
+            vadSegments: speechSegments
+        ) { [transcriptionCoordinator, config] _, samples in
+            let segmentURL = try WavWriter.writeTemporaryWAV(
+                samples: samples,
+                directoryName: AppTemporaryDirectories.meetingRetranscription
+            )
+            defer { try? FileManager.default.removeItem(at: segmentURL) }
+            return try await transcriptionCoordinator.transcribeMeetingChunk(
+                at: segmentURL,
+                backend: backend,
+                cohereLanguage: config.resolvedCohereLanguageMeetings
+            )
+        }
+
+        return await formatRetranscribedMeeting(
+            transcription,
+            samples: preparedAudio.samples,
+            duration: preparedAudio.duration,
+            meetingID: meeting.id,
+            meetingStart: meetingStart
+        )
+    }
+
+    private func formatRetranscribedMeeting(
+        _ transcription: SpeechTranscriptionResult,
+        samples: [Float],
+        duration: TimeInterval,
+        meetingID: Int64,
+        meetingStart: Date
+    ) async -> String {
+        let normalizedTranscription = normalizedRetranscription(transcription, duration: duration)
+        let diarizationSegments = await retranscribeDiarizationSegments(samples: samples, meetingID: meetingID)
+        let observations = loadMeetSpeakerObservations(meetingID: meetingID)
+        let speakerNameMap = MeetingSession.speakerNameMap(
+            diarizationSegments: diarizationSegments,
+            observations: observations,
+            meetingStart: meetingStart
+        )
+        let formatted = TranscriptFormatter.merge(
+            micSegments: [],
+            systemSegments: normalizedTranscription.segments,
+            diarizationSegments: diarizationSegments,
+            speakerNameMap: speakerNameMap,
+            meetingStart: meetingStart
+        )
+        let trimmed = formatted.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty
+            ? normalizedTranscription.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            : trimmed
+    }
+
+    private func normalizedRetranscription(
+        _ transcription: SpeechTranscriptionResult,
+        duration: TimeInterval
+    ) -> SpeechTranscriptionResult {
+        let trimmed = transcription.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let timedSegments = transcription.segments.filter {
+            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        if !timedSegments.isEmpty {
+            return SpeechTranscriptionResult(text: trimmed, segments: timedSegments)
+        }
+        let segments = SystemTurnNormalizer.normalize(
+            result: SpeechTranscriptionResult(text: trimmed, segments: []),
+            startTime: 0,
+            endTime: max(duration, 0.1)
+        )
+        return SpeechTranscriptionResult(text: trimmed, segments: segments)
+    }
+
+    private func retranscribeDiarizationSegments(
+        samples: [Float],
+        meetingID: Int64
+    ) async -> [TimedSpeakerSegment]? {
+        do {
+            return try await transcriptionCoordinator.diarizeSystemAudio(samples: samples)?.segments
+        } catch {
+            DiagnosticsLog.write("[muesli-native] retranscribe diarization failed meeting_id=\(meetingID) error=\(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    private func loadMeetSpeakerObservations(meetingID: Int64) -> [MeetSpeakerObservation] {
+        do {
+            let observations = try MeetSpeakerObservationLog.load(
+                meetingID: meetingID,
+                supportDirectory: configStore.supportDirectory()
+            )
+            DiagnosticsLog.write("[meet-speaker] retranscribe loaded persisted observations meeting_id=\(meetingID) count=\(observations.count)")
+            return observations
+        } catch {
+            DiagnosticsLog.write("[meet-speaker] retranscribe observation load failed meeting_id=\(meetingID) error=\(error.localizedDescription)")
+            return []
+        }
+    }
+
+    private static func meetingStartDate(for meeting: MeetingRecord) -> Date {
+        ISO8601DateFormatter().date(from: meeting.startTime) ?? Date(timeIntervalSince1970: 0)
     }
 
     static func retranscriptionFailureStatus(

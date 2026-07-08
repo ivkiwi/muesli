@@ -170,6 +170,48 @@ struct MeetingLiveOverlapPipelineTests {
         #expect(retained.hasSuffix("fresh words"))
     }
 
+    @Test("retranscribe gates work on VAD speech regions")
+    func retranscribeGatesWorkOnVADSpeechRegions() async throws {
+        let samples = (0..<(16_000 * 4)).map { Float($0 % 100) / 100.0 }
+        let vadSegments = [
+            VadSegment(startTime: 0.5, endTime: 1.0),
+            VadSegment(startTime: 2.0, endTime: 2.5),
+        ]
+        var calls: [MeetingRetranscriptionPipeline.AudioSegment] = []
+
+        let result = try await MeetingRetranscriptionPipeline.transcribeSegmentedAudio(
+            samples: samples,
+            vadSegments: vadSegments
+        ) { segment, audio in
+            calls.append(segment)
+            #expect(audio.count == segment.endSample - segment.startSample)
+            return SpeechTranscriptionResult(text: "chunk \(calls.count)", segments: [])
+        }
+
+        #expect(calls.map(\.startSample) == [8_000, 32_000])
+        #expect(calls.map(\.endSample) == [16_000, 40_000])
+        #expect(result.text == "chunk 1 chunk 2")
+        #expect(result.segments.map(\.text) == ["chunk 1", "chunk 2"])
+        #expect(result.segments.map(\.start) == [0.5, 2.0])
+        #expect(result.segments.map(\.end) == [1.0, 2.5])
+    }
+
+    @Test("retranscribe skips transcription when VAD finds no speech")
+    func retranscribeSkipsTranscriptionWhenVADFindsNoSpeech() async throws {
+        var transcribeWasCalled = false
+        let result = try await MeetingRetranscriptionPipeline.transcribeSegmentedAudio(
+            samples: Array(repeating: Float(0), count: 16_000),
+            vadSegments: []
+        ) { _, _ in
+            transcribeWasCalled = true
+            return SpeechTranscriptionResult(text: "unexpected", segments: [])
+        }
+
+        #expect(!transcribeWasCalled)
+        #expect(result.text.isEmpty)
+        #expect(result.segments.isEmpty)
+    }
+
     @Test("late repeated trigram does not drop new words")
     func lateRepeatedTrigramDoesNotDropNewWords() {
         let filler = (0..<16).map { "fresh\($0)" }.joined(separator: " ")

@@ -1,6 +1,7 @@
 import CoreAudio
 import FluidAudio
 import Foundation
+import MuesliCore
 import Testing
 @testable import MuesliNativeApp
 
@@ -165,6 +166,74 @@ struct MeetSpeakerBridgeTests {
         #expect(!context.contains("- Me <me@example.com>"))
         #expect(context.contains("Do not assign a Speaker N label"))
         #expect(context.contains("Slide title: Roadmap"))
+    }
+
+    @Test("persists speaker observations as per-meeting JSONL")
+    func persistsSpeakerObservationsAsPerMeetingJSONL() throws {
+        let supportDirectory = MuesliPaths.defaultSupportDirectoryURL()
+        let meetingID: Int64 = 28
+        let logURL = MeetSpeakerObservationLog.fileURL(
+            meetingID: meetingID,
+            supportDirectory: supportDirectory
+        )
+        try? FileManager.default.removeItem(at: logURL)
+
+        let observedAt = Date(timeIntervalSince1970: 1_710_000_000.123)
+        let observation = MeetSpeakerObservation(
+            meetingURL: "https://meet.google.com/abc-defg-hij",
+            speakerName: "Alice Owner",
+            participants: [
+                MeetingParticipant(
+                    name: "Alice Owner",
+                    email: "alice@example.com",
+                    isOrganizer: true,
+                    isSelf: false
+                ),
+                MeetingParticipant(
+                    name: "Me",
+                    email: "me@example.com",
+                    isOrganizer: false,
+                    isSelf: true
+                ),
+            ],
+            observedAt: observedAt,
+            source: "google-meet-extension"
+        )
+
+        try MeetSpeakerObservationLog.append(
+            observation,
+            meetingID: meetingID,
+            supportDirectory: supportDirectory
+        )
+
+        let loaded = try MeetSpeakerObservationLog.load(
+            meetingID: meetingID,
+            supportDirectory: supportDirectory
+        )
+        let stored = try #require(loaded.first)
+        let logLines = try String(contentsOf: logURL, encoding: .utf8)
+            .split(separator: "\n", omittingEmptySubsequences: true)
+
+        #expect(loaded.count == 1)
+        #expect(stored.meetingURL == observation.meetingURL)
+        #expect(stored.speakerName == "Alice Owner")
+        #expect(stored.participants.map { $0.summaryLabel } == [
+            "Alice Owner <alice@example.com>",
+            "Me <me@example.com>",
+        ])
+        #expect(abs(stored.observedAt.timeIntervalSince1970 - observedAt.timeIntervalSince1970) < 0.001)
+        #expect(stored.source == "google-meet-extension")
+        #expect(logLines.count == 1)
+    }
+
+    @Test("missing speaker observation log loads empty")
+    func missingSpeakerObservationLogLoadsEmpty() throws {
+        let loaded = try MeetSpeakerObservationLog.load(
+            meetingID: 404,
+            supportDirectory: MuesliPaths.defaultSupportDirectoryURL()
+        )
+
+        #expect(loaded.isEmpty)
     }
 
 #if DEBUG

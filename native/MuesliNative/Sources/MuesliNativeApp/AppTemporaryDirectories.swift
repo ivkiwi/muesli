@@ -12,6 +12,7 @@ enum AppTemporaryDirectories {
     static let meetingMicChunks = "muesli-meeting-mic-chunks"
     static let meetingSystemChunks = "muesli-meeting-system-chunks"
     static let meetingMicRepair = "muesli-meeting-mic-repair"
+    static let meetingRetranscription = "muesli-meeting-retranscription"
     static let nativeDictation = "muesli-native-dictation"
     static let nativeDictationStreaming = "muesli-native-dictation-streaming"
     static let legacyImportPrefix = "legacy-muesli-import-"
@@ -30,6 +31,7 @@ enum AppTemporaryDirectories {
         meetingMicChunks,
         meetingSystemChunks,
         meetingMicRepair,
+        meetingRetranscription,
         nativeDictation,
         nativeDictationStreaming,
     ]

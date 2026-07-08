@@ -19,6 +19,7 @@ struct AppTemporaryDirectoriesTests {
             "muesli-meeting-mic-chunks",
             "muesli-meeting-system-chunks",
             "muesli-meeting-mic-repair",
+            "muesli-meeting-retranscription",
             "muesli-native-dictation",
             "muesli-native-dictation-streaming",
         ]
