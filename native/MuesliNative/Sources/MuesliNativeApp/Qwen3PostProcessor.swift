@@ -104,9 +104,45 @@ enum Qwen3PostProcessorOutputCleaner {
     }
 
     static func normalizePunctuationSpacing(_ text: String) -> String {
-        text
+        let compact = text
             .replacingOccurrences(of: #"[ \t]+([,.;:!?])"#, with: "$1", options: .regularExpression)
-            .replacingOccurrences(of: #"([,.;:!?])(?=\p{L})"#, with: "$1 ", options: .regularExpression)
+        var result = ""
+        var index = compact.startIndex
+        while index < compact.endIndex {
+            let character = compact[index]
+            result.append(character)
+            let next = compact.index(after: index)
+            if isSpacingPunctuation(character),
+               next < compact.endIndex,
+               compact[next].isLetter,
+               !keepsPunctuationInsideToken(compact, punctuationIndex: index) {
+                result.append(" ")
+            }
+            index = next
+        }
+        return result
+    }
+
+    private static func isSpacingPunctuation(_ character: Character) -> Bool {
+        [",", ".", ";", ":", "!", "?"].contains(character)
+    }
+
+    private static func keepsPunctuationInsideToken(_ text: String, punctuationIndex: String.Index) -> Bool {
+        guard punctuationIndex > text.startIndex else { return false }
+        let previous = text.index(before: punctuationIndex)
+        guard text[previous].isLetter else { return false }
+
+        let tokenStart = text[..<punctuationIndex].lastIndex(where: \.isWhitespace).map {
+            text.index(after: $0)
+        } ?? text.startIndex
+        let tokenEnd = text[punctuationIndex...].firstIndex(where: \.isWhitespace) ?? text.endIndex
+        let token = text[tokenStart..<tokenEnd]
+        if token.contains("@") || token.contains("://") {
+            return true
+        }
+
+        let next = text.index(after: punctuationIndex)
+        return text[punctuationIndex] == "." && next < text.endIndex && text[next].isLetter
     }
 
     static func appendSentenceFinalPeriodIfNeeded(_ text: String) -> String {

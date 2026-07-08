@@ -206,6 +206,7 @@ enum SherpaGigaAMRNNTModelStore {
 actor SherpaGigaAMRNNTTranscriber {
     private var loadedDirectory: URL?
     private var activeDownloadTask: Task<URL, Error>?
+    private var inferenceInFlight = false
 
     func loadModels(progress: ((Double, String?) -> Void)? = nil) async throws {
         if SherpaGigaAMRNNTModelStore.isAvailableLocally() {
@@ -255,6 +256,8 @@ actor SherpaGigaAMRNNTTranscriber {
             return SherpaGigaAMRNNTTranscriptionResult(text: "", duration: 0, processingTime: 0)
         }
         try ensureModelsAvailable()
+        try await acquireInferenceSlot()
+        defer { releaseInferenceSlot() }
 
         let start = CFAbsoluteTimeGetCurrent()
         let fm = FileManager.default
@@ -269,7 +272,7 @@ actor SherpaGigaAMRNNTTranscriber {
             arguments: recognitionArguments(chunkURLs: chunkURLs),
             captureDirectory: workDirectory
         )
-        let text = try SherpaOfflineOutputParser.text(from: output.stdout)
+        let text = try SherpaOfflineOutputParser.text(from: output.stdout, stderr: output.stderr)
         let duration = TimeInterval(samples.count) / TimeInterval(sampleRate)
         return SherpaGigaAMRNNTTranscriptionResult(
             text: text,
@@ -290,6 +293,17 @@ actor SherpaGigaAMRNNTTranscriber {
         loadedDirectory = SherpaGigaAMRNNTModelStore.cacheDirectory()
     }
 
+    private func acquireInferenceSlot() async throws {
+        while inferenceInFlight {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        inferenceInFlight = true
+    }
+
+    private func releaseInferenceSlot() {
+        inferenceInFlight = false
+    }
+
     private func writeChunks(samples: [Float], to directory: URL) throws -> [URL] {
         try SherpaGigaAMRNNTChunking.ranges(sampleCount: samples.count).enumerated().map { index, range in
             let chunkURL = directory.appendingPathComponent(String(format: "chunk-%05d.wav", index))
@@ -305,6 +319,7 @@ actor SherpaGigaAMRNNTTranscriber {
             "--decoder=\(SherpaGigaAMRNNTModelStore.decoderURL().path)",
             "--joiner=\(SherpaGigaAMRNNTModelStore.joinerURL().path)",
             "--num-threads=4",
+            "--model-type=transducer",
             "--decoding-method=greedy_search",
             "--debug=false",
             "--print-args=false",
@@ -317,15 +332,80 @@ enum SherpaOfflineOutputParser {
         let text: String
     }
 
-    static func text(from stdout: String) throws -> String {
-        let lines = stdout.split(whereSeparator: \.isNewline)
-        let parts = try lines.compactMap { line -> String? in
+    static func text(from stdout: String, stderr: String = "") throws -> String {
+        let stdoutResult = try parseJSONLines(stdout)
+        if stdoutResult.parsedAnyLine {
+            return GigaAMV3FileChunking.mergeTranscripts(stdoutResult.parts)
+        }
+
+        if let fallback = fallbackTranscript(from: stdout) ?? fallbackTranscript(from: stderr) {
+            return fallback
+        }
+
+        if let error = stdoutResult.firstError {
+            throw error
+        }
+
+        return ""
+    }
+
+    private static func parseJSONLines(_ output: String) throws -> (parts: [String], parsedAnyLine: Bool, firstError: Error?) {
+        let lines = output.split(whereSeparator: \.isNewline)
+        var parsedAnyLine = false
+        var firstError: Error?
+        let parts = lines.compactMap { line -> String? in
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return nil }
-            let decoded = try JSONDecoder().decode(ResultLine.self, from: Data(trimmed.utf8))
-            return decoded.text.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+            do {
+                let decoded = try JSONDecoder().decode(ResultLine.self, from: Data(trimmed.utf8))
+                parsedAnyLine = true
+                return decoded.text.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+            } catch {
+                firstError = firstError ?? error
+                return nil
+            }
         }
-        return GigaAMV3FileChunking.mergeTranscripts(parts)
+        return (parts, parsedAnyLine, firstError)
+    }
+
+    private static func fallbackTranscript(from output: String) -> String? {
+        let parts = output
+            .split(whereSeparator: \.isNewline)
+            .compactMap { line -> String? in
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, !isSherpaStatusLine(trimmed) else { return nil }
+                if let text = jsonishTextValue(from: trimmed) {
+                    return text
+                }
+                guard !trimmed.hasPrefix("{"), !trimmed.hasSuffix(".wav") else { return nil }
+                return trimmed
+            }
+        return GigaAMV3FileChunking.mergeTranscripts(parts).nonEmpty
+    }
+
+    private static func isSherpaStatusLine(_ line: String) -> Bool {
+        line == "----"
+            || line == "Started"
+            || line == "Done!"
+            || line.hasPrefix("OfflineRecognizerConfig(")
+            || line.hasPrefix("Creating recognizer")
+            || line.hasPrefix("recognizer created")
+            || line.hasPrefix("num threads:")
+            || line.hasPrefix("decoding method:")
+            || line.hasPrefix("Elapsed seconds:")
+            || line.hasPrefix("Real time factor")
+    }
+
+    private static func jsonishTextValue(from line: String) -> String? {
+        for pattern in [#""text"\s*:\s*"([^"]*)""#, #"'text'\s*:\s*'([^']*)'"#] {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(line.startIndex..<line.endIndex, in: line)
+            guard let match = regex.firstMatch(in: line, range: range), match.numberOfRanges > 1,
+                  let textRange = Range(match.range(at: 1), in: line)
+            else { continue }
+            return String(line[textRange]).trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        }
+        return nil
     }
 }
 

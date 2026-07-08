@@ -502,6 +502,9 @@ struct Qwen3PostProcessingOutputCleanerTests {
                 "Ну да, локальная зачистка, конечно: работает"
         )
         #expect(Qwen3PostProcessorOutputCleaner.normalizePunctuationSpacing("версия 0.7.1,build 1,000") == "версия 0.7.1, build 1,000")
+        #expect(Qwen3PostProcessorOutputCleaner.normalizePunctuationSpacing("ivan@example.com,привет") == "ivan@example.com,привет")
+        #expect(Qwen3PostProcessorOutputCleaner.normalizePunctuationSpacing("https://example.com/a,b") == "https://example.com/a,b")
+        #expect(Qwen3PostProcessorOutputCleaner.normalizePunctuationSpacing("module.value,привет") == "module.value, привет")
         #expect(Qwen3PostProcessorOutputCleaner.clean("Ну да,локальная зачистка,конечно") == "Ну да, локальная зачистка, конечно")
     }
 

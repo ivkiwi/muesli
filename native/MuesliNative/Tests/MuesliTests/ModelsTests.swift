@@ -120,6 +120,23 @@ struct BackendOptionTests {
         #expect(try SherpaOfflineOutputParser.text(from: stdout) == "Первый кусок. Второй кусок.")
     }
 
+    @Test("Sherpa offline parser falls back to plain transcript output")
+    func sherpaOfflineParserFallsBackToPlainOutput() throws {
+        let stdout = """
+        /tmp/chunk.wav
+        ----
+        Первый кусок.
+        """
+        #expect(try SherpaOfflineOutputParser.text(from: stdout) == "Первый кусок.")
+    }
+
+    @Test("Sherpa offline parser surfaces invalid structured output")
+    func sherpaOfflineParserSurfacesInvalidStructuredOutput() {
+        #expect(throws: Error.self) {
+            _ = try SherpaOfflineOutputParser.text(from: #"{"not_text":"oops"}"#)
+        }
+    }
+
     @Test("GigaAM v3 detector requires complete model files")
     func gigaAMV3ModelDirectoryDetection() throws {
         let fm = FileManager.default

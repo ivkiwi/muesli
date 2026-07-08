@@ -305,7 +305,8 @@ struct LiveMeetingChunkingConfiguration: Equatable, Sendable {
     let deduplicatesText: Bool
 
     static func configuration(for backend: BackendOption) -> LiveMeetingChunkingConfiguration {
-        if backend.backend == BackendOption.gigaAMV3Russian.backend {
+        if backend.backend == BackendOption.gigaAMV3Russian.backend
+            || backend.backend == BackendOption.sherpaGigaAMRNNT.backend {
             return LiveMeetingChunkingConfiguration(
                 minChunkDuration: 3.0,
                 maxChunkDuration: 20.0,
