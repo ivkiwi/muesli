@@ -104,6 +104,11 @@ final class MeetSpeakerBridgeServer {
                 nextBuffer.append(data)
             }
 
+            if Self.isOversizedHTTPRequestBuffer(nextBuffer) {
+                self.sendResponse(Self.http(status: "400 Bad Request"), on: connection)
+                return
+            }
+
             if let expectedLength = Self.completeHTTPRequestLength(nextBuffer),
                nextBuffer.count >= expectedLength {
                 self.sendResponse(self.handle(nextBuffer), on: connection)
@@ -111,8 +116,7 @@ final class MeetSpeakerBridgeServer {
             }
 
             guard error == nil,
-                  !isComplete,
-                  nextBuffer.count <= Self.maxRequestBytes else {
+                  !isComplete else {
                 self.sendResponse(Self.http(status: "400 Bad Request"), on: connection)
                 return
             }
@@ -238,6 +242,16 @@ final class MeetSpeakerBridgeServer {
             }
             .first ?? 0
         return headerLength + contentLength
+    }
+
+    static func isOversizedHTTPRequestBuffer(_ data: Data) -> Bool {
+        if data.count > maxRequestBytes {
+            return true
+        }
+        if let expectedLength = completeHTTPRequestLength(data), expectedLength > maxRequestBytes {
+            return true
+        }
+        return false
     }
 
     private static func http(status: String) -> String {

@@ -91,6 +91,119 @@ struct SherpaGigaAMRNNTTranscriberTests {
         #expect(BackendOption.sherpaGigaAMRNNT.sizeLabel == SherpaGigaAMRNNTModelStore.downloadedModelSizeLabel)
         #expect(BackendOption.sherpaGigaAMRNNT.description.contains("CPU INT8"))
     }
+
+    @Test("sherpa GigaAM RNNT pins release artifact checksums")
+    func sherpaGigaAMRNNTArtifactChecksumsPinned() {
+        #expect(SherpaGigaAMRNNTModelStore.toolArchive.expectedSHA256 == "b1830ce2f19169070c23c2a44b70e1d416e0265e98870a2f62f7aa94811db342")
+        #expect(SherpaGigaAMRNNTModelStore.modelArchive.expectedSHA256 == "f9620a0099019c6afcee26525ef9ed3297fa50dd5691c1902af0c948fc1a470b")
+    }
+
+    @Test("sherpa GigaAM RNNT deletes checksum mismatches")
+    func sherpaGigaAMRNNTDeletesChecksumMismatch() throws {
+        let directory = makeTemporaryDirectory()
+        let archiveURL = directory.appendingPathComponent("bad.tar.bz2")
+        try Data("bad archive".utf8).write(to: archiveURL)
+        let artifact = SherpaGigaAMRNNTModelStore.DownloadArtifact(
+            url: URL(string: "https://example.com/bad.tar.bz2")!,
+            expectedSHA256: String(repeating: "0", count: 64)
+        )
+
+        #expect(throws: Error.self) {
+            try SherpaGigaAMRNNTModelStore.validateDownloadedArtifact(artifact, at: archiveURL)
+        }
+        #expect(!FileManager.default.fileExists(atPath: archiveURL.path))
+    }
+
+    @Test("sherpa GigaAM RNNT load result cannot win after shutdown")
+    func sherpaGigaAMRNNTLoadResultCannotWinAfterShutdown() async throws {
+        let directory = makeTemporaryDirectory()
+        let transcriber = SherpaGigaAMRNNTTranscriber()
+        let download = Task<URL, Error> {
+            try? await Task.sleep(for: .milliseconds(50))
+            return directory
+        }
+        await transcriber.setActiveDownloadTaskForTesting(download)
+
+        let load = Task {
+            try await transcriber.loadModels()
+        }
+        try await Task.sleep(for: .milliseconds(10))
+        await transcriber.shutdown()
+
+        do {
+            try await load.value
+            Issue.record("Stale Sherpa load unexpectedly completed after shutdown")
+        } catch is CancellationError {
+            // Expected path.
+        } catch {
+            Issue.record("Stale Sherpa load failed with unexpected error: \(error)")
+        }
+        #expect(await transcriber.loadedDirectoryForTesting() == nil)
+    }
+
+    @Test("sherpa process runner terminates tar on cancellation")
+    func sherpaProcessRunnerTerminatesTarOnCancellation() async throws {
+        try await assertProcessRunnerTerminatesOnCancellation(executableName: "tar")
+    }
+
+    @Test("sherpa process runner terminates recognizer on cancellation")
+    func sherpaProcessRunnerTerminatesRecognizerOnCancellation() async throws {
+        try await assertProcessRunnerTerminatesOnCancellation(executableName: "sherpa-onnx-offline")
+    }
+
+    private func assertProcessRunnerTerminatesOnCancellation(executableName: String) async throws {
+        let directory = makeTemporaryDirectory()
+        let scriptURL = directory.appendingPathComponent(executableName)
+        let pidURL = directory.appendingPathComponent("\(executableName).pid")
+        let termURL = directory.appendingPathComponent("\(executableName).term")
+        let script = """
+        #!/bin/sh
+        echo $$ > "$1"
+        trap 'echo term > "$2"; exit 0' TERM
+        while true; do sleep 0.1; done
+        """
+        try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+
+        let task = Task {
+            try await SherpaProcessRunner.run(
+                executable: scriptURL,
+                arguments: [pidURL.path, termURL.path],
+                captureDirectory: directory
+            )
+        }
+        try await waitForFile(pidURL)
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            Issue.record("\(executableName) runner unexpectedly completed after cancellation")
+        } catch is CancellationError {
+            // Expected path.
+        } catch {
+            Issue.record("\(executableName) runner failed with unexpected error: \(error)")
+        }
+        #expect(FileManager.default.fileExists(atPath: termURL.path))
+    }
+
+    private func waitForFile(_ url: URL) async throws {
+        for _ in 0..<100 {
+            if FileManager.default.fileExists(atPath: url.path) {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        throw NSError(domain: "SherpaGigaAMRNNTTranscriberTests", code: 1, userInfo: [
+            NSLocalizedDescriptionKey: "Timed out waiting for \(url.path)",
+        ])
+    }
+
+    private func makeTemporaryDirectory() -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sherpa-tests-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
 }
 
 @Suite("Backend coverage", .muesliHermeticSupport)

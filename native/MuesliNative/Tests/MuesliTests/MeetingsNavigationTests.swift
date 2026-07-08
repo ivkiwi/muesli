@@ -741,6 +741,46 @@ struct MeetingsNavigationTests {
         #expect(FileManager.default.fileExists(atPath: savedRecordingURL.path))
     }
 
+    @Test("persistCompletedMeetingResult leaves recovery marker when DB persistence fails after recording save")
+    func persistCompletedMeetingResultLeavesRecoveryMarkerAfterDBFailure() async throws {
+        let store = try makeStore()
+        let controller = makeController(dictationStore: store)
+        let savedRecordingURL = try makeRetainedRecordingURL()
+        defer { try? FileManager.default.removeItem(at: savedRecordingURL) }
+        defer { try? FileManager.default.removeItem(at: savedRecordingURL.appendingPathExtension("recovery")) }
+        let missingLiveMeetingID: Int64 = 999_999
+        let result = MeetingSessionResult(
+            title: "Missing Live Row",
+            originalTitle: "Meeting",
+            calendarEventID: nil,
+            startTime: Date(),
+            endTime: Date().addingTimeInterval(30),
+            durationSeconds: 30,
+            rawTranscript: "Transcript survived.",
+            formattedNotes: "## Summary\nNotes survived.",
+            retainedRecordingURL: nil,
+            retainedRecordingError: nil,
+            retainedRecordingSavedURL: savedRecordingURL,
+            systemRecordingURL: nil,
+            templateSnapshot: MeetingTemplates.auto.snapshot
+        )
+
+        #expect(throws: Error.self) {
+            _ = try controller.persistCompletedMeetingResult(
+                result,
+                existingMeetingID: missingLiveMeetingID,
+                preparedRecordingSave: PreparedMeetingRecordingSave(path: savedRecordingURL.path, error: nil)
+            )
+        }
+
+        let markerURL = savedRecordingURL.appendingPathExtension("recovery")
+        #expect(FileManager.default.fileExists(atPath: savedRecordingURL.path))
+        #expect(FileManager.default.fileExists(atPath: markerURL.path))
+        let marker = try String(contentsOf: markerURL, encoding: .utf8)
+        #expect(marker.contains("meeting_id=\(missingLiveMeetingID)"))
+        #expect(marker.contains("saved_recording_path=\(savedRecordingURL.path)"))
+    }
+
     @Test("persistCompletedMeetingResult discards retained recording when policy is never")
     func persistCompletedMeetingResultDiscardsRetainedRecordingWhenPolicyIsNever() async throws {
         let store = try makeStore()
@@ -994,6 +1034,23 @@ struct MeetingsNavigationTests {
         #expect(FileManager.default.fileExists(atPath: savedURL.path))
         #expect(FileManager.default.fileExists(atPath: partialURL.path) == false)
         #expect(try audioDuration(from: savedURL) > 1)
+    }
+
+    @Test("startup recovery keeps linked saved recording when final persistence failed")
+    func startupRecoveryKeepsLinkedSavedRecordingWhenFinalPersistenceFailed() throws {
+        let store = try makeStore()
+        let id = try store.createLiveMeeting(title: "Linked Audio", calendarEventID: nil, startTime: Date())
+        let savedRecordingURL = try makeRetainedRecordingURL()
+        defer { try? FileManager.default.removeItem(at: savedRecordingURL) }
+        try store.updateMeetingSavedRecordingPath(id: id, path: savedRecordingURL.path)
+        let controller = makeController(dictationStore: store)
+
+        controller.recoverStaleLiveMeetings()
+
+        let meeting = try #require(try store.meeting(id: id))
+        #expect(meeting.status == .failed)
+        #expect(meeting.savedRecordingPath == savedRecordingURL.path)
+        #expect(FileManager.default.fileExists(atPath: savedRecordingURL.path))
     }
 
     @Test("showMeetingTemplatesManager preserves current meetings context and presents manager")

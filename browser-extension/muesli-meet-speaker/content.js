@@ -63,7 +63,8 @@ function cleanParticipantName(value) {
 
 function validParticipantName(name) {
   if (!name || name.length < 2 || name.length > 80) return false;
-  if (/[.!?]/.test(name)) return false;
+  if (/[\r\n]/.test(name)) return false;
+  if (/[!?]/.test(name)) return false;
   if (/^(you|me|everyone|people|chat|activities|host controls|present now|settings|leave call)$/i.test(name)) return false;
   if (/^(muted|unmuted|speaking|presenting|camera off|microphone off|turn on|turn off)$/i.test(name)) return false;
   if (/\b(click to|your|background|settings|controls|options|caption|camera|video|microphone)\b/i.test(name)) return false;
@@ -73,6 +74,7 @@ function validParticipantName(name) {
 
 function addParticipant(map, rawValue) {
   const raw = (rawValue || "").trim();
+  if (/[\r\n]/.test(raw)) return;
   const isSelf = /\b(you|me)\b/i.test(raw);
   const name = cleanParticipantName(raw);
   if (!validParticipantName(name)) return;

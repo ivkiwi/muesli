@@ -75,6 +75,20 @@ struct MeetSpeakerBridgeTests {
         #expect(MeetSpeakerBridgeServer.completeHTTPRequestLength(requestData) == requestData.count)
     }
 
+    @Test("rejects complete oversized Chrome POST body")
+    func rejectsCompleteOversizedChromePOSTBody() throws {
+        let body = String(repeating: "x", count: 129 * 1024)
+        let header = "POST /v1/meet-speaker HTTP/1.1\r\n"
+            + "Host: 127.0.0.1:1477\r\n"
+            + "Content-Type: application/json\r\n"
+            + "Content-Length: \(body.utf8.count)\r\n"
+            + "\r\n"
+        let requestData = Data(header.utf8) + Data(body.utf8)
+
+        #expect(MeetSpeakerBridgeServer.completeHTTPRequestLength(requestData) == requestData.count)
+        #expect(MeetSpeakerBridgeServer.isOversizedHTTPRequestBuffer(requestData))
+    }
+
     @Test("accepts Chrome private network preflight without body")
     func acceptsChromePrivateNetworkPreflightWithoutBody() throws {
         let request = "OPTIONS /v1/meet-speaker HTTP/1.1\r\n"

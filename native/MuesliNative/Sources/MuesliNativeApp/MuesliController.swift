@@ -5428,6 +5428,19 @@ final class MuesliController: NSObject {
     }
 
     private func resolveLiveMeetingAfterStopFailure(id: Int64) {
+        if let meeting = try? dictationStore.meeting(id: id),
+           meeting.savedRecordingPath?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            flushCachedMeetingTitle(id: id)
+            flushCachedMeetingManualNotes(id: id, sync: false)
+            updateMeetingStatusAndScheduleSync(id: id, status: .failed)
+            clearCachedMeetingManualNotes(id: id)
+            clearCachedMeetingTitle(id: id)
+            if activeMeetingAudioWarning?.meetingID == id {
+                activeMeetingAudioWarning = nil
+            }
+            syncAppState()
+            return
+        }
         let manualNotes = manualNotesForLiveMeeting(id: id)
         if manualNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             deleteMeetingDraftAndScheduleSync(id: id)
@@ -5720,48 +5733,96 @@ final class MuesliController: NSObject {
         let savedRecordingPath = preparedRecordingSave.path
         let recordingSaveError = preparedRecordingSave.error
 
-        if let existingMeetingID {
-            let persistedTitle = completedLiveMeetingTitle(for: result, existingMeetingID: existingMeetingID)
-            try dictationStore.completeLiveMeeting(
-                id: existingMeetingID,
-                title: persistedTitle,
-                calendarEventID: result.calendarEventID,
-                startTime: result.startTime,
-                endTime: result.endTime,
-                rawTranscript: result.rawTranscript,
-                rawOriginalTranscript: result.rawOriginalTranscript,
-                formattedNotes: result.formattedNotes,
-                micAudioPath: nil,
-                systemAudioPath: nil,
-                savedRecordingPath: savedRecordingPath,
-                selectedTemplateID: result.templateSnapshot.id,
-                selectedTemplateName: result.templateSnapshot.name,
-                selectedTemplateKind: result.templateSnapshot.kind,
-                selectedTemplatePrompt: result.templateSnapshot.prompt
+        do {
+            if let existingMeetingID {
+                let persistedTitle = completedLiveMeetingTitle(for: result, existingMeetingID: existingMeetingID)
+                try dictationStore.completeLiveMeeting(
+                    id: existingMeetingID,
+                    title: persistedTitle,
+                    calendarEventID: result.calendarEventID,
+                    startTime: result.startTime,
+                    endTime: result.endTime,
+                    rawTranscript: result.rawTranscript,
+                    rawOriginalTranscript: result.rawOriginalTranscript,
+                    formattedNotes: result.formattedNotes,
+                    micAudioPath: nil,
+                    systemAudioPath: nil,
+                    savedRecordingPath: savedRecordingPath,
+                    selectedTemplateID: result.templateSnapshot.id,
+                    selectedTemplateName: result.templateSnapshot.name,
+                    selectedTemplateKind: result.templateSnapshot.kind,
+                    selectedTemplatePrompt: result.templateSnapshot.prompt
+                )
+                meetingID = existingMeetingID
+                clearCachedMeetingManualNotes(id: existingMeetingID)
+                clearCachedMeetingTitle(id: existingMeetingID)
+            } else {
+                meetingID = try dictationStore.insertMeeting(
+                    title: result.title,
+                    calendarEventID: result.calendarEventID,
+                    startTime: result.startTime,
+                    endTime: result.endTime,
+                    rawTranscript: result.rawTranscript,
+                    rawOriginalTranscript: result.rawOriginalTranscript,
+                    formattedNotes: result.formattedNotes,
+                    micAudioPath: nil,
+                    systemAudioPath: nil,
+                    savedRecordingPath: savedRecordingPath,
+                    selectedTemplateID: result.templateSnapshot.id,
+                    selectedTemplateName: result.templateSnapshot.name,
+                    selectedTemplateKind: result.templateSnapshot.kind,
+                    selectedTemplatePrompt: result.templateSnapshot.prompt
+                )
+            }
+        } catch {
+            recordUnpersistedRecordingForRecovery(
+                path: savedRecordingPath,
+                existingMeetingID: existingMeetingID,
+                error: error
             )
-            meetingID = existingMeetingID
-            clearCachedMeetingManualNotes(id: existingMeetingID)
-            clearCachedMeetingTitle(id: existingMeetingID)
-        } else {
-            meetingID = try dictationStore.insertMeeting(
-                title: result.title,
-                calendarEventID: result.calendarEventID,
-                startTime: result.startTime,
-                endTime: result.endTime,
-                rawTranscript: result.rawTranscript,
-                rawOriginalTranscript: result.rawOriginalTranscript,
-                formattedNotes: result.formattedNotes,
-                micAudioPath: nil,
-                systemAudioPath: nil,
-                savedRecordingPath: savedRecordingPath,
-                selectedTemplateID: result.templateSnapshot.id,
-                selectedTemplateName: result.templateSnapshot.name,
-                selectedTemplateKind: result.templateSnapshot.kind,
-                selectedTemplatePrompt: result.templateSnapshot.prompt
-            )
+            throw error
         }
         scheduleICloudSyncAfterLocalChange()
         return CompletedMeetingPersistenceResult(meetingID: meetingID, recordingSaveError: recordingSaveError)
+    }
+
+    private func recordUnpersistedRecordingForRecovery(
+        path: String?,
+        existingMeetingID: Int64?,
+        error: Error
+    ) {
+        guard let path,
+              !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        let meetingIDText = existingMeetingID.map { String($0) } ?? "nil"
+        DiagnosticsLog.write(
+            "[meeting-stop] recording_db_persist_failed meeting_id=\(meetingIDText) saved_recording_path=\(path) error=\(error.localizedDescription)"
+        )
+        if let existingMeetingID {
+            do {
+                try dictationStore.updateMeetingSavedRecordingPath(id: existingMeetingID, path: path)
+                guard try dictationStore.meeting(id: existingMeetingID)?.savedRecordingPath == path else {
+                    throw NSError(domain: "MuesliController", code: 1, userInfo: [
+                        NSLocalizedDescriptionKey: "Meeting \(existingMeetingID) was not found after saved recording link attempt.",
+                    ])
+                }
+                DiagnosticsLog.write(
+                    "[meeting-stop] linked_saved_recording_after_db_failure meeting_id=\(existingMeetingID) path=\(path)"
+                )
+            } catch {
+                DiagnosticsLog.write(
+                    "[meeting-stop] failed_to_link_saved_recording_after_db_failure meeting_id=\(existingMeetingID) path=\(path) error=\(error.localizedDescription)"
+                )
+            }
+        }
+
+        let markerURL = URL(fileURLWithPath: path).appendingPathExtension("recovery")
+        let marker = """
+        meeting_id=\(meetingIDText)
+        saved_recording_path=\(path)
+        error=\(error.localizedDescription)
+        """
+        try? marker.write(to: markerURL, atomically: true, encoding: .utf8)
     }
 
     private func liveMeetingTitle(id: Int64) -> String? {

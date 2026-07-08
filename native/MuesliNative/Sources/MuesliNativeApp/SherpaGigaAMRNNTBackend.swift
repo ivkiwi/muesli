@@ -1,3 +1,5 @@
+import CryptoKit
+import Darwin
 import Foundation
 import MuesliCore
 
@@ -31,8 +33,19 @@ enum SherpaGigaAMRNNTModelStore {
     static let cacheRelativePath = "Models/sherpa-gigaam-rnnt"
     static let downloadedModelSizeLabel = "~260 MB"
 
-    private static let toolArchiveURL = URL(string: "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-osx-arm64-static.tar.bz2")!
-    private static let modelArchiveURL = URL(string: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16.tar.bz2")!
+    struct DownloadArtifact: Sendable {
+        let url: URL
+        let expectedSHA256: String
+    }
+
+    static let toolArchive = DownloadArtifact(
+        url: URL(string: "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-osx-arm64-static.tar.bz2")!,
+        expectedSHA256: "b1830ce2f19169070c23c2a44b70e1d416e0265e98870a2f62f7aa94811db342"
+    )
+    static let modelArchive = DownloadArtifact(
+        url: URL(string: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16.tar.bz2")!,
+        expectedSHA256: "f9620a0099019c6afcee26525ef9ed3297fa50dd5691c1902af0c948fc1a470b"
+    )
     private static let toolRootName = "sherpa-onnx-v1.13.4-osx-arm64-static"
     private static let modelRootName = "sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16"
 
@@ -131,17 +144,21 @@ enum SherpaGigaAMRNNTModelStore {
         try fm.createDirectory(at: extractDirectory, withIntermediateDirectories: true)
         progress?(0.03, "Preparing Sherpa GigaAM RNNT...")
 
+        let toolArchiveURL = Self.toolArchive.url
         let toolArchive = archiveDirectory.appendingPathComponent(toolArchiveURL.lastPathComponent)
         fputs("[muesli-native] Sherpa GigaAM RNNT downloading sherpa-onnx tool...\n", stderr)
         try await downloadWithRetry(from: toolArchiveURL, to: toolArchive) { fraction in
             progress?(0.05 + 0.25 * fraction, "Downloading Sherpa tool...")
         }
+        try validateDownloadedArtifact(Self.toolArchive, at: toolArchive, fileManager: fm)
 
+        let modelArchiveURL = Self.modelArchive.url
         let modelArchive = archiveDirectory.appendingPathComponent(modelArchiveURL.lastPathComponent)
         fputs("[muesli-native] Sherpa GigaAM RNNT downloading GigaAM v3 RNNT model...\n", stderr)
         try await downloadWithRetry(from: modelArchiveURL, to: modelArchive) { fraction in
             progress?(0.30 + 0.55 * fraction, "Downloading Sherpa GigaAM RNNT...")
         }
+        try validateDownloadedArtifact(Self.modelArchive, at: modelArchive, fileManager: fm)
 
         progress?(0.87, "Installing Sherpa GigaAM RNNT...")
         try await SherpaProcessRunner.run(
@@ -201,22 +218,57 @@ enum SherpaGigaAMRNNTModelStore {
             )
         }
     }
+
+    static func validateDownloadedArtifact(
+        _ artifact: DownloadArtifact,
+        at archiveURL: URL,
+        fileManager: FileManager = .default
+    ) throws {
+        let actualSHA256 = try sha256Hex(for: archiveURL)
+        guard actualSHA256 == artifact.expectedSHA256 else {
+            try? fileManager.removeItem(at: archiveURL)
+            throw NSError(domain: "SherpaGigaAMRNNTModelStore", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "Sherpa GigaAM RNNT download checksum mismatch for \(artifact.url.lastPathComponent): expected \(artifact.expectedSHA256), got \(actualSHA256). The downloaded archive was deleted.",
+            ])
+        }
+    }
+
+    private static func sha256Hex(for url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while true {
+            let chunk = try handle.read(upToCount: 1024 * 1024) ?? Data()
+            guard !chunk.isEmpty else { break }
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
 }
 
 actor SherpaGigaAMRNNTTranscriber {
     private var loadedDirectory: URL?
     private var activeDownloadTask: Task<URL, Error>?
     private var inferenceInFlight = false
+    private var loadGeneration = 0
 
     func loadModels(progress: ((Double, String?) -> Void)? = nil) async throws {
+        let generation = loadGeneration
         if SherpaGigaAMRNNTModelStore.isAvailableLocally() {
+            guard generation == loadGeneration else {
+                throw CancellationError()
+            }
             loadedDirectory = SherpaGigaAMRNNTModelStore.cacheDirectory()
             progress?(1.0, nil)
             return
         }
 
         if let activeDownloadTask {
-            loadedDirectory = try await activeDownloadTask.value
+            let directory = try await activeDownloadTask.value
+            guard generation == loadGeneration else {
+                throw CancellationError()
+            }
+            loadedDirectory = directory
             progress?(1.0, nil)
             return
         }
@@ -226,15 +278,22 @@ actor SherpaGigaAMRNNTTranscriber {
         }
         activeDownloadTask = task
         do {
-            loadedDirectory = try await task.value
+            let directory = try await task.value
+            guard generation == loadGeneration else {
+                throw CancellationError()
+            }
+            loadedDirectory = directory
             activeDownloadTask = nil
         } catch {
-            activeDownloadTask = nil
+            if generation == loadGeneration {
+                activeDownloadTask = nil
+            }
             throw error
         }
     }
 
     func shutdown() async {
+        loadGeneration += 1
         activeDownloadTask?.cancel()
         activeDownloadTask = nil
         loadedDirectory = nil
@@ -325,6 +384,16 @@ actor SherpaGigaAMRNNTTranscriber {
             "--print-args=false",
         ] + chunkURLs.map(\.path)
     }
+
+#if DEBUG
+    func setActiveDownloadTaskForTesting(_ task: Task<URL, Error>) {
+        activeDownloadTask = task
+    }
+
+    func loadedDirectoryForTesting() -> URL? {
+        loadedDirectory
+    }
+#endif
 }
 
 enum SherpaOfflineOutputParser {
@@ -416,40 +485,108 @@ enum SherpaProcessRunner {
         arguments: [String],
         captureDirectory: URL
     ) async throws -> (stdout: String, stderr: String) {
-        try await Task.detached(priority: .utility) {
-            try FileManager.default.createDirectory(at: captureDirectory, withIntermediateDirectories: true)
-            let suffix = UUID().uuidString
-            let stdoutURL = captureDirectory.appendingPathComponent("stdout-\(suffix).log")
-            let stderrURL = captureDirectory.appendingPathComponent("stderr-\(suffix).log")
-            FileManager.default.createFile(atPath: stdoutURL.path, contents: nil)
-            FileManager.default.createFile(atPath: stderrURL.path, contents: nil)
+        let processBox = CancellableProcessBox()
+        return try await withTaskCancellationHandler {
+            try await Task.detached(priority: .utility) {
+                try Task.checkCancellation()
+                try FileManager.default.createDirectory(at: captureDirectory, withIntermediateDirectories: true)
+                let suffix = UUID().uuidString
+                let stdoutURL = captureDirectory.appendingPathComponent("stdout-\(suffix).log")
+                let stderrURL = captureDirectory.appendingPathComponent("stderr-\(suffix).log")
+                FileManager.default.createFile(atPath: stdoutURL.path, contents: nil)
+                FileManager.default.createFile(atPath: stderrURL.path, contents: nil)
 
-            let stdoutHandle = try FileHandle(forWritingTo: stdoutURL)
-            let stderrHandle = try FileHandle(forWritingTo: stderrURL)
-            defer {
-                try? stdoutHandle.close()
-                try? stderrHandle.close()
-                try? FileManager.default.removeItem(at: stdoutURL)
-                try? FileManager.default.removeItem(at: stderrURL)
-            }
+                let stdoutHandle = try FileHandle(forWritingTo: stdoutURL)
+                let stderrHandle = try FileHandle(forWritingTo: stderrURL)
+                defer {
+                    try? stdoutHandle.close()
+                    try? stderrHandle.close()
+                    try? FileManager.default.removeItem(at: stdoutURL)
+                    try? FileManager.default.removeItem(at: stderrURL)
+                }
 
-            let process = Process()
-            process.executableURL = executable
-            process.arguments = arguments
-            process.standardOutput = stdoutHandle
-            process.standardError = stderrHandle
-            try process.run()
-            process.waitUntilExit()
+                let process = Process()
+                process.executableURL = executable
+                process.arguments = arguments
+                process.standardOutput = stdoutHandle
+                process.standardError = stderrHandle
+                try process.run()
+                if !processBox.register(process) {
+                    process.waitUntilExit()
+                    throw CancellationError()
+                }
+                process.waitUntilExit()
+                processBox.clear(process)
 
-            let stdout = (try? String(contentsOf: stdoutURL, encoding: .utf8)) ?? ""
-            let stderr = (try? String(contentsOf: stderrURL, encoding: .utf8)) ?? ""
-            guard process.terminationStatus == 0 else {
-                throw NSError(domain: "SherpaProcessRunner", code: Int(process.terminationStatus), userInfo: [
-                    NSLocalizedDescriptionKey: "\(executable.lastPathComponent) failed: \(stderr.nonEmpty ?? stdout.nonEmpty ?? "exit \(process.terminationStatus)")",
-                ])
-            }
-            return (stdout, stderr)
-        }.value
+                let stdout = (try? String(contentsOf: stdoutURL, encoding: .utf8)) ?? ""
+                let stderr = (try? String(contentsOf: stderrURL, encoding: .utf8)) ?? ""
+                if processBox.isCancellationRequested {
+                    throw CancellationError()
+                }
+                guard process.terminationStatus == 0 else {
+                    throw NSError(domain: "SherpaProcessRunner", code: Int(process.terminationStatus), userInfo: [
+                        NSLocalizedDescriptionKey: "\(executable.lastPathComponent) failed: \(stderr.nonEmpty ?? stdout.nonEmpty ?? "exit \(process.terminationStatus)")",
+                    ])
+                }
+                return (stdout, stderr)
+            }.value
+        } onCancel: {
+            processBox.cancel()
+        }
+    }
+}
+
+private final class CancellableProcessBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var cancellationRequested = false
+
+    var isCancellationRequested: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancellationRequested
+    }
+
+    func register(_ process: Process) -> Bool {
+        lock.lock()
+        if cancellationRequested {
+            lock.unlock()
+            Self.stop(process)
+            return false
+        }
+        self.process = process
+        lock.unlock()
+        return true
+    }
+
+    func clear(_ process: Process) {
+        lock.lock()
+        if self.process === process {
+            self.process = nil
+        }
+        lock.unlock()
+    }
+
+    func cancel() {
+        lock.lock()
+        cancellationRequested = true
+        let process = self.process
+        lock.unlock()
+        if let process {
+            Self.stop(process)
+        }
+    }
+
+    private static func stop(_ process: Process) {
+        guard process.isRunning else { return }
+        process.terminate()
+        let deadline = Date().addingTimeInterval(1.0)
+        while process.isRunning, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if process.isRunning {
+            Darwin.kill(process.processIdentifier, SIGKILL)
+        }
     }
 }
 

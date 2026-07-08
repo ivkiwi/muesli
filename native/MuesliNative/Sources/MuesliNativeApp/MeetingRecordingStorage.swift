@@ -34,6 +34,7 @@ enum MeetingRecordingFileFormat: String, CaseIterable, Sendable {
 
 enum MeetingRecordingStorage {
     private static let defaultDirectoryName = "meeting-recordings"
+    private static let destinationWriteLock = NSLock()
 
     static func defaultDirectory(supportDirectory: URL = AppIdentity.supportDirectoryURL) -> URL {
         supportDirectory.appendingPathComponent(defaultDirectoryName, isDirectory: true)
@@ -78,6 +79,9 @@ enum MeetingRecordingStorage {
             at: destinationDirectory,
             withIntermediateDirectories: true
         )
+
+        destinationWriteLock.lock()
+        defer { destinationWriteLock.unlock() }
 
         let destinationURL = uniqueDestinationURL(
             in: destinationDirectory,

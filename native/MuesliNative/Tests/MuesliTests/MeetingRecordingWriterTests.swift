@@ -116,6 +116,34 @@ struct MeetingRecordingWriterTests {
         #expect(FileManager.default.fileExists(atPath: secondSavedURL.path))
     }
 
+    @Test("persistTemporaryRecording serializes concurrent destination names")
+    func persistTemporaryRecordingSerializesConcurrentDestinationNames() async throws {
+        let recordingsDirectory = makeTemporaryDirectory()
+        let startedAt = Date(timeIntervalSince1970: 1_711_000_000)
+        let firstTempURL = try makeTempWAV(samples: [100, 200, 300])
+        let secondTempURL = try makeTempWAV(samples: [400, 500, 600])
+
+        async let firstSavedURL = MeetingRecordingStorage.persistTemporaryRecording(
+            from: firstTempURL,
+            meetingTitle: "Weekly Product Sync",
+            startedAt: startedAt,
+            destinationDirectory: recordingsDirectory,
+            fileFormat: .wav
+        )
+        async let secondSavedURL = MeetingRecordingStorage.persistTemporaryRecording(
+            from: secondTempURL,
+            meetingTitle: "Weekly Product Sync",
+            startedAt: startedAt,
+            destinationDirectory: recordingsDirectory,
+            fileFormat: .wav
+        )
+        let savedURLs = try await [firstSavedURL, secondSavedURL]
+
+        #expect(savedURLs[0] != savedURLs[1])
+        #expect(Set(savedURLs.map(\.lastPathComponent)).count == 2)
+        #expect(savedURLs.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
+    }
+
     @Test("saved m4a decodes to temporary wav for retranscription")
     func savedM4ADecodesToTemporaryWAVForRetranscription() async throws {
         let writer = try MeetingRecordingWriter()
@@ -309,6 +337,12 @@ struct MeetingRecordingWriterTests {
         let store = DictationStore(databaseURL: url)
         try store.migrateIfNeeded()
         return store
+    }
+
+    private func makeTempWAV(samples: [Int16]) throws -> URL {
+        let writer = try MeetingRecordingWriter()
+        writer.appendSystem(samples)
+        return try #require(writer.stop())
     }
 
     private func readMonoPCM16WAVSamples(from url: URL) throws -> [Int16] {
