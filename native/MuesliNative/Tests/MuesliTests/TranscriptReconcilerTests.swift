@@ -74,6 +74,22 @@ struct TranscriptReconcilerTests {
         #expect(reconciled.systemSegments.count == 3)
     }
 
+    @Test("keeps Cyrillic system turns during dedupe")
+    func keepsCyrillicSystemTurnsDuringDedupe() {
+        let system = [
+            SpeechSegment(start: 0.0, end: 1.0, text: "Привет всем"),
+            SpeechSegment(start: 1.2, end: 2.0, text: "Обсуждаем трафик")
+        ]
+
+        let reconciled = TranscriptReconciler.reconcile(
+            micTurns: [],
+            systemSegments: system,
+            diarizationSegments: nil
+        )
+
+        #expect(reconciled.systemSegments.map(\.text) == ["Привет всем", "Обсуждаем трафик"])
+    }
+
     private func makeDiarSeg(speakerId: String, start: Float, end: Float) -> TimedSpeakerSegment {
         TimedSpeakerSegment(
             speakerId: speakerId,

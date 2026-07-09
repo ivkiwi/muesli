@@ -103,4 +103,27 @@ struct MeetingMicHealthTrackerTests {
         #expect(recovered.warningMessage == nil)
         #expect(recovered.firstNonZeroMicAt != nil)
     }
+
+    @Test("all-zero mic warning does not oscillate back to near silent while system stays active")
+    func allZeroMicWarningDoesNotOscillateBackToNearSilent() {
+        let tracker = MeetingMicHealthTracker()
+        let now = Date()
+
+        _ = tracker.noteRawMicSamples(Array(repeating: 0, count: 16_000), now: now)
+        _ = tracker.noteSystemSamples(Array(repeating: 6_000, count: 16_000), now: now.addingTimeInterval(1))
+        _ = tracker.noteSystemSamples(Array(repeating: 6_000, count: 16_000), now: now.addingTimeInterval(2))
+        var snapshot = tracker.noteSystemSamples(Array(repeating: 6_000, count: 16_000), now: now.addingTimeInterval(3))
+        let transitionCount = snapshot.transitions.count
+
+        for index in 4..<9 {
+            _ = tracker.noteRawMicSamples(Array(repeating: 0, count: 16_000), now: now.addingTimeInterval(Double(index)))
+            snapshot = tracker.noteSystemSamples(
+                Array(repeating: 6_000, count: 16_000),
+                now: now.addingTimeInterval(Double(index) + 0.5)
+            )
+        }
+
+        #expect(snapshot.state == .micAllZeroWhileSystemActive)
+        #expect(snapshot.transitions.count == transitionCount)
+    }
 }

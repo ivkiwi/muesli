@@ -1021,6 +1021,15 @@ final class MeetingSession {
             speakerNameMap: speakerNameMap,
             meetingStart: meetingStart
         )
+        if let reason = MeetingRetranscriptionPipeline.suspiciousTranscriptReason(
+            transcript: rawTranscript,
+            meetingDuration: endTime.timeIntervalSince(meetingStart),
+            systemSegmentCount: systemSegments.count,
+            systemCoveredDuration: MeetingRetranscriptionPipeline.coveredDuration(systemSegments)
+        ) {
+            DiagnosticsLog.write("[meeting] transcript quality_guard_failed \(reason)")
+            throw MeetingPostProcessingError.suspiciouslyShortTranscript(reason)
+        }
         let cleanupResult = await stopPhaseValue(
             "transcript_cleanup",
             timeout: MeetingStopPhaseTimeouts.transcriptCleanup,
@@ -1165,6 +1174,8 @@ final class MeetingSession {
         let segments: [SpeechSegment]
         let samples: [Float]
         let duration: TimeInterval
+        let vadSegmentCount: Int
+        let coveredDuration: TimeInterval
     }
 
     private func stopPostProcessingMode(endTime: Date) async throws -> MeetingSessionResult {
@@ -1269,6 +1280,18 @@ final class MeetingSession {
             speakerNameMap: speakerNameMap,
             meetingStart: meetingStart
         )
+        if let reason = MeetingRetranscriptionPipeline.suspiciousTranscriptReason(
+            transcript: rawTranscript,
+            meetingDuration: max(endTime.timeIntervalSince(meetingStart), systemTrack.duration),
+            systemSegmentCount: systemSegments.count,
+            systemCoveredDuration: max(
+                systemTrack.coveredDuration,
+                MeetingRetranscriptionPipeline.coveredDuration(systemSegments)
+            )
+        ) {
+            DiagnosticsLog.write("[meeting] post-mode quality_guard_failed \(reason)")
+            throw MeetingPostProcessingError.suspiciouslyShortTranscript(reason)
+        }
         let cleanupResult = await stopPhaseValue(
             "transcript_cleanup",
             timeout: MeetingStopPhaseTimeouts.transcriptCleanup,
@@ -1442,12 +1465,21 @@ final class MeetingSession {
         backend: BackendOption
     ) async throws -> PostModeTrackTranscription {
         guard let url else {
-            return PostModeTrackTranscription(segments: [], samples: [], duration: 0)
+            DiagnosticsLog.write("[meeting] post-mode track_missing track=\(trackRole)")
+            return PostModeTrackTranscription(segments: [], samples: [], duration: 0, vadSegmentCount: 0, coveredDuration: 0)
         }
         let wavData = try WavReader.readFloatMonoWAV(from: url)
         let duration = Double(wavData.samples.count) / Double(max(wavData.sampleRate, 1))
+        let audioStats = MeetingRetranscriptionPipeline.audioLevelStats(
+            samples: wavData.samples,
+            sampleRate: wavData.sampleRate
+        )
+        DiagnosticsLog.write(
+            "[meeting] post-mode track_start track=\(trackRole) backend=\(backend.backend) model=\(backend.model) file=\(url.lastPathComponent) sample_rate=\(wavData.sampleRate) duration=\(String(format: "%.1f", audioStats.duration)) rms=\(String(format: "%.6f", audioStats.rms)) peak=\(String(format: "%.6f", audioStats.peak)) nonzero=\(String(format: "%.3f", audioStats.nonZeroRatio))"
+        )
         guard !wavData.samples.isEmpty else {
-            return PostModeTrackTranscription(segments: [], samples: [], duration: 0)
+            DiagnosticsLog.write("[meeting] post-mode track_empty track=\(trackRole) file=\(url.lastPathComponent)")
+            return PostModeTrackTranscription(segments: [], samples: [], duration: 0, vadSegmentCount: 0, coveredDuration: 0)
         }
         guard let vadManager = await transcriptionCoordinator.getVadManager() else {
             DiagnosticsLog.write("[meeting] post-mode VAD unavailable; transcribing full \(trackRole) track")
@@ -1462,15 +1494,48 @@ final class MeetingSession {
                 trackRole: trackRole,
                 duration: duration
             )
-            return PostModeTrackTranscription(segments: segments, samples: wavData.samples, duration: duration)
+            DiagnosticsLog.write(
+                "[meeting] post-mode full_track_done track=\(trackRole) segments=\(segments.count) chars=\(MeetingRetranscriptionPipeline.characterCount(segments)) text_chars=\(transcription.text.count)"
+            )
+            return PostModeTrackTranscription(
+                segments: segments,
+                samples: wavData.samples,
+                duration: duration,
+                vadSegmentCount: 0,
+                coveredDuration: duration
+            )
         }
 
         let vadSegments = try await vadManager.segmentSpeech(
             wavData.samples,
             config: MeetingRetranscriptionPipeline.vadSegmentationConfig
         )
+        let audioSegments = MeetingRetranscriptionPipeline.audioSegments(
+            from: vadSegments,
+            sampleCount: wavData.samples.count
+        )
+        let coveredDuration = MeetingRetranscriptionPipeline.coveredDuration(audioSegments)
+        DiagnosticsLog.write(
+            "[meeting] post-mode VAD track=\(trackRole) segments=\(vadSegments.count) audio_segments=\(audioSegments.count) covered=\(String(format: "%.1f", coveredDuration)) duration=\(String(format: "%.1f", duration))"
+        )
         guard !vadSegments.isEmpty else {
-            return PostModeTrackTranscription(segments: [], samples: wavData.samples, duration: duration)
+            if trackRole == .system, duration >= 900 {
+                return try await transcribeFullPostModeTrack(
+                    url: url,
+                    wavData: wavData,
+                    duration: duration,
+                    trackRole: trackRole,
+                    backend: backend,
+                    reason: "empty_vad"
+                )
+            }
+            return PostModeTrackTranscription(
+                segments: [],
+                samples: wavData.samples,
+                duration: duration,
+                vadSegmentCount: 0,
+                coveredDuration: 0
+            )
         }
 
         let transcription: SpeechTranscriptionResult
@@ -1478,7 +1543,9 @@ final class MeetingSession {
             transcription = try await MeetingRetranscriptionPipeline.transcribeSegmentedAudio(
                 samples: wavData.samples,
                 vadSegments: vadSegments,
-                trackRole: trackRole
+                trackRole: trackRole,
+                diagnosticsLabel: "[meeting] post-mode",
+                logger: { DiagnosticsLog.write($0) }
             ) { [transcriptionCoordinator] segmentAudio in
                 try await transcriptionCoordinator.transcribeMeetingBatchWithSherpaGigaAMRNNT(
                     samplesBatch: segmentAudio.map(\.samples)
@@ -1488,7 +1555,9 @@ final class MeetingSession {
             transcription = try await MeetingRetranscriptionPipeline.transcribeSegmentedAudio(
                 samples: wavData.samples,
                 vadSegments: vadSegments,
-                trackRole: trackRole
+                trackRole: trackRole,
+                diagnosticsLabel: "[meeting] post-mode",
+                logger: { DiagnosticsLog.write($0) }
             ) { [transcriptionCoordinator, config] _, samples in
                 let segmentURL = try WavWriter.writeTemporaryWAV(
                     samples: samples,
@@ -1503,10 +1572,63 @@ final class MeetingSession {
                 )
             }
         }
+        let segmentedChars = transcription.text.trimmingCharacters(in: .whitespacesAndNewlines).count
+        if MeetingRetranscriptionPipeline.shouldRetryFullTrack(
+            trackRole: trackRole,
+            segmentedCharacterCount: segmentedChars,
+            sourceDuration: duration,
+            coveredDuration: coveredDuration
+        ) {
+            return try await transcribeFullPostModeTrack(
+                url: url,
+                wavData: wavData,
+                duration: duration,
+                trackRole: trackRole,
+                backend: backend,
+                reason: "segmented_chars_\(segmentedChars)"
+            )
+        }
+        DiagnosticsLog.write(
+            "[meeting] post-mode track_done track=\(trackRole) segments=\(transcription.segments.count) chars=\(MeetingRetranscriptionPipeline.characterCount(transcription.segments)) text_chars=\(segmentedChars) covered=\(String(format: "%.1f", coveredDuration))"
+        )
         return PostModeTrackTranscription(
             segments: transcription.segments,
             samples: wavData.samples,
+            duration: duration,
+            vadSegmentCount: vadSegments.count,
+            coveredDuration: coveredDuration
+        )
+    }
+
+    private func transcribeFullPostModeTrack(
+        url: URL,
+        wavData: WavReader.WavData,
+        duration: TimeInterval,
+        trackRole: MeetingRetranscriptionPipeline.TrackRole,
+        backend: BackendOption,
+        reason: String
+    ) async throws -> PostModeTrackTranscription {
+        DiagnosticsLog.write("[meeting] post-mode full_track_retry track=\(trackRole) reason=\(reason)")
+        let transcription = try await transcriptionCoordinator.transcribeMeeting(
+            at: url,
+            samples: wavData.samples,
+            backend: backend,
+            cohereLanguage: config.resolvedCohereLanguageMeetings
+        )
+        let segments = normalizePostModeTrack(
+            transcription,
+            trackRole: trackRole,
             duration: duration
+        )
+        DiagnosticsLog.write(
+            "[meeting] post-mode full_track_done track=\(trackRole) segments=\(segments.count) chars=\(MeetingRetranscriptionPipeline.characterCount(segments)) text_chars=\(transcription.text.count)"
+        )
+        return PostModeTrackTranscription(
+            segments: segments,
+            samples: wavData.samples,
+            duration: duration,
+            vadSegmentCount: 0,
+            coveredDuration: duration
         )
     }
 

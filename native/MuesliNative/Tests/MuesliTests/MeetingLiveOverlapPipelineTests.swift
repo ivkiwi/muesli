@@ -276,6 +276,73 @@ struct MeetingLiveOverlapPipelineTests {
         #expect(result.segments.map(\.text) == ["early", "late"])
     }
 
+    @Test("retranscribe batch emits diagnostic start and done lines")
+    func retranscribeBatchEmitsDiagnosticStartAndDoneLines() async throws {
+        let samples = (0..<(16_000 * 2)).map { Float($0 % 100) / 100.0 }
+        let vadSegments = [
+            VadSegment(startTime: 0.0, endTime: 0.5),
+            VadSegment(startTime: 1.0, endTime: 1.5),
+        ]
+        var logs: [String] = []
+
+        _ = try await MeetingRetranscriptionPipeline.transcribeSegmentedAudio(
+            samples: samples,
+            vadSegments: vadSegments,
+            diagnosticsLabel: "[test]",
+            logger: { logs.append($0) }
+        ) { segmentAudio in
+            segmentAudio.map { item in
+                SpeechTranscriptionResult(text: "\(item.segment.startSample)", segments: [])
+            }
+        }
+
+        #expect(logs.contains { $0.contains("[test] batch_start") && $0.contains("segments=2") })
+        #expect(logs.contains { $0.contains("[test] batch_done") && $0.contains("results=2") })
+    }
+
+    @Test("post-mode quality guard flags long speech-heavy short transcript")
+    func postModeQualityGuardFlagsLongSpeechHeavyShortTranscript() {
+        let shortTranscript = String(repeating: "а", count: 2_309)
+        let fullTranscript = String(repeating: "а", count: 17_730)
+
+        let reason = MeetingRetranscriptionPipeline.suspiciousTranscriptReason(
+            transcript: shortTranscript,
+            meetingDuration: 1_995,
+            systemSegmentCount: 295,
+            systemCoveredDuration: 1_450
+        )
+
+        #expect(reason?.contains("chars=2309") == true)
+        #expect(MeetingRetranscriptionPipeline.suspiciousTranscriptReason(
+            transcript: fullTranscript,
+            meetingDuration: 1_995,
+            systemSegmentCount: 295,
+            systemCoveredDuration: 1_450
+        ) == nil)
+    }
+
+    @Test("post-mode retry threshold only applies to long system tracks")
+    func postModeRetryThresholdOnlyAppliesToLongSystemTracks() {
+        #expect(MeetingRetranscriptionPipeline.shouldRetryFullTrack(
+            trackRole: .system,
+            segmentedCharacterCount: 2_309,
+            sourceDuration: 1_995,
+            coveredDuration: 1_450
+        ))
+        #expect(!MeetingRetranscriptionPipeline.shouldRetryFullTrack(
+            trackRole: .mic,
+            segmentedCharacterCount: 2_309,
+            sourceDuration: 1_995,
+            coveredDuration: 1_450
+        ))
+        #expect(!MeetingRetranscriptionPipeline.shouldRetryFullTrack(
+            trackRole: .system,
+            segmentedCharacterCount: 2_309,
+            sourceDuration: 300,
+            coveredDuration: 200
+        ))
+    }
+
     @Test("retranscribe batch rejects missing results")
     func retranscribeBatchRejectsMissingResults() async throws {
         let samples = (0..<(16_000 * 2)).map { Float($0 % 100) / 100.0 }

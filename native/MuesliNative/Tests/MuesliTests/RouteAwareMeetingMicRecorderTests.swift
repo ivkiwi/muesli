@@ -84,6 +84,7 @@ struct RouteAwareMeetingMicRecorderTests {
             outputRouteKind: "headphone-like",
             outputIsAmbiguousBluetooth: false,
             selectedInputDeviceUID: "built-in",
+            selectedInputDeviceName: "MacBook Microphone",
             selectedInputDeviceResolved: true,
             preferredInputDeviceID: 82,
             preferredInputDeviceName: "MacBook Microphone",
@@ -105,6 +106,51 @@ struct RouteAwareMeetingMicRecorderTests {
         #expect(diagnostics.recorderKind == .appScopedAudioQueue)
         #expect(diagnostics.preferredInputDeviceID == 82)
         #expect(diagnostics.route == route)
+    }
+
+    @Test("start uses latest route snapshot instead of stale preferred input")
+    func startUsesLatestRouteSnapshotInsteadOfStalePreferredInput() throws {
+        let system = FakeMeetingMicRecorder(kind: .systemDefaultStreaming)
+        let appScoped = FakeMeetingMicRecorder(kind: .appScopedAudioQueue)
+        var route = MeetingMicRouteDiagnosticsSnapshot(
+            outputRouteKind: "headphone-like",
+            outputIsAmbiguousBluetooth: false,
+            selectedInputDeviceUID: nil,
+            selectedInputDeviceName: nil,
+            selectedInputDeviceResolved: true,
+            preferredInputDeviceID: nil,
+            preferredInputDeviceName: nil,
+            defaultInputDeviceID: 90,
+            defaultInputDeviceName: "Headset Mic",
+            builtInInputDeviceID: 82,
+            systemDefaultInputIsBuiltIn: false
+        )
+        let recorder = RouteAwareMeetingMicRecorder(
+            systemDefaultRecorder: system,
+            appScopedRecorder: appScoped,
+            routeSnapshotProvider: { route }
+        )
+        recorder.preferredInputDeviceID = nil
+
+        route = MeetingMicRouteDiagnosticsSnapshot(
+            outputRouteKind: "headphone-like",
+            outputIsAmbiguousBluetooth: false,
+            selectedInputDeviceUID: "built-in",
+            selectedInputDeviceName: "MacBook Microphone",
+            selectedInputDeviceResolved: true,
+            preferredInputDeviceID: 82,
+            preferredInputDeviceName: "MacBook Microphone",
+            defaultInputDeviceID: 90,
+            defaultInputDeviceName: "Headset Mic",
+            builtInInputDeviceID: 82,
+            systemDefaultInputIsBuiltIn: false
+        )
+        try recorder.start()
+
+        #expect(recorder.activeRecorderKindForDebug() == .appScoped)
+        #expect(system.startCalls == 0)
+        #expect(appScoped.startCalls == 1)
+        #expect(appScoped.preferredInputDeviceID == 82)
     }
 }
 

@@ -11,6 +11,7 @@ struct MeetingMicRouteDiagnosticsSnapshot: Codable, Equatable {
     let outputRouteKind: String
     let outputIsAmbiguousBluetooth: Bool
     let selectedInputDeviceUID: String?
+    let selectedInputDeviceName: String?
     let selectedInputDeviceResolved: Bool
     let preferredInputDeviceID: AudioObjectID?
     let preferredInputDeviceName: String?
@@ -262,6 +263,9 @@ final class RouteAwareMeetingMicRecorder: MeetingMicRecording {
     }
 
     private func currentPreferredInputDeviceID() -> AudioObjectID? {
+        if let route = routeSnapshotProvider() {
+            return route.preferredInputDeviceID
+        }
         lock.lock()
         defer { lock.unlock() }
         return preferredInputDeviceIDStorage

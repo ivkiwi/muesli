@@ -95,7 +95,12 @@ final class MeetingMicHealthTracker {
                       stats.peak < Self.nearSilentMicPeakThreshold {
                 state.nearSilentMicSamples += samples.count
                 if state.nearSilentMicSamples >= Self.degradedConfirmationSamples {
-                    transitionLocked(&state, to: .micNearSilent, reason: "raw_mic_rms_near_silent", now: now)
+                    switch state.healthState {
+                    case .micAllZeroWhileSystemActive, .micCallbacksMissing:
+                        break
+                    case .healthy, .waitingForAudio, .micNearSilent:
+                        transitionLocked(&state, to: .micNearSilent, reason: "raw_mic_rms_near_silent", now: now)
+                    }
                 }
             } else {
                 state.nearSilentMicSamples = 0

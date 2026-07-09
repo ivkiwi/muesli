@@ -135,6 +135,7 @@ extension DictationAudioRouting {
             outputRouteKind: currentOutputRouteKindForDebug().description,
             outputIsAmbiguousBluetooth: false,
             selectedInputDeviceUID: selectedInputDeviceUID,
+            selectedInputDeviceName: nil,
             selectedInputDeviceResolved: true,
             preferredInputDeviceID: preferredInputDeviceIDForMeeting(),
             preferredInputDeviceName: nil,
@@ -293,6 +294,9 @@ final class DictationAudioRouteController: DictationAudioRouting {
         let preferredDevice = preferredInputDeviceID.flatMap { id in
             devices.first(where: { $0.deviceID == id })
         }
+        let selectedDevice = current.selectedInputDeviceID.flatMap { id in
+            devices.first(where: { $0.deviceID == id })
+        }
         let defaultInputDevice = current.defaultInputDeviceID.flatMap { id in
             devices.first(where: { $0.deviceID == id })
         }
@@ -300,6 +304,7 @@ final class DictationAudioRouteController: DictationAudioRouting {
             outputRouteKind: current.outputRouteKind.description,
             outputIsAmbiguousBluetooth: current.outputIsAmbiguousBluetooth,
             selectedInputDeviceUID: selectedInputDeviceUID,
+            selectedInputDeviceName: selectedDevice?.name,
             selectedInputDeviceResolved: selectedInputDeviceUID == nil || current.selectedInputDeviceID != nil,
             preferredInputDeviceID: preferredInputDeviceID,
             preferredInputDeviceName: preferredDevice?.name,

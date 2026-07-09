@@ -122,6 +122,9 @@ private struct PostMeetingSourceTrackInfo {
 private struct MeetingSourceTrackTranscription {
     let segments: [SpeechSegment]
     let samples: [Float]
+    let duration: TimeInterval
+    let vadSegmentCount: Int
+    let coveredDuration: TimeInterval
 }
 
 struct MeetSpeakerBridgeRoutingStats: Equatable, Sendable {
@@ -4213,11 +4216,13 @@ final class MuesliController: NSObject {
         let meetingStart = Self.meetingStartDate(for: meeting)
         let micTrack = try await transcribeMeetingSourceTrack(
             url: sourceTrackInfo.micURL,
+            meetingID: meeting.id,
             trackRole: .mic,
             backend: backend
         )
         let systemTrack = try await transcribeMeetingSourceTrack(
             url: sourceTrackInfo.systemURL,
+            meetingID: meeting.id,
             trackRole: .system,
             backend: backend
         )
@@ -4248,9 +4253,21 @@ final class MuesliController: NSObject {
         )
         let trimmed = formatted.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
+            if let reason = MeetingRetranscriptionPipeline.suspiciousTranscriptReason(
+                transcript: trimmed,
+                meetingDuration: max(systemTrack.duration, Self.meetingDuration(for: meeting)),
+                systemSegmentCount: systemSegments.count,
+                systemCoveredDuration: max(
+                    systemTrack.coveredDuration,
+                    MeetingRetranscriptionPipeline.coveredDuration(systemSegments)
+                )
+            ) {
+                DiagnosticsLog.write("[muesli-native] source-track retranscribe quality_guard_failed meeting_id=\(meeting.id) \(reason)")
+                throw MeetingPostProcessingError.suspiciouslyShortTranscript(reason)
+            }
             return trimmed
         }
-        return (micSegments + systemSegments)
+        let fallback = (micSegments + systemSegments)
             .sorted { lhs, rhs in
                 if lhs.start == rhs.start { return lhs.text < rhs.text }
                 return lhs.start < rhs.start
@@ -4258,36 +4275,66 @@ final class MuesliController: NSObject {
             .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: " ")
+        if let reason = MeetingRetranscriptionPipeline.suspiciousTranscriptReason(
+            transcript: fallback,
+            meetingDuration: max(systemTrack.duration, Self.meetingDuration(for: meeting)),
+            systemSegmentCount: systemSegments.count,
+            systemCoveredDuration: max(
+                systemTrack.coveredDuration,
+                MeetingRetranscriptionPipeline.coveredDuration(systemSegments)
+            )
+        ) {
+            DiagnosticsLog.write("[muesli-native] source-track retranscribe quality_guard_failed meeting_id=\(meeting.id) \(reason)")
+            throw MeetingPostProcessingError.suspiciouslyShortTranscript(reason)
+        }
+        return fallback
     }
 
     private func transcribeMeetingSourceTrack(
         url: URL?,
+        meetingID: Int64,
         trackRole: MeetingRetranscriptionPipeline.TrackRole,
         backend: BackendOption
     ) async throws -> MeetingSourceTrackTranscription {
         guard let url else {
-            return MeetingSourceTrackTranscription(segments: [], samples: [])
+            DiagnosticsLog.write("[muesli-native] source-track retranscribe track_missing meeting_id=\(meetingID) track=\(trackRole)")
+            return MeetingSourceTrackTranscription(segments: [], samples: [], duration: 0, vadSegmentCount: 0, coveredDuration: 0)
         }
         let wavData = try WavReader.readFloatMonoWAV(from: url)
         let duration = Double(wavData.samples.count) / Double(max(wavData.sampleRate, 1))
+        let audioStats = MeetingRetranscriptionPipeline.audioLevelStats(
+            samples: wavData.samples,
+            sampleRate: wavData.sampleRate
+        )
+        DiagnosticsLog.write(
+            "[muesli-native] source-track retranscribe track_start meeting_id=\(meetingID) track=\(trackRole) backend=\(backend.backend) model=\(backend.model) file=\(url.lastPathComponent) sample_rate=\(wavData.sampleRate) duration=\(String(format: "%.1f", audioStats.duration)) rms=\(String(format: "%.6f", audioStats.rms)) peak=\(String(format: "%.6f", audioStats.peak)) nonzero=\(String(format: "%.3f", audioStats.nonZeroRatio))"
+        )
         guard !wavData.samples.isEmpty else {
-            return MeetingSourceTrackTranscription(segments: [], samples: [])
+            DiagnosticsLog.write("[muesli-native] source-track retranscribe track_empty meeting_id=\(meetingID) track=\(trackRole)")
+            return MeetingSourceTrackTranscription(segments: [], samples: [], duration: 0, vadSegmentCount: 0, coveredDuration: 0)
         }
         guard let vadManager = await transcriptionCoordinator.getVadManager() else {
-            DiagnosticsLog.write("[muesli-native] source-track retranscribe VAD unavailable; transcribing full \(trackRole) track meeting_id=\(meetingIDForLog(url: url))")
+            DiagnosticsLog.write("[muesli-native] source-track retranscribe VAD unavailable; transcribing full \(trackRole) track meeting_id=\(meetingID)")
             let transcription = try await transcriptionCoordinator.transcribeMeeting(
                 at: url,
                 samples: wavData.samples,
                 backend: backend,
                 cohereLanguage: config.resolvedCohereLanguageMeetings
             )
+            let segments = normalizeRetranscribedTrack(
+                transcription,
+                trackRole: trackRole,
+                duration: duration
+            )
+            DiagnosticsLog.write(
+                "[muesli-native] source-track retranscribe full_track_done meeting_id=\(meetingID) track=\(trackRole) segments=\(segments.count) chars=\(MeetingRetranscriptionPipeline.characterCount(segments)) text_chars=\(transcription.text.count)"
+            )
             return MeetingSourceTrackTranscription(
-                segments: normalizeRetranscribedTrack(
-                    transcription,
-                    trackRole: trackRole,
-                    duration: duration
-                ),
-                samples: wavData.samples
+                segments: segments,
+                samples: wavData.samples,
+                duration: duration,
+                vadSegmentCount: 0,
+                coveredDuration: duration
             )
         }
 
@@ -4295,8 +4342,27 @@ final class MuesliController: NSObject {
             wavData.samples,
             config: MeetingRetranscriptionPipeline.vadSegmentationConfig
         )
+        let audioSegments = MeetingRetranscriptionPipeline.audioSegments(
+            from: speechSegments,
+            sampleCount: wavData.samples.count
+        )
+        let coveredDuration = MeetingRetranscriptionPipeline.coveredDuration(audioSegments)
+        DiagnosticsLog.write(
+            "[muesli-native] source-track retranscribe VAD meeting_id=\(meetingID) track=\(trackRole) segments=\(speechSegments.count) audio_segments=\(audioSegments.count) covered=\(String(format: "%.1f", coveredDuration)) duration=\(String(format: "%.1f", duration))"
+        )
         guard !speechSegments.isEmpty else {
-            return MeetingSourceTrackTranscription(segments: [], samples: wavData.samples)
+            if trackRole == .system, duration >= 900 {
+                return try await transcribeFullMeetingSourceTrack(
+                    url: url,
+                    wavData: wavData,
+                    duration: duration,
+                    meetingID: meetingID,
+                    trackRole: trackRole,
+                    backend: backend,
+                    reason: "empty_vad"
+                )
+            }
+            return MeetingSourceTrackTranscription(segments: [], samples: wavData.samples, duration: duration, vadSegmentCount: 0, coveredDuration: 0)
         }
 
         let transcription: SpeechTranscriptionResult
@@ -4304,7 +4370,9 @@ final class MuesliController: NSObject {
             transcription = try await MeetingRetranscriptionPipeline.transcribeSegmentedAudio(
                 samples: wavData.samples,
                 vadSegments: speechSegments,
-                trackRole: trackRole
+                trackRole: trackRole,
+                diagnosticsLabel: "[muesli-native] source-track retranscribe meeting_id=\(meetingID)",
+                logger: { DiagnosticsLog.write($0) }
             ) { [transcriptionCoordinator] segmentAudio in
                 try await transcriptionCoordinator.transcribeMeetingBatchWithSherpaGigaAMRNNT(
                     samplesBatch: segmentAudio.map(\.samples)
@@ -4314,7 +4382,9 @@ final class MuesliController: NSObject {
             transcription = try await MeetingRetranscriptionPipeline.transcribeSegmentedAudio(
                 samples: wavData.samples,
                 vadSegments: speechSegments,
-                trackRole: trackRole
+                trackRole: trackRole,
+                diagnosticsLabel: "[muesli-native] source-track retranscribe meeting_id=\(meetingID)",
+                logger: { DiagnosticsLog.write($0) }
             ) { [transcriptionCoordinator, config] _, samples in
                 let segmentURL = try WavWriter.writeTemporaryWAV(
                     samples: samples,
@@ -4329,7 +4399,66 @@ final class MuesliController: NSObject {
                 )
             }
         }
-        return MeetingSourceTrackTranscription(segments: transcription.segments, samples: wavData.samples)
+        let segmentedChars = transcription.text.trimmingCharacters(in: .whitespacesAndNewlines).count
+        if MeetingRetranscriptionPipeline.shouldRetryFullTrack(
+            trackRole: trackRole,
+            segmentedCharacterCount: segmentedChars,
+            sourceDuration: duration,
+            coveredDuration: coveredDuration
+        ) {
+            return try await transcribeFullMeetingSourceTrack(
+                url: url,
+                wavData: wavData,
+                duration: duration,
+                meetingID: meetingID,
+                trackRole: trackRole,
+                backend: backend,
+                reason: "segmented_chars_\(segmentedChars)"
+            )
+        }
+        DiagnosticsLog.write(
+            "[muesli-native] source-track retranscribe track_done meeting_id=\(meetingID) track=\(trackRole) segments=\(transcription.segments.count) chars=\(MeetingRetranscriptionPipeline.characterCount(transcription.segments)) text_chars=\(segmentedChars) covered=\(String(format: "%.1f", coveredDuration))"
+        )
+        return MeetingSourceTrackTranscription(
+            segments: transcription.segments,
+            samples: wavData.samples,
+            duration: duration,
+            vadSegmentCount: speechSegments.count,
+            coveredDuration: coveredDuration
+        )
+    }
+
+    private func transcribeFullMeetingSourceTrack(
+        url: URL,
+        wavData: WavReader.WavData,
+        duration: TimeInterval,
+        meetingID: Int64,
+        trackRole: MeetingRetranscriptionPipeline.TrackRole,
+        backend: BackendOption,
+        reason: String
+    ) async throws -> MeetingSourceTrackTranscription {
+        DiagnosticsLog.write("[muesli-native] source-track retranscribe full_track_retry meeting_id=\(meetingID) track=\(trackRole) reason=\(reason)")
+        let transcription = try await transcriptionCoordinator.transcribeMeeting(
+            at: url,
+            samples: wavData.samples,
+            backend: backend,
+            cohereLanguage: config.resolvedCohereLanguageMeetings
+        )
+        let segments = normalizeRetranscribedTrack(
+            transcription,
+            trackRole: trackRole,
+            duration: duration
+        )
+        DiagnosticsLog.write(
+            "[muesli-native] source-track retranscribe full_track_done meeting_id=\(meetingID) track=\(trackRole) segments=\(segments.count) chars=\(MeetingRetranscriptionPipeline.characterCount(segments)) text_chars=\(transcription.text.count)"
+        )
+        return MeetingSourceTrackTranscription(
+            segments: segments,
+            samples: wavData.samples,
+            duration: duration,
+            vadSegmentCount: 0,
+            coveredDuration: duration
+        )
     }
 
     private func normalizeRetranscribedTrack(
@@ -4432,6 +4561,10 @@ final class MuesliController: NSObject {
 
     private static func meetingStartDate(for meeting: MeetingRecord) -> Date {
         ISO8601DateFormatter().date(from: meeting.startTime) ?? Date(timeIntervalSince1970: 0)
+    }
+
+    private static func meetingDuration(for meeting: MeetingRecord) -> TimeInterval {
+        max(meeting.durationSeconds, 0)
     }
 
     static func retranscriptionFailureStatus(
@@ -5460,8 +5593,11 @@ final class MuesliController: NSObject {
             try Task.checkCancellation()
             try checkMeetingStartStillCurrent(meetingID)
             let routeSnapshot = dictationAudioRoutingController.meetingInputRouteSnapshot()
+            logMeetingInputRoute(meetingID: meetingID, route: routeSnapshot)
             let meetingMicRecorder = RouteAwareMeetingMicRecorder(
-                routeSnapshotProvider: { routeSnapshot }
+                routeSnapshotProvider: { [weak self] in
+                    self?.dictationAudioRoutingController.meetingInputRouteSnapshot() ?? routeSnapshot
+                }
             )
             meetingMicRecorder.preferredInputDeviceID = routeSnapshot.preferredInputDeviceID
             let shouldDeduplicateLiveTranscript = MeetingSession
@@ -5523,17 +5659,27 @@ final class MuesliController: NSObject {
                 liveTranscriptOverlapByMeetingSpeaker.removeAll()
                 let micHealthWarningLock = NSLock()
                 var lastForwardedMicHealthWarning: String?
+                var didShowMicHealthNotification = false
                 meetingSession.onMicHealthChanged = { [weak self] snapshot in
                     let warningMessage = snapshot.warningMessage
                     micHealthWarningLock.lock()
                     let shouldForward = warningMessage != lastForwardedMicHealthWarning
                     lastForwardedMicHealthWarning = warningMessage
+                    let shouldNotify = warningMessage != nil && !didShowMicHealthNotification
+                    if shouldNotify {
+                        didShowMicHealthNotification = true
+                    }
                     micHealthWarningLock.unlock()
-                    guard shouldForward else { return }
+                    guard shouldForward || shouldNotify else { return }
                     Task { @MainActor in
                         guard let self,
                               self.activeMeetingID == meetingID || self.meetingStartMeetingID == meetingID else { return }
-                        self.updateActiveMeetingAudioWarning(meetingID: meetingID, health: snapshot)
+                        if shouldForward {
+                            self.updateActiveMeetingAudioWarning(meetingID: meetingID, health: snapshot)
+                        }
+                        if shouldNotify, let warningMessage {
+                            self.showMeetingAudioWarningNotification(meetingID: meetingID, message: warningMessage)
+                        }
                     }
                 }
                 try await meetingSession.start()
@@ -6112,6 +6258,28 @@ final class MuesliController: NSObject {
             )
         }
         syncAppState()
+    }
+
+    private func logMeetingInputRoute(meetingID: Int64, route: MeetingMicRouteDiagnosticsSnapshot) {
+        DiagnosticsLog.write(
+            "[meeting-audio] input_route meeting_id=\(meetingID) selected_uid=\(route.selectedInputDeviceUID ?? "default") selected_name=\(route.selectedInputDeviceName ?? "unknown") selected_resolved=\(route.selectedInputDeviceResolved) preferred_id=\(route.preferredInputDeviceID.map(String.init) ?? "default") preferred_name=\(route.preferredInputDeviceName ?? "unknown") default_id=\(route.defaultInputDeviceID.map(String.init) ?? "unknown") default_name=\(route.defaultInputDeviceName ?? "unknown") output=\(route.outputRouteKind) sample_rate=16000"
+        )
+    }
+
+    private func showMeetingAudioWarningNotification(meetingID: Int64, message: String) {
+        let didShow = meetingNotification.show(
+            promptID: "meeting-audio-warning-\(meetingID)",
+            title: "Microphone issue",
+            subtitle: message,
+            actionLabel: "Open",
+            dismissAfter: 30,
+            onStartRecording: { [weak self] in
+                self?.historyWindowController?.show()
+            },
+            onDismiss: nil,
+            onAutoDismiss: nil
+        )
+        DiagnosticsLog.write("[meeting-audio] warning_notification meeting_id=\(meetingID) shown=\(didShow)")
     }
 
     func stopMeetingRecording() {
