@@ -10,13 +10,14 @@ struct MeetSpeakerBridgeTests {
     @Test("parses extension speaker observation JSON")
     func parsesObservationJSON() throws {
         let data = """
-        {"meetingURL":"https://meet.google.com/abc-defg-hij","speakerName":"Alice Owner","participants":[{"name":"Alice Owner"},{"name":"Me","isSelf":true}],"source":"google-meet-extension"}
+        {"meetingURL":"https://meet.google.com/abc-defg-hij","speakerName":"Alice Owner","activeSpeakers":["Alice Owner"],"participants":[{"name":"Alice Owner"},{"name":"Me","isSelf":true}],"source":"google-meet-extension"}
         """.data(using: .utf8)!
 
         let observation = try #require(MeetSpeakerBridgeServer.parseObservation(data))
 
         #expect(observation.meetingURL == "https://meet.google.com/abc-defg-hij")
         #expect(observation.speakerName == "Alice Owner")
+        #expect(observation.activeSpeakers == ["Alice Owner"])
         #expect(observation.participants.map(\.name) == ["Alice Owner", "Me"])
         #expect(observation.participants[1].isSelf)
         #expect(observation.source == "google-meet-extension")
@@ -37,28 +38,42 @@ struct MeetSpeakerBridgeTests {
     @Test("parses client observation timestamp")
     func parsesClientObservationTimestamp() throws {
         let data = """
-        {"speakerName":"Alice Owner","observedAtMs":1710000000123,"source":"google-meet-extension"}
+        {"speakerName":"Alice Owner","activeSpeakers":["Alice Owner"],"observedAtMs":1710000000123,"source":"google-meet-extension"}
         """.data(using: .utf8)!
 
         let observation = try #require(MeetSpeakerBridgeServer.parseObservation(data))
 
         #expect(abs(observation.observedAt.timeIntervalSince1970 - 1_710_000_000.123) < 0.001)
+        #expect(observation.activeSpeakers == ["Alice Owner"])
     }
 
     @Test("parses backup batch and inherits root metadata")
     func parsesBackupBatch() {
         let data = """
-        {"meetingURL":"https://meet.google.com/abc-defg-hij","source":"google-meet-extension-backup","observations":[{"speakerName":"Alice Owner","observedAtMs":1710000000123},{"participants":[{"name":"Bob Reviewer"}],"observedAtMs":1710000002123}]}
+        {"meetingURL":"https://meet.google.com/abc-defg-hij","source":"google-meet-extension-backup","observations":[{"speakerName":"Alice Owner","activeSpeakers":["Alice Owner"],"observedAtMs":1710000000123},{"participants":[{"name":"Bob Reviewer"}],"observedAtMs":1710000002123}]}
         """.data(using: .utf8)!
 
         let observations = MeetSpeakerBridgeServer.parseObservations(data)
 
         #expect(observations.count == 2)
         #expect(observations[0].speakerName == "Alice Owner")
+        #expect(observations[0].activeSpeakers == ["Alice Owner"])
         #expect(observations[0].meetingURL == "https://meet.google.com/abc-defg-hij")
         #expect(observations[0].source == "google-meet-extension-backup")
         #expect(observations[1].participants.map(\.name) == ["Bob Reviewer"])
         #expect(abs(observations[1].observedAt.timeIntervalSince1970 - 1_710_000_002.123) < 0.001)
+    }
+
+    @Test("filters clock-like speaker names from bridge payloads")
+    func filtersClockLikeSpeakerNamesFromBridgePayloads() throws {
+        let data = """
+        {"speakerName":"11:29","activeSpeakers":["11:29","Alice Owner"],"observedAtMs":1710000000123,"source":"google-meet-extension"}
+        """.data(using: .utf8)!
+
+        let observation = try #require(MeetSpeakerBridgeServer.parseObservation(data))
+
+        #expect(observation.speakerName == nil)
+        #expect(observation.activeSpeakers == ["Alice Owner"])
     }
 
     @Test("waits for complete Chrome POST body")
@@ -109,11 +124,8 @@ struct MeetSpeakerBridgeTests {
             makeDiarSeg(speakerId: "spk_0", start: 0.0, end: 5.0),
             makeDiarSeg(speakerId: "spk_1", start: 6.0, end: 12.0),
         ]
-        let observations = [
-            MeetSpeakerObservation(meetingURL: nil, speakerName: "Alice Owner", participants: [], observedAt: start.addingTimeInterval(1.0), source: "test"),
-            MeetSpeakerObservation(meetingURL: nil, speakerName: "Alice Owner", participants: [], observedAt: start.addingTimeInterval(3.0), source: "test"),
-            MeetSpeakerObservation(meetingURL: nil, speakerName: "Bob Reviewer", participants: [], observedAt: start.addingTimeInterval(8.0), source: "test"),
-        ]
+        let observations = repeatedObservations(name: "Alice Owner", start: start, firstOffset: 1.0, count: 20)
+            + repeatedObservations(name: "Bob Reviewer", start: start, firstOffset: 7.0, count: 20)
 
         let map = MeetingSession.speakerNameMap(
             diarizationSegments: diarization,
@@ -132,13 +144,7 @@ struct MeetSpeakerBridgeTests {
             makeDiarSeg(speakerId: "spk_0", start: 31.0, end: 36.0),
         ]
         let observations = [
-            MeetSpeakerObservation(
-                meetingURL: nil,
-                speakerName: "Alice Owner",
-                participants: [MeetingParticipant(name: "Alice Owner", email: nil, isOrganizer: false, isSelf: false)],
-                observedAt: start.addingTimeInterval(32.0),
-                source: "test"
-            ),
+            observation(name: "Alice Owner", activeSpeakers: ["Alice Owner"], start: start, offset: 32.0),
         ]
 
         let map = MeetingSession.speakerNameMap(
@@ -150,28 +156,16 @@ struct MeetSpeakerBridgeTests {
         #expect(map["spk_0"] == "Alice Owner")
     }
 
-    @Test("speaker map keeps sparse short speaker observations")
-    func speakerMapKeepsSparseShortSpeakerObservations() {
+    @Test("speaker map keeps sparse short exclusive speaker observations")
+    func speakerMapKeepsSparseShortExclusiveSpeakerObservations() {
         let start = Date(timeIntervalSince1970: 1000)
         let diarization = [
             makeDiarSeg(speakerId: "spk_0", start: 0.0, end: 5.0),
             makeDiarSeg(speakerId: "spk_1", start: 10.0, end: 10.8),
         ]
         let observations = [
-            MeetSpeakerObservation(
-                meetingURL: nil,
-                speakerName: "Alice Owner",
-                participants: [MeetingParticipant(name: "Alice Owner", email: nil, isOrganizer: false, isSelf: false)],
-                observedAt: start.addingTimeInterval(1.0),
-                source: "test"
-            ),
-            MeetSpeakerObservation(
-                meetingURL: nil,
-                speakerName: "Bob Reviewer",
-                participants: [MeetingParticipant(name: "Bob Reviewer", email: nil, isOrganizer: false, isSelf: false)],
-                observedAt: start.addingTimeInterval(10.4),
-                source: "test"
-            ),
+            observation(name: "Alice Owner", activeSpeakers: ["Alice Owner"], start: start, offset: 1.0),
+            observation(name: "Bob Reviewer", activeSpeakers: ["Bob Reviewer"], start: start, offset: 10.4),
         ]
 
         let map = MeetingSession.speakerNameMap(
@@ -194,17 +188,12 @@ struct MeetSpeakerBridgeTests {
             MeetSpeakerObservation(
                 meetingURL: nil,
                 speakerName: "11:19",
+                activeSpeakers: [],
                 participants: [MeetingParticipant(name: "Alice Owner", email: nil, isOrganizer: false, isSelf: false)],
                 observedAt: start.addingTimeInterval(1.0),
                 source: "test"
             ),
-            MeetSpeakerObservation(
-                meetingURL: nil,
-                speakerName: "Alice Owner",
-                participants: [MeetingParticipant(name: "Alice Owner", email: nil, isOrganizer: false, isSelf: false)],
-                observedAt: start.addingTimeInterval(2.0),
-                source: "test"
-            ),
+            observation(name: "Alice Owner", activeSpeakers: ["Alice Owner"], start: start, offset: 2.0),
         ]
 
         let map = MeetingSession.speakerNameMap(
@@ -224,20 +213,8 @@ struct MeetSpeakerBridgeTests {
             makeDiarSeg(speakerId: "spk_1", start: 6.0, end: 12.0),
         ]
         let observations = [
-            MeetSpeakerObservation(
-                meetingURL: nil,
-                speakerName: "Alice Owner",
-                participants: [MeetingParticipant(name: "Alice Owner", email: nil, isOrganizer: false, isSelf: false)],
-                observedAt: start.addingTimeInterval(1.0),
-                source: "test"
-            ),
-            MeetSpeakerObservation(
-                meetingURL: nil,
-                speakerName: "Alice Owner",
-                participants: [MeetingParticipant(name: "Alice Owner", email: nil, isOrganizer: false, isSelf: false)],
-                observedAt: start.addingTimeInterval(8.0),
-                source: "test"
-            ),
+            observation(name: "Alice Owner", activeSpeakers: ["Alice Owner"], start: start, offset: 1.0),
+            observation(name: "Alice Owner", activeSpeakers: ["Alice Owner"], start: start, offset: 8.0),
         ]
 
         let map = MeetingSession.speakerNameMap(
@@ -248,6 +225,64 @@ struct MeetSpeakerBridgeTests {
 
         #expect(map["spk_0"] == "Alice Owner")
         #expect(map["spk_1"] == "Alice Owner")
+    }
+
+    @Test("speaker map corrects dominant-speaker prior")
+    func speakerMapCorrectsDominantSpeakerPrior() {
+        let start = Date(timeIntervalSince1970: 1000)
+        let diarization = [
+            makeDiarSeg(speakerId: "spk_0", start: 0.0, end: 10.0),
+            makeDiarSeg(speakerId: "spk_1", start: 20.0, end: 30.0),
+        ]
+        let observations = repeatedObservations(name: "Alice Owner", start: start, firstOffset: 1.0, count: 80, step: 0.1)
+            + repeatedObservations(name: "Alice Owner", start: start, firstOffset: 20.2, count: 30, step: 0.1)
+            + repeatedObservations(name: "Bob Reviewer", start: start, firstOffset: 24.0, count: 20, step: 0.1)
+
+        let map = MeetingSession.speakerNameMap(
+            diarizationSegments: diarization,
+            observations: observations,
+            meetingStart: start
+        )
+
+        #expect(map["spk_0"] == "Alice Owner")
+        #expect(map["spk_1"] == "Bob Reviewer")
+    }
+
+    @Test("speaker map leaves ambiguous clusters unnamed")
+    func speakerMapLeavesAmbiguousClustersUnnamed() {
+        let start = Date(timeIntervalSince1970: 1000)
+        let diarization = [
+            makeDiarSeg(speakerId: "spk_0", start: 0.0, end: 10.0),
+        ]
+        let observations = repeatedObservations(name: "Alice Owner", start: start, firstOffset: 1.0, count: 20, step: 0.1)
+            + repeatedObservations(name: "Bob Reviewer", start: start, firstOffset: 5.0, count: 20, step: 0.1)
+
+        let map = MeetingSession.speakerNameMap(
+            diarizationSegments: diarization,
+            observations: observations,
+            meetingStart: start
+        )
+
+        #expect(map["spk_0"] == nil)
+    }
+
+    @Test("speaker map treats exclusive active-speaker windows as strong evidence")
+    func speakerMapTreatsExclusiveActiveSpeakerWindowsAsStrongEvidence() {
+        let start = Date(timeIntervalSince1970: 1000)
+        let diarization = [
+            makeDiarSeg(speakerId: "spk_0", start: 0.0, end: 5.0),
+        ]
+        let observations = [
+            observation(name: "Bob Reviewer", activeSpeakers: ["Bob Reviewer"], start: start, offset: 2.0),
+        ]
+
+        let map = MeetingSession.speakerNameMap(
+            diarizationSegments: diarization,
+            observations: observations,
+            meetingStart: start
+        )
+
+        #expect(map["spk_0"] == "Bob Reviewer")
     }
 
     @Test("merges calendar and observed Meet participants")
@@ -307,6 +342,7 @@ struct MeetSpeakerBridgeTests {
         let observation = MeetSpeakerObservation(
             meetingURL: "https://meet.google.com/abc-defg-hij",
             speakerName: "Alice Owner",
+            activeSpeakers: ["Alice Owner"],
             participants: [
                 MeetingParticipant(
                     name: "Alice Owner",
@@ -342,6 +378,7 @@ struct MeetSpeakerBridgeTests {
         #expect(loaded.count == 1)
         #expect(stored.meetingURL == observation.meetingURL)
         #expect(stored.speakerName == "Alice Owner")
+        #expect(stored.activeSpeakers == ["Alice Owner"])
         #expect(stored.participants.map { $0.summaryLabel } == [
             "Alice Owner <alice@example.com>",
             "Me <me@example.com>",
@@ -366,7 +403,7 @@ struct MeetSpeakerBridgeTests {
     func bridgeIngestAttachesObservationToActiveMeetingSession() throws {
         let start = Date(timeIntervalSince1970: 1_710_000_000)
         let data = """
-        {"meetingURL":"https://meet.google.com/abc-defg-hij","speakerName":"Alice Owner","participants":[{"name":"Alice Owner"},{"name":"Bob Reviewer"}],"observedAtMs":1710000001000,"source":"google-meet-extension"}
+        {"meetingURL":"https://meet.google.com/abc-defg-hij","speakerName":"Alice Owner","activeSpeakers":["Alice Owner"],"participants":[{"name":"Alice Owner"},{"name":"Bob Reviewer"}],"observedAtMs":1710000001000,"source":"google-meet-extension"}
         """.data(using: .utf8)!
         let observation = try #require(MeetSpeakerBridgeServer.parseObservations(data).first)
         let session = makeSession()
@@ -433,6 +470,34 @@ struct MeetSpeakerBridgeTests {
             endTimeSeconds: end,
             qualityScore: 1.0
         )
+    }
+
+    private func observation(
+        name: String,
+        activeSpeakers: [String] = [],
+        start: Date,
+        offset: TimeInterval
+    ) -> MeetSpeakerObservation {
+        MeetSpeakerObservation(
+            meetingURL: nil,
+            speakerName: name,
+            activeSpeakers: activeSpeakers,
+            participants: [MeetingParticipant(name: name, email: nil, isOrganizer: false, isSelf: false)],
+            observedAt: start.addingTimeInterval(offset),
+            source: "test"
+        )
+    }
+
+    private func repeatedObservations(
+        name: String,
+        start: Date,
+        firstOffset: TimeInterval,
+        count: Int,
+        step: TimeInterval = 0.1
+    ) -> [MeetSpeakerObservation] {
+        (0..<count).map {
+            observation(name: name, start: start, offset: firstOffset + TimeInterval($0) * step)
+        }
     }
 
 #if DEBUG

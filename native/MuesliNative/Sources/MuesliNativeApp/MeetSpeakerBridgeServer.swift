@@ -4,9 +4,26 @@ import Network
 struct MeetSpeakerObservation: Equatable, Sendable {
     let meetingURL: String?
     let speakerName: String?
+    let activeSpeakers: [String]
     let participants: [MeetingParticipant]
     let observedAt: Date
     let source: String
+
+    init(
+        meetingURL: String?,
+        speakerName: String?,
+        activeSpeakers: [String] = [],
+        participants: [MeetingParticipant],
+        observedAt: Date,
+        source: String
+    ) {
+        self.meetingURL = meetingURL
+        self.speakerName = speakerName
+        self.activeSpeakers = activeSpeakers
+        self.participants = participants
+        self.observedAt = observedAt
+        self.source = source
+    }
 }
 
 struct MeetSpeakerObservationStats: Equatable, Sendable {
@@ -16,7 +33,7 @@ struct MeetSpeakerObservationStats: Equatable, Sendable {
 
     mutating func record(_ observation: MeetSpeakerObservation) {
         observationsReceived += 1
-        if observation.speakerName != nil {
+        if observation.speakerName != nil || !observation.activeSpeakers.isEmpty {
             speakerEvents += 1
         }
         if !observation.participants.isEmpty {
@@ -154,17 +171,17 @@ final class MeetSpeakerBridgeServer {
     }
 
     private static func parseObservationObject(_ json: [String: Any], receivedAt: Date) -> MeetSpeakerObservation? {
-        let rawName = json["speakerName"] as? String ?? json["speaker"] as? String
-        let name = rawName?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let speakerName = (name?.count ?? 0) >= 2 && (name?.count ?? 0) <= 120 ? name : nil
         let participants = parseParticipants(json["participants"])
-        guard speakerName != nil || !participants.isEmpty else { return nil }
+        let speakerName = sanitizedSpeakerName(json["speakerName"] as? String ?? json["speaker"] as? String)
+        let activeSpeakers = parseActiveSpeakers(json["activeSpeakers"])
+        guard speakerName != nil || !activeSpeakers.isEmpty || !participants.isEmpty else { return nil }
         let source = (json["source"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let meetingURL = (json["meetingURL"] as? String ?? json["meetingUrl"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return MeetSpeakerObservation(
             meetingURL: meetingURL?.isEmpty == true ? nil : meetingURL,
             speakerName: speakerName,
+            activeSpeakers: activeSpeakers,
             participants: participants,
             observedAt: parseObservedAt(json, fallback: receivedAt),
             source: source?.isEmpty == false ? source! : "meet-extension"
@@ -186,6 +203,40 @@ final class MeetSpeakerBridgeServer {
             return date
         }
         return fallback
+    }
+
+    private static func parseActiveSpeakers(_ raw: Any?) -> [String] {
+        guard let rawSpeakers = raw as? [Any] else { return [] }
+        var seen = Set<String>()
+        var result: [String] = []
+        for rawSpeaker in rawSpeakers {
+            let rawName: String?
+            switch rawSpeaker {
+            case let value as String:
+                rawName = value
+            case let object as [String: Any]:
+                rawName = object["name"] as? String
+                    ?? object["speakerName"] as? String
+                    ?? object["displayName"] as? String
+            default:
+                rawName = nil
+            }
+            guard let name = sanitizedSpeakerName(rawName) else { continue }
+            let key = name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            guard seen.insert(key).inserted else { continue }
+            result.append(name)
+        }
+        return result
+    }
+
+    private static func sanitizedSpeakerName(_ value: String?) -> String? {
+        guard let name = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              name.count >= 2,
+              name.count <= 120,
+              !isClockLikeSpeakerName(name) else {
+            return nil
+        }
+        return name
     }
 
     private static func parseParticipants(_ raw: Any?) -> [MeetingParticipant] {
@@ -218,6 +269,23 @@ final class MeetSpeakerBridgeServer {
             ))
         }
         return result
+    }
+
+    private static func isClockLikeSpeakerName(_ name: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pieces = trimmed.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        let clock = pieces.first.map(String.init) ?? trimmed
+        let suffix = pieces.count == 2 ? String(pieces[1]) : ""
+        if !suffix.isEmpty, !["AM", "PM"].contains(suffix.uppercased()) {
+            return false
+        }
+        let parts = clock.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count == 2 || parts.count == 3 else { return false }
+        guard parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) else { return false }
+        let values = parts.compactMap { Int($0) }
+        guard values.count == parts.count else { return false }
+        guard (0...23).contains(values[0]), (0...59).contains(values[1]) else { return false }
+        return parts.count == 2 || (0...59).contains(values[2])
     }
 
     private static func bodyData(from data: Data) -> Data? {

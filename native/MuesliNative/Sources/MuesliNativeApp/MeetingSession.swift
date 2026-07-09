@@ -1733,9 +1733,16 @@ final class MeetingSession {
     ) -> [String: String] {
         guard let diarizationSegments, !diarizationSegments.isEmpty, !observations.isEmpty else { return [:] }
 
-        var votes: [String: [String: Int]] = [:]
+        var votes: [String: [String: Double]] = [:]
+        var exclusiveVotes: [String: [String: Int]] = [:]
+        var globalVotes: [String: Double] = [:]
         for observation in observations {
-            guard let speakerName = validSpeakerNameCandidate(from: observation) else { continue }
+            let evidences = speakerNameEvidence(from: observation)
+            guard !evidences.isEmpty else { continue }
+            for evidence in evidences {
+                globalVotes[evidence.name, default: 0] += evidence.weight
+            }
+
             let relativeTime = Float(observation.observedAt.timeIntervalSince(meetingStart))
             guard relativeTime >= -2 else { continue }
             guard let speakerID = nearestSpeakerID(
@@ -1743,34 +1750,124 @@ final class MeetingSession {
                 in: diarizationSegments,
                 maxGapSeconds: 3.0
             ) else { continue }
-            votes[speakerID, default: [:]][speakerName, default: 0] += 1
-        }
-
-        var bestBySpeaker: [(speakerID: String, name: String, count: Int)] = []
-        for (speakerID, nameVotes) in votes {
-            guard let best = nameVotes.max(by: { lhs, rhs in
-                if lhs.value == rhs.value {
-                    return lhs.key.localizedCaseInsensitiveCompare(rhs.key) == .orderedDescending
+            for evidence in evidences {
+                votes[speakerID, default: [:]][evidence.name, default: 0] += evidence.weight
+                if evidence.isExclusive {
+                    exclusiveVotes[speakerID, default: [:]][evidence.name, default: 0] += 1
                 }
-                return lhs.value < rhs.value
-            }) else { continue }
-            bestBySpeaker.append((speakerID: speakerID, name: best.key, count: best.value))
+            }
         }
 
         var result: [String: String] = [:]
-        for candidate in bestBySpeaker {
-            result[candidate.speakerID] = candidate.name
+        for (speakerID, nameVotes) in votes {
+            let scored = nameVotes.compactMap { name, vote -> SpeakerNameScore? in
+                guard let globalVote = globalVotes[name], globalVote > 0 else { return nil }
+                return SpeakerNameScore(
+                    name: name,
+                    vote: vote,
+                    priorScore: vote / globalVote,
+                    exclusiveCount: exclusiveVotes[speakerID]?[name] ?? 0
+                )
+            }.sorted { lhs, rhs in
+                if lhs.priorScore == rhs.priorScore {
+                    if lhs.vote == rhs.vote {
+                        return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+                    }
+                    return lhs.vote > rhs.vote
+                }
+                return lhs.priorScore > rhs.priorScore
+            }
+            guard let best = scored.first else { continue }
+            let runnerUp = scored.dropFirst().first
+            let totalPriorScore = scored.reduce(0) { $0 + $1.priorScore }
+            guard totalPriorScore > 0 else { continue }
+            let share = best.priorScore / totalPriorScore
+            let margin = (best.priorScore - (runnerUp?.priorScore ?? 0)) / totalPriorScore
+            let hasAbsoluteSupport = best.vote >= legacySpeakerNameMinimumVote
+                || (best.exclusiveCount > 0 && best.vote >= exclusiveSpeakerMinimumVote)
+            guard hasAbsoluteSupport,
+                  best.exclusiveCount > 0 || best.priorScore >= minimumPriorNormalizedScore,
+                  share >= minimumPriorNormalizedShare,
+                  margin >= minimumPriorNormalizedMargin else {
+                continue
+            }
+            result[speakerID] = best.name
         }
         return result
     }
 
-    private static func validSpeakerNameCandidate(from observation: MeetSpeakerObservation) -> String? {
-        guard let name = observation.speakerName?.trimmingCharacters(in: .whitespacesAndNewlines),
+    private struct SpeakerNameEvidence {
+        let name: String
+        let weight: Double
+        let isExclusive: Bool
+    }
+
+    private struct SpeakerNameScore {
+        let name: String
+        let vote: Double
+        let priorScore: Double
+        let exclusiveCount: Int
+    }
+
+    private static let legacySpeakerNameVoteWeight = 1.0
+    private static let exclusiveSpeakerVoteWeight = 4.0
+    private static let ambiguousSpeakerVoteWeight = 0.25
+    private static let legacySpeakerNameMinimumVote = 15.0
+    private static let exclusiveSpeakerMinimumVote = 4.0
+    private static let minimumPriorNormalizedScore = 0.12
+    private static let minimumPriorNormalizedShare = 0.55
+    private static let minimumPriorNormalizedMargin = 0.15
+
+    private static func speakerNameEvidence(from observation: MeetSpeakerObservation) -> [SpeakerNameEvidence] {
+        let activeSpeakers = uniqueValidSpeakerNames(
+            observation.activeSpeakers,
+            participants: observation.participants
+        )
+        if !activeSpeakers.isEmpty {
+            let isExclusive = activeSpeakers.count == 1
+            let weight = isExclusive
+                ? exclusiveSpeakerVoteWeight
+                : ambiguousSpeakerVoteWeight / Double(activeSpeakers.count)
+            return activeSpeakers.map {
+                SpeakerNameEvidence(name: $0, weight: weight, isExclusive: isExclusive)
+            }
+        }
+        guard let speakerName = validSpeakerNameCandidate(
+            observation.speakerName,
+            participants: observation.participants
+        ) else { return [] }
+        return [SpeakerNameEvidence(
+            name: speakerName,
+            weight: legacySpeakerNameVoteWeight,
+            isExclusive: false
+        )]
+    }
+
+    private static func uniqueValidSpeakerNames(
+        _ names: [String],
+        participants: [MeetingParticipant]
+    ) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for rawName in names {
+            guard let name = validSpeakerNameCandidate(rawName, participants: participants) else { continue }
+            let key = normalizedSpeakerName(name)
+            guard seen.insert(key).inserted else { continue }
+            result.append(name)
+        }
+        return result
+    }
+
+    private static func validSpeakerNameCandidate(
+        _ rawName: String?,
+        participants: [MeetingParticipant]
+    ) -> String? {
+        guard let name = rawName?.trimmingCharacters(in: .whitespacesAndNewlines),
               !name.isEmpty,
               !isClockLikeSpeakerName(name) else {
             return nil
         }
-        let participantNames = observation.participants
+        let participantNames = participants
             .filter { !$0.isSelf }
             .map(\.name)
         guard !participantNames.isEmpty else { return name }
@@ -1787,7 +1884,14 @@ final class MeetingSession {
     }
 
     private static func isClockLikeSpeakerName(_ name: String) -> Bool {
-        let parts = name.split(separator: ":", omittingEmptySubsequences: false)
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pieces = trimmed.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        let clock = pieces.first.map(String.init) ?? trimmed
+        let suffix = pieces.count == 2 ? String(pieces[1]) : ""
+        if !suffix.isEmpty, !["AM", "PM"].contains(suffix.uppercased()) {
+            return false
+        }
+        let parts = clock.split(separator: ":", omittingEmptySubsequences: false)
         guard parts.count == 2 || parts.count == 3 else { return false }
         guard parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) else { return false }
         let values = parts.compactMap { Int($0) }

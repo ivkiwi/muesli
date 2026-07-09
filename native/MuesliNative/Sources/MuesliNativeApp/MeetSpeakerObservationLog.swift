@@ -6,6 +6,7 @@ enum MeetSpeakerObservationLog {
         let observedAt: String
         let meetingURL: String?
         let speakerName: String?
+        let activeSpeakers: [String]?
         let participants: [Participant]
         let source: String
     }
@@ -47,6 +48,7 @@ enum MeetSpeakerObservationLog {
                 observedAt: isoString(from: observation.observedAt),
                 meetingURL: observation.meetingURL,
                 speakerName: observation.speakerName,
+                activeSpeakers: observation.activeSpeakers.isEmpty ? nil : observation.activeSpeakers,
                 participants: observation.participants.map {
                     Participant(
                         name: $0.name,
@@ -103,6 +105,7 @@ enum MeetSpeakerObservationLog {
                 return MeetSpeakerObservation(
                     meetingURL: entry.meetingURL,
                     speakerName: entry.speakerName,
+                    activeSpeakers: entry.activeSpeakers ?? [],
                     participants: entry.participants.map {
                         MeetingParticipant(
                             name: $0.name,

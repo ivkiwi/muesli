@@ -43,10 +43,15 @@ function cleanName(value) {
     .trim();
 }
 
+function isClockLikeName(name) {
+  return /^\d{1,2}:\d{2}(?::\d{2})?(?:\s?[AP]M)?$/i.test((name || "").trim());
+}
+
 function nameFromSpeakingLabel(label) {
   const text = cleanName(label);
   if (!/\b(speaking|is speaking)\b/i.test(label)) return "";
   if (!text || text.length < 2 || text.length > 80) return "";
+  if (isClockLikeName(text)) return "";
   if (/^(you|your presentation|presentation)$/i.test(text)) return "";
   return text;
 }
@@ -63,6 +68,7 @@ function cleanParticipantName(value) {
 
 function validParticipantName(name) {
   if (!name || name.length < 2 || name.length > 80) return false;
+  if (isClockLikeName(name)) return false;
   if (/[\r\n]/.test(name)) return false;
   if (/[!?]/.test(name)) return false;
   if (/^(you|me|everyone|people|chat|activities|host controls|present now|settings|leave call)$/i.test(name)) return false;
@@ -70,6 +76,13 @@ function validParticipantName(name) {
   if (/\b(click to|your|background|settings|controls|options|caption|camera|video|microphone)\b/i.test(name)) return false;
   if (/^[a-z_]+$/.test(name)) return false;
   return /[A-Za-zА-Яа-яЁё0-9]/.test(name);
+}
+
+function addSpeakerName(map, rawValue) {
+  const name = cleanParticipantName(rawValue || "");
+  if (!validParticipantName(name)) return;
+  const key = name.toLocaleLowerCase();
+  if (!map.has(key)) map.set(key, name);
 }
 
 function addParticipant(map, rawValue) {
@@ -114,16 +127,18 @@ function collectParticipants() {
     .slice(0, MAX_PARTICIPANTS);
 }
 
-function activeSpeakerFromAriaLabels() {
+function activeSpeakersFromAriaLabels() {
+  const speakers = new Map();
   const labelled = [...document.querySelectorAll("[aria-label]")].filter(isVisible);
   for (const element of labelled) {
     const name = nameFromSpeakingLabel(element.getAttribute("aria-label") || "");
-    if (name) return name;
+    if (name) addSpeakerName(speakers, name);
   }
-  return "";
+  return [...speakers.values()];
 }
 
-function activeSpeakerFromLiveRegions() {
+function activeSpeakersFromLiveRegions() {
+  const speakers = new Map();
   const regions = [...document.querySelectorAll('[aria-live], [role="status"], [role="log"]')].filter(isVisible);
   for (const region of regions) {
     const lines = (region.innerText || region.textContent || "")
@@ -132,13 +147,14 @@ function activeSpeakerFromLiveRegions() {
       .filter(Boolean);
     for (const line of lines) {
       const name = nameFromSpeakingLabel(line);
-      if (name) return name;
+      if (name) addSpeakerName(speakers, name);
     }
   }
-  return "";
+  return [...speakers.values()];
 }
 
-function activeSpeakerFromCaptions() {
+function activeSpeakersFromCaptions() {
+  const speakers = new Map();
   const regions = [...document.querySelectorAll('[aria-live], [role="log"], [jscontroller]')].filter(isVisible);
   for (const region of regions) {
     const lines = (region.innerText || "")
@@ -147,39 +163,80 @@ function activeSpeakerFromCaptions() {
       .filter(Boolean);
     if (lines.length < 2) continue;
     const possibleName = cleanName(lines[0]);
-    if (possibleName.length >= 2 && possibleName.length <= 80 && !/[.!?]$/.test(possibleName)) {
-      return possibleName;
+    if (possibleName.length >= 2
+      && possibleName.length <= 80
+      && !/[.!?]$/.test(possibleName)
+      && !isClockLikeName(possibleName)) {
+      addSpeakerName(speakers, possibleName);
     }
   }
-  return "";
+  return [...speakers.values()];
 }
 
-function activeSpeakerFromMeetTiles() {
-  const names = [...document.querySelectorAll(".iPFm3e .notranslate")]
+function tileHasSpeakingState(tile) {
+  const label = tile.getAttribute("aria-label") || "";
+  if (/\b(speaking|is speaking)\b/i.test(label)) return true;
+  if (tile.matches('[data-is-speaking="true"], [data-speaking="true"]')) return true;
+  return [...tile.querySelectorAll('[aria-label], [data-is-speaking], [data-speaking]')].some((element) => {
+    const childLabel = element.getAttribute("aria-label") || "";
+    return /\b(speaking|is speaking)\b/i.test(childLabel)
+      || element.getAttribute("data-is-speaking") === "true"
+      || element.getAttribute("data-speaking") === "true";
+  });
+}
+
+function activeSpeakersFromMeetTiles() {
+  const speakers = new Map();
+  const tiles = [...document.querySelectorAll('[role="gridcell"], [role="listitem"], [data-participant-id]')]
     .filter(isVisible)
-    .map((element) => cleanParticipantName(element.innerText || element.textContent || ""))
-    .filter(validParticipantName);
-  return names[0] || "";
+    .filter(tileHasSpeakingState);
+  for (const tile of tiles) {
+    const speakerCountBeforeTile = speakers.size;
+    const labelName = nameFromSpeakingLabel(tile.getAttribute("aria-label") || "");
+    if (labelName) addSpeakerName(speakers, labelName);
+    const nameNode = [...tile.querySelectorAll(".notranslate")].find(isVisible);
+    if (nameNode) addSpeakerName(speakers, nameNode.innerText || nameNode.textContent || "");
+    if (speakers.size === speakerCountBeforeTile) {
+      const firstLine = (tile.innerText || tile.textContent || "")
+        .split("\n")
+        .map((line) => line.trim())
+        .find(Boolean);
+      if (firstLine) addSpeakerName(speakers, firstLine);
+    }
+  }
+  return [...speakers.values()];
 }
 
-function detectActiveSpeaker() {
-  return activeSpeakerFromAriaLabels()
-    || activeSpeakerFromLiveRegions()
-    || activeSpeakerFromMeetTiles()
-    || activeSpeakerFromCaptions();
+function mergeSpeakerGroups(groups) {
+  const speakers = new Map();
+  for (const group of groups) {
+    for (const name of group) addSpeakerName(speakers, name);
+  }
+  return [...speakers.values()];
 }
 
-async function sendObservation(name) {
+function detectActiveSpeakers() {
+  return mergeSpeakerGroups([
+    activeSpeakersFromAriaLabels(),
+    activeSpeakersFromLiveRegions(),
+    activeSpeakersFromMeetTiles(),
+    activeSpeakersFromCaptions()
+  ]);
+}
+
+async function sendObservation(activeSpeakers) {
   const now = Date.now();
   const participants = collectParticipants();
+  const name = activeSpeakers[0] || "";
+  const speakerSignature = activeSpeakers.join("\n");
   const participantSignature = participants.map((participant) => `${participant.name}|${participant.isSelf}`).join("\n");
-  const shouldSendSpeaker = name && (name !== lastSpeaker || now - lastSentAt >= MIN_SEND_INTERVAL_MS);
+  const shouldSendSpeaker = speakerSignature && (speakerSignature !== lastSpeaker || now - lastSentAt >= MIN_SEND_INTERVAL_MS);
   const shouldSendParticipants = participants.length > 0
     && (participantSignature !== lastParticipantSignature || now - lastParticipantSentAt >= PARTICIPANT_REFRESH_INTERVAL_MS);
   if (!shouldSendSpeaker && !shouldSendParticipants) return;
 
   if (shouldSendSpeaker) {
-    lastSpeaker = name;
+    lastSpeaker = speakerSignature;
     lastSentAt = now;
   }
   if (shouldSendParticipants) {
@@ -194,6 +251,7 @@ async function sendObservation(name) {
     participants,
     source: "google-meet-extension"
   };
+  if (activeSpeakers.length) body.activeSpeakers = activeSpeakers;
   if (name) body.speakerName = name;
 
   const backupId = storeBackupObservation(body);
@@ -350,7 +408,7 @@ function sample() {
     pendingScanTimer = 0;
   }
   lastScanAt = now;
-  sendObservation(detectActiveSpeaker());
+  sendObservation(detectActiveSpeakers());
 }
 
 function scheduleSample(delayMs = SCAN_DEBOUNCE_MS) {
