@@ -153,26 +153,6 @@ function activeSpeakersFromLiveRegions() {
   return [...speakers.values()];
 }
 
-function activeSpeakersFromCaptions() {
-  const speakers = new Map();
-  const regions = [...document.querySelectorAll('[aria-live], [role="log"], [jscontroller]')].filter(isVisible);
-  for (const region of regions) {
-    const lines = (region.innerText || "")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-    if (lines.length < 2) continue;
-    const possibleName = cleanName(lines[0]);
-    if (possibleName.length >= 2
-      && possibleName.length <= 80
-      && !/[.!?]$/.test(possibleName)
-      && !isClockLikeName(possibleName)) {
-      addSpeakerName(speakers, possibleName);
-    }
-  }
-  return [...speakers.values()];
-}
-
 function tileHasSpeakingState(tile) {
   const label = tile.getAttribute("aria-label") || "";
   if (/\b(speaking|is speaking)\b/i.test(label)) return true;
@@ -219,8 +199,7 @@ function detectActiveSpeakers() {
   return mergeSpeakerGroups([
     activeSpeakersFromAriaLabels(),
     activeSpeakersFromLiveRegions(),
-    activeSpeakersFromMeetTiles(),
-    activeSpeakersFromCaptions()
+    activeSpeakersFromMeetTiles()
   ]);
 }
 

@@ -101,6 +101,7 @@ struct SherpaGigaAMRNNTTranscriberTests {
 
         #expect(!args.contains("--model-type=transducer"))
         #expect(args.contains("--decoder=\(SherpaGigaAMRNNTModelStore.decoderURL().path)"))
+        #expect(args.contains("--num-threads=6"))
         #expect(args.contains("--decoding-method=greedy_search"))
     }
 

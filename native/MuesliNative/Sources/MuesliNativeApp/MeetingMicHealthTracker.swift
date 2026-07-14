@@ -10,14 +10,10 @@ enum MeetingMicHealthState: String, Codable, Equatable {
 
     var userMessage: String? {
         switch self {
-        case .healthy, .waitingForAudio:
+        case .healthy, .waitingForAudio, .micNearSilent, .micAllZeroWhileSystemActive:
             return nil
         case .micCallbacksMissing:
             return "Microphone audio is not reaching Guesli. This meeting transcript may miss your side."
-        case .micNearSilent:
-            return "Microphone audio is very quiet. This meeting transcript may miss your side."
-        case .micAllZeroWhileSystemActive:
-            return "Microphone audio is silent. This meeting transcript may miss your side."
         }
     }
 }

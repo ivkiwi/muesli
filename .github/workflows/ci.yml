@@ -77,7 +77,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Check Meet speaker extension
-        run: node --check browser-extension/muesli-meet-speaker/content.js
+        run: |
+          node --check browser-extension/muesli-meet-speaker/content.js
+          node --test browser-extension/muesli-meet-speaker/content.test.js
 
   # Swift tests — sharded by domain to reduce end-to-end wall time
   test_shards:

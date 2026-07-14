@@ -1028,7 +1028,7 @@ enum MeetingProcessingMode: String, Codable, CaseIterable, Sendable {
 
 struct AppConfig: Codable {
     static let defaultChatGPTDictationCleanupModel = "gpt-5.4-nano"
-    static let defaultChatGPTMeetingCleanupModel = "gpt-5.5"
+    static let defaultChatGPTMeetingCleanupModel = "gpt-5.4-mini"
 
     var dictationHotkey: HotkeyConfig = .default
     var computerUseHotkey: HotkeyConfig = .computerUseDefault

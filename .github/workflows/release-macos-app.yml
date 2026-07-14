@@ -62,7 +62,9 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Check browser extension
-        run: node --check browser-extension/muesli-meet-speaker/content.js
+        run: |
+          node --check browser-extension/muesli-meet-speaker/content.js
+          node --test browser-extension/muesli-meet-speaker/content.test.js
 
       - name: Run Meet speaker tests
         run: |

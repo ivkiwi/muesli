@@ -108,8 +108,8 @@ struct MeetingTranscriptCleanupTests {
         #expect(call?.timeout == 120)
     }
 
-    @Test("ChatGPT meeting cleanup defaults to quality model")
-    func chatGPTMeetingCleanupDefaultsToQualityModel() async throws {
+    @Test("ChatGPT meeting cleanup defaults to fast model")
+    func chatGPTMeetingCleanupDefaultsToFastModel() async throws {
         let recorder = MeetingChatGPTCleanupRequestRecorder()
 
         _ = try await MeetingSummaryClient.cleanupMeetingTranscriptWithChatGPT(
@@ -122,6 +122,7 @@ struct MeetingTranscriptCleanupTests {
         )
 
         let call = await recorder.recordedCall()
+        #expect(AppConfig.defaultChatGPTMeetingCleanupModel == "gpt-5.4-mini")
         #expect(call?.model == AppConfig.defaultChatGPTMeetingCleanupModel)
         #expect(call?.timeout == 120)
     }

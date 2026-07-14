@@ -420,7 +420,7 @@ actor SherpaGigaAMRNNTTranscriber {
             "--encoder=\(SherpaGigaAMRNNTModelStore.encoderURL().path)",
             "--decoder=\(SherpaGigaAMRNNTModelStore.decoderURL().path)",
             "--joiner=\(SherpaGigaAMRNNTModelStore.joinerURL().path)",
-            "--num-threads=4",
+            "--num-threads=6",
             "--decoding-method=greedy_search",
             "--debug=false",
             "--print-args=false",

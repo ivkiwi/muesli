@@ -4,8 +4,8 @@ import Testing
 
 @Suite("MeetingMicHealthTracker", .muesliHermeticSupport)
 struct MeetingMicHealthTrackerTests {
-    @Test("all-zero raw mic with active system audio raises degraded warning")
-    func allZeroRawMicWithActiveSystemAudioRaisesWarning() {
+    @Test("all-zero raw mic with active system audio is diagnostic but does not warn")
+    func allZeroRawMicWithActiveSystemAudioDoesNotWarn() {
         let tracker = MeetingMicHealthTracker()
         let now = Date()
 
@@ -18,7 +18,7 @@ struct MeetingMicHealthTrackerTests {
 
         snapshot = tracker.noteSystemSamples(Array(repeating: 6_000, count: 16_000), now: now.addingTimeInterval(3))
         #expect(snapshot.state == .micAllZeroWhileSystemActive)
-        #expect(snapshot.warningMessage != nil)
+        #expect(snapshot.warningMessage == nil)
     }
 
     @Test("system audio without mic callbacks is distinguishable from all-zero mic")
@@ -76,8 +76,8 @@ struct MeetingMicHealthTrackerTests {
         #expect(snapshot.warningMessage == nil)
     }
 
-    @Test("sustained near-silent raw mic raises warning without system audio")
-    func sustainedNearSilentRawMicRaisesWarning() {
+    @Test("sustained near-silent raw mic is diagnostic but does not warn")
+    func sustainedNearSilentRawMicDoesNotWarn() {
         let tracker = MeetingMicHealthTracker()
         let now = Date()
 
@@ -86,7 +86,7 @@ struct MeetingMicHealthTrackerTests {
         let snapshot = tracker.noteRawMicSamples(Array(repeating: 1, count: 16_000), now: now.addingTimeInterval(2))
 
         #expect(snapshot.state == .micNearSilent)
-        #expect(snapshot.warningMessage != nil)
+        #expect(snapshot.warningMessage == nil)
     }
 
     @Test("non-zero raw mic clears degraded warning")
