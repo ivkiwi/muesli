@@ -10,6 +10,8 @@ const BACKUP_FLUSH_INTERVAL_MS = 5000;
 const SCAN_DEBOUNCE_MS = 750;
 const MIN_SCAN_INTERVAL_MS = 1000;
 const BACKGROUND_MIN_SCAN_INTERVAL_MS = 5000;
+const CAPTION_SPEAKER_TTL_MS = 4000;
+const speakerDetection = globalThis.MuesliMeetSpeakerDetection;
 
 let lastSpeaker = "";
 let lastSentAt = 0;
@@ -21,6 +23,9 @@ let backupDirty = false;
 let backupPersistTimer = 0;
 let pendingScanTimer = 0;
 let lastScanAt = 0;
+let lastKnownParticipants = [];
+let captionsStateChecked = false;
+const recentCaptionSpeakers = new Map();
 
 function isVisible(element) {
   const rect = element.getBoundingClientRect();
@@ -153,6 +158,70 @@ function activeSpeakersFromLiveRegions() {
   return [...speakers.values()];
 }
 
+function captionCandidateLines(element) {
+  if (!element || !isVisible(element)) return [];
+  const text = element.innerText || element.textContent || "";
+  if (text.length < 4 || text.length > 1000) return [];
+  const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (lines.length > 16) return [];
+
+  const rect = element.getBoundingClientRect();
+  const liveRegion = element.closest('[aria-live], [role="status"], [role="log"]');
+  const inCaptionArea = rect.bottom >= window.innerHeight * 0.55
+    && rect.left < window.innerWidth * 0.75;
+  return liveRegion || inCaptionArea ? lines : [];
+}
+
+function recordCaptionSpeakers(mutations) {
+  if (!speakerDetection || lastKnownParticipants.length === 0) return;
+  const candidates = new Set();
+  for (const mutation of mutations) {
+    const target = mutation.target?.nodeType === Node.ELEMENT_NODE
+      ? mutation.target
+      : mutation.target?.parentElement;
+    if (target) candidates.add(target);
+    for (const node of mutation.addedNodes || []) {
+      const element = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+      if (element) candidates.add(element);
+    }
+  }
+
+  for (const candidate of candidates) {
+    let element = candidate;
+    for (let depth = 0; element && depth < 6; depth += 1, element = element.parentElement) {
+      const lines = captionCandidateLines(element);
+      if (lines.length === 0) continue;
+      const speaker = speakerDetection.captionSpeakerFromLines(lines, lastKnownParticipants);
+      if (speaker) recentCaptionSpeakers.set(speaker.toLocaleLowerCase(), { name: speaker, at: Date.now() });
+    }
+  }
+}
+
+function activeSpeakersFromRecentCaptions() {
+  const now = Date.now();
+  for (const [key, observation] of recentCaptionSpeakers) {
+    if (now - observation.at > CAPTION_SPEAKER_TTL_MS) recentCaptionSpeakers.delete(key);
+  }
+  const latest = [...recentCaptionSpeakers.values()].sort((lhs, rhs) => rhs.at - lhs.at)[0];
+  return latest ? [latest.name] : [];
+}
+
+function maybeEnableCaptions() {
+  if (captionsStateChecked) return;
+  const controls = [...document.querySelectorAll('button[aria-label], [role="button"][aria-label]')].filter(isVisible);
+  const enabled = controls.some((control) => /^(turn off|disable) captions\b|^выключить субтитры\b/i.test(control.getAttribute("aria-label") || ""));
+  if (enabled) {
+    captionsStateChecked = true;
+    return;
+  }
+
+  const enableButton = controls.find((control) => /^(turn on|enable) captions\b|^включить субтитры\b/i.test(control.getAttribute("aria-label") || ""));
+  if (enableButton) {
+    captionsStateChecked = true;
+    enableButton.click();
+  }
+}
+
 function tileHasSpeakingState(tile) {
   const label = tile.getAttribute("aria-label") || "";
   if (/\b(speaking|is speaking)\b/i.test(label)) return true;
@@ -197,6 +266,7 @@ function mergeSpeakerGroups(groups) {
 
 function detectActiveSpeakers() {
   return mergeSpeakerGroups([
+    activeSpeakersFromRecentCaptions(),
     activeSpeakersFromAriaLabels(),
     activeSpeakersFromLiveRegions(),
     activeSpeakersFromMeetTiles()
@@ -206,6 +276,7 @@ function detectActiveSpeakers() {
 async function sendObservation(activeSpeakers) {
   const now = Date.now();
   const participants = collectParticipants();
+  lastKnownParticipants = participants;
   const name = activeSpeakers[0] || "";
   const speakerSignature = activeSpeakers.join("\n");
   const participantSignature = participants.map((participant) => `${participant.name}|${participant.isSelf}`).join("\n");
@@ -387,6 +458,7 @@ function sample() {
     pendingScanTimer = 0;
   }
   lastScanAt = now;
+  maybeEnableCaptions();
   sendObservation(detectActiveSpeakers());
 }
 
@@ -407,7 +479,10 @@ function handleVisibilityChange() {
   scheduleSample(0);
 }
 
-const observer = new MutationObserver(() => scheduleSample());
+const observer = new MutationObserver((mutations) => {
+  recordCaptionSpeakers(mutations);
+  scheduleSample();
+});
 observer.observe(document.documentElement, {
   subtree: true,
   childList: true,

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Guesli Meet Speaker Bridge",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Sends Google Meet active speaker and participant names to the local Guesli app.",
   "host_permissions": [
     "https://meet.google.com/*",
@@ -10,7 +10,7 @@
   "content_scripts": [
     {
       "matches": ["https://meet.google.com/*"],
-      "js": ["content.js"],
+      "js": ["speaker-detection.js", "content.js"],
       "run_at": "document_idle"
     }
   ],

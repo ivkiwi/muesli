@@ -122,6 +122,15 @@ struct MeetingStopOrderingTests {
         #expect(!source.contains("Task { [weak self] in\n            guard let self else { return }\n            var meetingTitle = \"Meeting\""))
     }
 
+    @Test("summary starts from raw transcript while cleanup runs")
+    func summaryDoesNotWaitForTranscriptCleanup() throws {
+        let source = try sourceFile(named: "MeetingSession.swift")
+
+        #expect(source.components(separatedBy: "async let pendingCleanup = cleanupMeetingTranscript(rawTranscript)").count - 1 == 2)
+        #expect(source.components(separatedBy: "transcript: rawTranscript,").count >= 4)
+        #expect(source.components(separatedBy: "let cleanupResult = await pendingCleanup").count - 1 == 2)
+    }
+
 #if DEBUG
     private func makeSession(
         meetingMicRecorder: MeetingMicRecording = StopOrderingMicRecorder(),

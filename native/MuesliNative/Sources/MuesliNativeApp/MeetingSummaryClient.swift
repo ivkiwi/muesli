@@ -155,8 +155,9 @@ enum MeetingSummaryClient {
     private static let customLLMSummaryTimeout: TimeInterval = 300
     private static let customLLMTitleTimeout: TimeInterval = 120
     private static let transcriptCleanupTimeout: TimeInterval = 120
-    private static let transcriptCleanupChunkCharacterLimit = 24_000
-    private static let summaryTranscriptCharacterLimit = transcriptCleanupChunkCharacterLimit
+    private static let transcriptCleanupChunkCharacterLimit = 12_000
+    private static let transcriptCleanupMaxConcurrentRequests = 3
+    private static let summaryTranscriptCharacterLimit = 24_000
 
     static func resolvedChatGPTModel(_ rawValue: String, defaultModel: String) -> String {
         AppConfig.resolvedChatGPTModel(rawValue, defaultModel: defaultModel)
@@ -586,7 +587,7 @@ enum MeetingSummaryClient {
     static func cleanupMeetingTranscriptWithChatGPT(
         transcript: String,
         config: AppConfig,
-        chatGPTRequest: ChatGPTTranscriptCleanupRequest = { systemPrompt, userPrompt, model, timeout in
+        chatGPTRequest: @escaping ChatGPTTranscriptCleanupRequest = { systemPrompt, userPrompt, model, timeout in
             try await callWHAM(
                 systemPrompt: systemPrompt,
                 userPrompt: userPrompt,
@@ -602,10 +603,7 @@ enum MeetingSummaryClient {
         guard !chunks.isEmpty else { return "" }
 
         let model = config.resolvedChatGPTMeetingCleanupModel
-        var cleanedChunks: [String] = []
-        cleanedChunks.reserveCapacity(chunks.count)
-
-        for (index, chunk) in chunks.enumerated() {
+        let requests = chunks.enumerated().map { index, chunk in
             let userPrompt: String
             if chunks.count == 1 {
                 userPrompt = "Transcript:\n\(chunk)"
@@ -617,19 +615,43 @@ enum MeetingSummaryClient {
                 \(chunk)
                 """
             }
-
+            return (index, userPrompt)
+        }
+        let cleanRequest: @Sendable ((Int, String)) async throws -> (Int, String) = { request in
             guard let cleaned = try await chatGPTRequest(
                 transcriptCleanupInstructions,
-                userPrompt,
+                request.1,
                 model,
                 transcriptCleanupTimeout
             ), !cleaned.isEmpty else {
                 throw MeetingSummaryError.emptyResponse(backend: "ChatGPT")
             }
-            cleanedChunks.append(cleaned)
+            return (request.0, cleaned)
         }
 
-        return cleanedChunks.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return try await withThrowingTaskGroup(
+            of: (Int, String).self,
+            returning: String.self
+        ) { group in
+            let initialRequestCount = min(requests.count, transcriptCleanupMaxConcurrentRequests)
+            for request in requests.prefix(initialRequestCount) {
+                group.addTask { try await cleanRequest(request) }
+            }
+
+            var nextRequestIndex = initialRequestCount
+            var cleanedChunks = Array(repeating: "", count: requests.count)
+            while let (index, cleaned) = try await group.next() {
+                cleanedChunks[index] = cleaned
+                if nextRequestIndex < requests.count {
+                    let request = requests[nextRequestIndex]
+                    nextRequestIndex += 1
+                    group.addTask { try await cleanRequest(request) }
+                }
+            }
+
+            return cleanedChunks.joined(separator: "\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
     }
 
     private static func summarizeWithOpenRouter(

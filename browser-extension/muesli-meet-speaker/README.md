@@ -8,3 +8,4 @@ Unpacked Chromium extension for local testing.
 4. Join Google Meet with Guesli running.
 
 The extension sends only active speaker name samples, visible Meet participant names, and the current Meet URL to `http://127.0.0.1:1477/v1/meet-speaker`.
+It enables Meet captions locally once per call and uses only recent caption rows tied to a known participant; it does not scan arbitrary page text for speaker names.

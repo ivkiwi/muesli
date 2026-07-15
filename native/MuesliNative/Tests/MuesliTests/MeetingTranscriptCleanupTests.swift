@@ -33,6 +33,24 @@ private actor MeetingChatGPTCleanupRequestRecorder {
     }
 }
 
+private actor MeetingCleanupConcurrencyProbe {
+    private var active = 0
+    private var maximumActive = 0
+
+    func begin() {
+        active += 1
+        maximumActive = max(maximumActive, active)
+    }
+
+    func end() {
+        active -= 1
+    }
+
+    func maximum() -> Int {
+        maximumActive
+    }
+}
+
 @Suite("Meeting transcript cleanup pipeline", .muesliHermeticSupport)
 struct MeetingTranscriptCleanupTests {
     @Test("successful cleanup preserves original transcript")
@@ -125,5 +143,28 @@ struct MeetingTranscriptCleanupTests {
         #expect(AppConfig.defaultChatGPTMeetingCleanupModel == "gpt-5.4-mini")
         #expect(call?.model == AppConfig.defaultChatGPTMeetingCleanupModel)
         #expect(call?.timeout == 120)
+    }
+
+    @Test("ChatGPT cleanup runs long chunks concurrently and preserves order")
+    func chatGPTCleanupRunsChunksConcurrentlyInOrder() async throws {
+        let probe = MeetingCleanupConcurrencyProbe()
+        let transcript = (1...3)
+            .map { "[00:00:0\($0)] Speaker \($0): " + String(repeating: "word ", count: 2_300) }
+            .joined(separator: "\n")
+
+        let cleaned = try await MeetingSummaryClient.cleanupMeetingTranscriptWithChatGPT(
+            transcript: transcript,
+            config: AppConfig(),
+            chatGPTRequest: { _, prompt, _, _ in
+                let index = [1, 2, 3].first { prompt.contains("Transcript chunk \($0) of 3") } ?? 0
+                await probe.begin()
+                try await Task.sleep(for: .milliseconds(index == 1 ? 40 : 10))
+                await probe.end()
+                return "cleaned-\(index)"
+            }
+        )
+
+        #expect(cleaned == "cleaned-1\ncleaned-2\ncleaned-3")
+        #expect(await probe.maximum() == 3)
     }
 }

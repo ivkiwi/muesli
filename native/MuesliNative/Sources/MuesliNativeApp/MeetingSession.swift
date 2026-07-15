@@ -575,6 +575,21 @@ final class MeetingSession {
         }
     }
 
+    private func cleanupMeetingTranscript(_ transcript: String) async -> MeetingTranscriptCleanupResult {
+        await stopPhaseValue(
+            "transcript_cleanup",
+            timeout: MeetingStopPhaseTimeouts.transcriptCleanup,
+            fallback: MeetingTranscriptCleanupResult(transcript: transcript, originalTranscript: nil)
+        ) {
+            await MeetingTranscriptCleanupPipeline.cleanIfNeeded(
+                transcript: transcript,
+                config: self.config,
+                isChatGPTAuthenticated: ChatGPTAuthManager.shared.isAuthenticated,
+                cleaner: self.transcriptCleaner
+            )
+        }
+    }
+
     private func logStopPhaseFailure(_ phase: String, timeout seconds: TimeInterval, error: Error) {
         let outcome: String
         if case .timedOut = error as? MeetingStopPhaseError {
@@ -1030,19 +1045,7 @@ final class MeetingSession {
             DiagnosticsLog.write("[meeting] transcript quality_guard_failed \(reason)")
             throw MeetingPostProcessingError.suspiciouslyShortTranscript(reason)
         }
-        let cleanupResult = await stopPhaseValue(
-            "transcript_cleanup",
-            timeout: MeetingStopPhaseTimeouts.transcriptCleanup,
-            fallback: MeetingTranscriptCleanupResult(transcript: rawTranscript, originalTranscript: nil)
-        ) {
-            await MeetingTranscriptCleanupPipeline.cleanIfNeeded(
-                transcript: rawTranscript,
-                config: self.config,
-                isChatGPTAuthenticated: ChatGPTAuthManager.shared.isAuthenticated,
-                cleaner: self.transcriptCleaner
-            )
-        }
-        let finalTranscript = cleanupResult.transcript
+        async let pendingCleanup = cleanupMeetingTranscript(rawTranscript)
 
         let generatedTitle: String
         onProgress?(.generatingTitle)
@@ -1066,7 +1069,7 @@ final class MeetingSession {
                 timeout: MeetingStopPhaseTimeouts.titleGeneration,
                 fallback: Optional<String>.none
             ) {
-                await MeetingSummaryClient.generateTitle(transcript: finalTranscript, config: self.config)
+                await MeetingSummaryClient.generateTitle(transcript: rawTranscript, config: self.config)
             }
             if let autoTitle, !autoTitle.isEmpty {
                 generatedTitle = autoTitle
@@ -1108,7 +1111,7 @@ final class MeetingSession {
                 timeout: MeetingStopPhaseTimeouts.summaryGeneration
             ) {
                 try await MeetingSummaryClient.summarize(
-                    transcript: finalTranscript,
+                    transcript: rawTranscript,
                     meetingTitle: generatedTitle,
                     config: self.config,
                     template: templateSnapshot,
@@ -1125,13 +1128,15 @@ final class MeetingSession {
             )
             fputs("[meeting] summary generation failed: \(error.localizedDescription)\n", stderr)
             formattedNotes = MeetingSummaryClient.summaryFailureNotes(
-                transcript: finalTranscript,
+                transcript: rawTranscript,
                 meetingTitle: generatedTitle,
                 error: error,
                 manualNotes: manualNotes
             )
         }
 
+        let cleanupResult = await pendingCleanup
+        let finalTranscript = cleanupResult.transcript
         diagnostics?.writeFinalReport(
             title: generatedTitle,
             startedAt: meetingStart,
@@ -1292,19 +1297,7 @@ final class MeetingSession {
             DiagnosticsLog.write("[meeting] post-mode quality_guard_failed \(reason)")
             throw MeetingPostProcessingError.suspiciouslyShortTranscript(reason)
         }
-        let cleanupResult = await stopPhaseValue(
-            "transcript_cleanup",
-            timeout: MeetingStopPhaseTimeouts.transcriptCleanup,
-            fallback: MeetingTranscriptCleanupResult(transcript: rawTranscript, originalTranscript: nil)
-        ) {
-            await MeetingTranscriptCleanupPipeline.cleanIfNeeded(
-                transcript: rawTranscript,
-                config: self.config,
-                isChatGPTAuthenticated: ChatGPTAuthManager.shared.isAuthenticated,
-                cleaner: self.transcriptCleaner
-            )
-        }
-        let finalTranscript = cleanupResult.transcript
+        async let pendingCleanup = cleanupMeetingTranscript(rawTranscript)
 
         let generatedTitle: String
         onProgress?(.generatingTitle)
@@ -1328,7 +1321,7 @@ final class MeetingSession {
                 timeout: MeetingStopPhaseTimeouts.titleGeneration,
                 fallback: Optional<String>.none
             ) {
-                await MeetingSummaryClient.generateTitle(transcript: finalTranscript, config: self.config)
+                await MeetingSummaryClient.generateTitle(transcript: rawTranscript, config: self.config)
             }
             if let autoTitle, !autoTitle.isEmpty {
                 generatedTitle = autoTitle
@@ -1370,7 +1363,7 @@ final class MeetingSession {
                 timeout: MeetingStopPhaseTimeouts.summaryGeneration
             ) {
                 try await MeetingSummaryClient.summarize(
-                    transcript: finalTranscript,
+                    transcript: rawTranscript,
                     meetingTitle: generatedTitle,
                     config: self.config,
                     template: templateSnapshot,
@@ -1387,13 +1380,15 @@ final class MeetingSession {
             )
             fputs("[meeting] summary generation failed: \(error.localizedDescription)\n", stderr)
             formattedNotes = MeetingSummaryClient.summaryFailureNotes(
-                transcript: finalTranscript,
+                transcript: rawTranscript,
                 meetingTitle: generatedTitle,
                 error: error,
                 manualNotes: manualNotes
             )
         }
 
+        let cleanupResult = await pendingCleanup
+        let finalTranscript = cleanupResult.transcript
         diagnostics?.writeFinalReport(
             title: generatedTitle,
             startedAt: meetingStart,
